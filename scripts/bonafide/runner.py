@@ -80,7 +80,17 @@ def collect_code_revision(repo_root: Path) -> dict[str, Any]:
         return completed.stdout.strip()
 
     commit = git("rev-parse", "HEAD")
-    status = git("status", "--porcelain=v1", "--untracked-files=normal")
+    # Dataset files, paper checkouts, logs, and downstream results do not change
+    # the executable tracing source. Keep the dirty fingerprint scoped to the
+    # code/config tree that this runner actually uses.
+    status = git(
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--",
+        "circuits",
+        "scripts/bonafide",
+    )
     source_paths = sorted(
         [*repo_root.glob("circuits/**/*.py"), *repo_root.glob("scripts/bonafide/**/*.py")]
     )
