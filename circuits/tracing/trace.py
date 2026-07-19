@@ -2,6 +2,7 @@
 High-level circuit tracing: prepare inputs, run CLJA, and produce a CircuitData artifact.
 """
 
+import hashlib
 import pickle
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -30,6 +31,10 @@ class CircuitData:
     config: ADAGConfig
     model_id: str = ""
     traced_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    target_logit_values: list[list[float]] = field(default_factory=list)
+    target_provenance: list[dict[str, object]] = field(default_factory=list)
+    trace_metadata: dict[str, object] = field(default_factory=dict)
+    benchmark_only: bool = False
 
     @classmethod
     def merge(cls, shards: list["CircuitData"]) -> "CircuitData":
@@ -77,6 +82,24 @@ class CircuitData:
             k=shards[0].k,
             config=shards[0].config,
             model_id=shards[0].model_id,
+            target_logit_values=[
+                values
+                for shard in shards
+                for values in getattr(shard, "target_logit_values", [])
+            ],
+            target_provenance=[
+                provenance
+                for shard in shards
+                for provenance in getattr(shard, "target_provenance", [])
+            ],
+            trace_metadata={
+                "merged_shard_metadata": [
+                    getattr(shard, "trace_metadata", {}) for shard in shards
+                ]
+            },
+            benchmark_only=any(
+                getattr(shard, "benchmark_only", False) for shard in shards
+            ),
         )
 
     def save_to_pickle(self, path: str) -> None:
@@ -119,6 +142,205 @@ def get_header_end_token(tokenizer: PreTrainedTokenizer) -> str | None:
     """Get the header-end token string for rollout position detection, or None."""
     model_id = getattr(tokenizer, "name_or_path", "")
     return HEADER_END_TOKENS.get(model_id)
+
+
+@dataclass(frozen=True)
+class TeacherForcedInput:
+    """A single, exactly aligned teacher-forced response trace input.
+
+    ``target_prediction_positions`` are positions whose residual stream predicts
+    the corresponding token in ``target_token_ids``.  The input is truncated
+    immediately after the last selected response token, so the selected token
+    itself is present only as the next-token label, never as causal context for
+    its own prediction.
+    """
+
+    input_ids: list[int]
+    attention_mask: list[int]
+    assistant_prefix_token_count: int
+    response_token_count: int
+    included_response_token_count: int
+    selected_response_positions: list[int]
+    target_prediction_positions: list[int]
+    target_token_ids: list[int]
+    target_token_texts: list[str]
+
+
+@dataclass(frozen=True)
+class TokenizedTeacherForcedResponse:
+    """Exact chat-template decomposition used by teacher-forced tracing."""
+
+    assistant_prefix_ids: list[int]
+    response_ids: list[int]
+    assistant_suffix_ids: list[int]
+
+
+def _stable_text_hash(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _apply_chat_template_ids(
+    tokenizer: PreTrainedTokenizer,
+    messages: list[dict[str, str]],
+    *,
+    add_generation_prompt: bool,
+) -> list[int]:
+    ids = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=add_generation_prompt,
+        chat_template=get_chat_template(tokenizer),
+    )
+    if isinstance(ids, torch.Tensor):
+        ids = ids.tolist()
+    if ids and isinstance(ids[0], list):
+        if len(ids) != 1:
+            raise ValueError("teacher-forced tracing requires a single chat input")
+        ids = ids[0]
+    return [int(token_id) for token_id in ids]
+
+
+def tokenize_teacher_forced_response(
+    tokenizer: PreTrainedTokenizer,
+    prompt: str,
+    response: str,
+    *,
+    system_prompt: str | None = None,
+) -> TokenizedTeacherForcedResponse:
+    """Decompose a frozen chat into exact assistant prefix/content/suffix IDs.
+
+    The assistant boundary and end-of-turn suffix are derived by applying the
+    tokenizer's chat template to both an assistant generation prefix and an
+    empty assistant turn.  This avoids model-family-specific marker searches.
+    Benchmark manifest preparation should use this helper so its response-token
+    positions are identical to tracing semantics.
+    """
+    prompt_messages: list[dict[str, str]] = []
+    if system_prompt is not None:
+        prompt_messages.append({"role": "system", "content": system_prompt})
+    prompt_messages.append({"role": "user", "content": prompt})
+
+    prefix_ids = _apply_chat_template_ids(
+        tokenizer, prompt_messages, add_generation_prompt=True
+    )
+    empty_turn_ids = _apply_chat_template_ids(
+        tokenizer,
+        [*prompt_messages, {"role": "assistant", "content": ""}],
+        add_generation_prompt=False,
+    )
+    full_ids = _apply_chat_template_ids(
+        tokenizer,
+        [*prompt_messages, {"role": "assistant", "content": response}],
+        add_generation_prompt=False,
+    )
+
+    if empty_turn_ids[: len(prefix_ids)] != prefix_ids:
+        raise ValueError(
+            "chat template does not expose an exact assistant generation-prefix boundary"
+        )
+    assistant_suffix = empty_turn_ids[len(prefix_ids) :]
+    if full_ids[: len(prefix_ids)] != prefix_ids:
+        raise ValueError(
+            "tokenized response does not share the exact assistant generation prefix"
+        )
+    if assistant_suffix:
+        if full_ids[-len(assistant_suffix) :] != assistant_suffix:
+            raise ValueError("chat template assistant suffix changed for non-empty content")
+        response_ids = full_ids[len(prefix_ids) : -len(assistant_suffix)]
+    else:
+        response_ids = full_ids[len(prefix_ids) :]
+
+    if not response_ids:
+        raise ValueError("response contains no tokens after applying the chat template")
+    return TokenizedTeacherForcedResponse(
+        assistant_prefix_ids=prefix_ids,
+        response_ids=response_ids,
+        assistant_suffix_ids=assistant_suffix,
+    )
+
+
+def prepare_teacher_forced_input(
+    tokenizer: PreTrainedTokenizer,
+    prompt: str,
+    response: str,
+    target_response_positions: list[int],
+    *,
+    system_prompt: str | None = None,
+) -> TeacherForcedInput:
+    """Tokenize a frozen response and align response-relative trace targets.
+
+    No generation or model forward pass occurs here.
+    """
+    if not target_response_positions:
+        raise ValueError("target_response_positions must contain at least one position")
+    if any(
+        isinstance(position, bool) or not isinstance(position, int)
+        for position in target_response_positions
+    ):
+        raise TypeError("target_response_positions must contain integers")
+    if len(set(target_response_positions)) != len(target_response_positions):
+        raise ValueError("target_response_positions must be unique")
+    if target_response_positions != sorted(target_response_positions):
+        raise ValueError("target_response_positions must be sorted in ascending order")
+    if target_response_positions[0] < 0:
+        raise ValueError("target_response_positions cannot contain negative positions")
+
+    tokenized = tokenize_teacher_forced_response(
+        tokenizer,
+        prompt,
+        response,
+        system_prompt=system_prompt,
+    )
+    prefix_ids = tokenized.assistant_prefix_ids
+    response_ids = tokenized.response_ids
+    if target_response_positions[-1] >= len(response_ids):
+        raise ValueError(
+            "target response position "
+            f"{target_response_positions[-1]} is outside the tokenized response "
+            f"(length {len(response_ids)})"
+        )
+    if not prefix_ids:
+        raise ValueError("chat template produced an empty assistant prefix")
+
+    included_response_count = target_response_positions[-1] + 1
+    input_ids = prefix_ids + response_ids[:included_response_count]
+    target_token_ids = [response_ids[position] for position in target_response_positions]
+    target_prediction_positions = [
+        len(prefix_ids) + position - 1 for position in target_response_positions
+    ]
+    return TeacherForcedInput(
+        input_ids=input_ids,
+        attention_mask=[1] * len(input_ids),
+        assistant_prefix_token_count=len(prefix_ids),
+        response_token_count=len(response_ids),
+        included_response_token_count=included_response_count,
+        selected_response_positions=list(target_response_positions),
+        target_prediction_positions=target_prediction_positions,
+        target_token_ids=target_token_ids,
+        target_token_texts=[tokenizer.decode([token_id]) for token_id in target_token_ids],
+    )
+
+
+def _teacher_forced_target_scores(
+    model: PreTrainedModel,
+    prepared: TeacherForcedInput,
+) -> tuple[list[float], list[float]]:
+    device = next(model.parameters()).device
+    input_ids = torch.tensor([prepared.input_ids], device=device)
+    attention_mask = torch.tensor([prepared.attention_mask], device=device)
+    with torch.no_grad():
+        logits = model(input_ids=input_ids, attention_mask=attention_mask).logits[0]
+
+    target_logits: list[float] = []
+    target_probs: list[float] = []
+    for prediction_position, token_id in zip(
+        prepared.target_prediction_positions, prepared.target_token_ids
+    ):
+        position_logits = logits[prediction_position]
+        target_logits.append(float(position_logits[token_id].item()))
+        target_probs.append(float(torch.softmax(position_logits, dim=-1)[token_id].item()))
+    return target_logits, target_probs
 
 
 def _strip_starting_at_rindex_in_place(arr: list, value: object) -> list:
@@ -376,6 +598,122 @@ def prepare_cis_with_rollout(
         all_tgt_tokens[0],
         keep_pos,
         starts,
+    )
+
+
+def trace_teacher_forced_response(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    prompt: str,
+    response: str,
+    target_response_positions: list[int],
+    config: ADAGConfig,
+    *,
+    label: str = "teacher_forced",
+    system_prompt: str | None = None,
+    ignore_bos: bool = False,
+    benchmark_only: bool = False,
+) -> CircuitData:
+    """Trace selected tokens from one frozen response without generation.
+
+    A one-target trace is a reusable scientific artifact. Multiple targets are
+    intentionally allowed only for explicit systems benchmarks: the current
+    dataframe conversion aggregates the target axis and therefore must not be
+    treated as a target-resolved scientific result.
+    """
+    if len(target_response_positions) != 1 and not benchmark_only:
+        raise ValueError(
+            "multi-target traces currently aggregate the target axis; pass "
+            "benchmark_only=True for performance measurements"
+        )
+
+    prepared = prepare_teacher_forced_input(
+        tokenizer,
+        prompt,
+        response,
+        target_response_positions,
+        system_prompt=system_prompt,
+    )
+    target_logit_values, target_probs = _teacher_forced_target_scores(model, prepared)
+
+    nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(
+        model=model,
+        tokenizer=tokenizer,
+        cis=[prepared.input_ids],
+        config=config,
+        attention_masks=[prepared.attention_mask],
+        focus_logits=[prepared.target_token_ids],
+        src_tokens=list(range(len(prepared.input_ids) - 1)),
+        tgt_tokens=prepared.target_prediction_positions,
+    )
+    df_node, df_edge = convert_circuit_to_dataframes(
+        [nodes],
+        [edges],
+        [label],
+        [[0]],
+        bs=1,
+        ignore_bos=ignore_bos,
+        percentage_threshold=config.percentage_threshold,
+    )
+
+    target_provenance = []
+    for (
+        response_position,
+        prediction_position,
+        token_id,
+        token_text,
+        logit,
+        probability,
+    ) in zip(
+        prepared.selected_response_positions,
+        prepared.target_prediction_positions,
+        prepared.target_token_ids,
+        prepared.target_token_texts,
+        target_logit_values,
+        target_probs,
+    ):
+        target_provenance.append(
+            {
+                "response_token_position": response_position,
+                "absolute_token_position": prepared.assistant_prefix_token_count
+                + response_position,
+                "prediction_token_position": prediction_position,
+                "token_id": token_id,
+                "token_text": token_text,
+                "logit": logit,
+                "probability": probability,
+            }
+        )
+
+    trace_metadata: dict[str, object] = {
+        "trace_mode": "teacher_forced_response",
+        "prompt": prompt,
+        "prompt_sha256": _stable_text_hash(prompt),
+        "response": response,
+        "response_sha256": _stable_text_hash(response),
+        "system_prompt": system_prompt,
+        "system_prompt_sha256": _stable_text_hash(system_prompt),
+        "assistant_prefix_token_count": prepared.assistant_prefix_token_count,
+        "response_token_count": prepared.response_token_count,
+        "included_response_token_count": prepared.included_response_token_count,
+        "input_token_count": len(prepared.input_ids),
+        "chat_template_sha256": _stable_text_hash(get_chat_template(tokenizer)),
+    }
+    return CircuitData(
+        df_node=df_node,
+        df_edge=df_edge,
+        cis=[prepared.input_ids],
+        attention_masks=[prepared.attention_mask],
+        labels=[label],
+        target_logits=[prepared.target_token_ids],
+        target_logit_probs=[target_probs],
+        target_logit_values=[target_logit_values],
+        target_provenance=target_provenance,
+        trace_metadata=trace_metadata,
+        benchmark_only=benchmark_only,
+        k=len(prepared.target_token_ids),
+        config=config,
+        model_id=model.config._name_or_path,
     )
 
 

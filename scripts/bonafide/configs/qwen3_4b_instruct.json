@@ -1,0 +1,43 @@
+{
+  "schema_version": "bonafide-trace-run-config/v1",
+  "artifact_root": "results/bonafide/performance",
+  "batch_size": 1,
+  "continue_on_error": false,
+  "wave_limits": {
+    "max_trace_seconds": 7200,
+    "min_cuda_headroom_bytes": 4294967296,
+    "stop_on_oom": true
+  },
+  "model": {
+    "model_id": "Qwen/Qwen3-4B-Instruct-2507",
+    "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+    "device": "cuda:0",
+    "dtype": "bfloat16",
+    "local_files_only": true,
+    "local_snapshot_path": "${HF_HUB_CACHE}/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554",
+    "from_pretrained_kwargs": {}
+  },
+  "adag_config": {
+    "verbose": false,
+    "parent_threshold": null,
+    "edge_threshold": 0.01,
+    "node_attribution_threshold": null,
+    "topk": null,
+    "batch_aggregation": "any",
+    "topk_neurons": null,
+    "percentage_threshold": 0.005,
+    "use_relp_grad": true,
+    "disable_half_rule": false,
+    "disable_stop_grad": false,
+    "ablation_mode": "zero",
+    "use_stop_grad_on_mlps": true,
+    "return_nodes_only": false,
+    "focus_last_residual": false,
+    "skip_attr_contrib": false,
+    "center_logits": false,
+    "ig_steps": null,
+    "ig_mode": "ig-inputs",
+    "return_only_important_neurons": false,
+    "apply_blacklist": true
+  }
+}
