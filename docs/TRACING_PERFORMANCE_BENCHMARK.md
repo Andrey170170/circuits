@@ -256,7 +256,35 @@ The first Instruct benchmark is frozen in
 chat-template response lengths from 145 to 1,992 tokens and retains all annotations for the three
 initial Instruct anchors. Its separate scaling wave uses one 170-token response with target
 widths 1, 2, 4, 8, 16, and 32. Wave 2b uses that same response for 16 independent
-single-target traces at evenly spaced positions spanning the response.
+single-target traces at evenly spaced positions spanning the response. Wave 2c excludes the
+Wave 2/2b reference response and gives each of the other nine Wave 1 responses its own named
+wave. Each Wave 2c wave contains eight independent single-target traces: one deterministically
+sampled position from each contiguous response-position octile.
+
+Wave 2c uses a recorded `sha256-rejection-v1` sampler and stable seed. Each item's
+`target_selection.sampling` records the stratum bounds and size, its inclusion probability
+`1 / stratum_size`, and projection weight `stratum_size`. These fields are also copied into the
+run summary as `target_sampling` and into the compact artifact manifest under
+`source_target_selection`, so timing and graph statistics can be analyzed without an implicit
+join to the frozen benchmark manifest. The eight sampled observations are a probability sample
+of positions within one response; the projection weights do not remove token-dependent variance
+or make eight positions equivalent to tracing the full response. In particular, Wave 2c has
+`n_h = 1` observation per stratum, so the design supplies no within-stratum variance estimate and
+cannot by itself produce a design-based variance or confidence interval. Use repeated independent
+seeds or at least two independently sampled positions per stratum before reporting such intervals.
+
+The pinned run config enables `first_wave_item_full_trace_discard` only for wave IDs beginning
+with `wave2c-`; Wave 1, Wave 2, and Wave 2b do not warm up. After loading the model, each selected
+Wave 2c job performs one complete ADAG trace using the fixed first item in the full wave, discards
+it, runs garbage collection, empties the CUDA allocator cache, and then measures all planned work
+items including that first item again on a fresh run. The fixed source does not change on resume
+or when `ONLY_ARTIFACT_ID` selects another item. This prevents model/Jacobian cold-start cost from
+being assigned to one probability-weighted observation. Runtime identity includes the normalized
+prefix policy plus the warm-up source artifact ID, work-item hash, and target selection.
+The summary JSONL records a `discarded_trace_warmup` row with its source, status, wall time, and
+instrumentation, while each measured summary record and compact artifact records the same warm-up
+provenance. A failed, OOM, or cleanup-failed warm-up records its failure before re-raising the
+original error, so the CLI/Slurm job exits nonzero and no measured item is written.
 
 Regenerate the manifest deterministically after changing the dataset or selection policy:
 
@@ -271,7 +299,9 @@ source scripts/chpc_env.sh
   --anchor-id 23068c9e9e56a270 \
   --anchor-id a92b84d0920c5100 \
   --wave2-id f44d85b57fe09ddc \
-  --wave2b-target-count 16
+  --wave2b-target-count 16 \
+  --wave2c-stratum-count 8 \
+  --wave2c-seed bonafide-wave2c-v1
 ```
 
 Check the plan without loading the model:
@@ -304,6 +334,11 @@ sbatch --export=ALL,MANIFEST="$PWD/scripts/bonafide/manifests/qwen3_4b_instruct.
 # After reviewing the summed-window scaling results:
 sbatch --export=ALL,MANIFEST="$PWD/scripts/bonafide/manifests/qwen3_4b_instruct.json",WAVE=wave2b-independent-target-positions \
   scripts/bonafide/benchmark_tracing.sbatch
+
+# Wave 2c wave IDs are listed by the manifest generator and runner dry-run output. Submit one
+# wave per job so the model loads once and remains resident for its eight sampled targets:
+sbatch --export=ALL,MANIFEST="$PWD/scripts/bonafide/manifests/qwen3_4b_instruct.json",WAVE=wave2c-stratified-independent-01-bf-2ed391444282be41b715 \
+  scripts/bonafide/benchmark_tracing.sbatch
 ```
 
 The runner loads the pinned local snapshot once, processes trace units at batch size one, resumes
@@ -312,6 +347,10 @@ Each Wave 2b item is saved as a separate scientifically reusable single-target a
 does not sum targets or merge graphs. The runner stops after an OOM, an over-budget trace, or
 insufficient CUDA headroom. Completed artifacts go to the VAST-backed
 `$CIRCUITS_RESULTS_DIR` by default. No command above merges graphs.
+
+The first Wave 2c job is the 145-token response and serves as the instrumentation smoke. Inspect
+its eight records before submitting the remaining eight per-prompt waves; all Wave 2c outputs are
+also separate scientifically reusable single-target artifacts.
 
 `max_trace_seconds` is a post-completion expansion gate, not an asynchronous CUDA-kernel timeout.
 The four-hour Slurm limit remains the hard job cap. If the long-tail Wave 1 items approach that

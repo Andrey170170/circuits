@@ -3,6 +3,13 @@
   "artifact_root": "results/bonafide/performance",
   "batch_size": 1,
   "continue_on_error": false,
+  "trace_warmup": {
+    "enabled": true,
+    "mode": "first_wave_item_full_trace_discard",
+    "wave_id_prefixes": [
+      "wave2c-"
+    ]
+  },
   "wave_limits": {
     "max_trace_seconds": 7200,
     "min_cuda_headroom_bytes": 4294967296,

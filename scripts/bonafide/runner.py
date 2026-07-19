@@ -7,9 +7,11 @@ artifact.  This runner never combines graphs.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import resource
@@ -32,6 +34,7 @@ from scripts.bonafide.manifest import SCHEMA_VERSION, resolve_pretrained_source
 
 
 RUN_CONFIG_SCHEMA = "bonafide-trace-run-config/v1"
+WARMUP_MODE = "first_wave_item_full_trace_discard"
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -52,6 +55,39 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def normalized_trace_warmup(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the identity-bound discarded-trace warm-up policy."""
+
+    raw = config.get(
+        "trace_warmup",
+        {"enabled": False, "mode": WARMUP_MODE, "wave_id_prefixes": []},
+    )
+    if not isinstance(raw, Mapping):
+        raise ValueError("run config trace_warmup must be an object")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("run config trace_warmup.enabled must be boolean")
+    mode = raw.get("mode", WARMUP_MODE)
+    if mode != WARMUP_MODE:
+        raise ValueError(f"run config trace_warmup.mode must be {WARMUP_MODE!r}")
+    prefixes = raw.get("wave_id_prefixes", [])
+    if not isinstance(prefixes, list) or any(
+        not isinstance(prefix, str) or not prefix for prefix in prefixes
+    ):
+        raise ValueError("run config trace_warmup.wave_id_prefixes must be non-empty strings")
+    if enabled and not prefixes:
+        raise ValueError("enabled trace_warmup requires at least one wave_id_prefix")
+    if len(set(prefixes)) != len(prefixes):
+        raise ValueError("run config trace_warmup.wave_id_prefixes must be unique")
+    return {"enabled": enabled, "mode": mode, "wave_id_prefixes": list(prefixes)}
+
+
+def trace_warmup_applies(policy: Mapping[str, Any], wave_id: str) -> bool:
+    return bool(policy["enabled"]) and any(
+        wave_id.startswith(prefix) for prefix in policy["wave_id_prefixes"]
+    )
+
+
 def validate_run_config(config: Mapping[str, Any]) -> None:
     if config.get("schema_version") != RUN_CONFIG_SCHEMA:
         raise ValueError(f"Unsupported run config schema: {config.get('schema_version')!r}")
@@ -65,6 +101,155 @@ def validate_run_config(config: Mapping[str, Any]) -> None:
         raise ValueError("run config requires an adag_config object")
     if int(config.get("batch_size", 1)) != 1:
         raise ValueError("BonaFide performance runs require batch_size=1")
+    normalized_trace_warmup(config)
+
+
+def _require_manifest_int(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"target sampling {field} must be an integer")
+    return value
+
+
+def validate_target_selection(item: Mapping[str, Any]) -> None:
+    """Fail closed if statistical sampling provenance is internally inconsistent."""
+
+    selection = item.get("target_selection")
+    if not isinstance(selection, Mapping):
+        raise ValueError("work item requires target_selection")
+    positions = selection.get("response_token_positions")
+    if not isinstance(positions, list) or not positions:
+        raise ValueError("target_selection.response_token_positions must be non-empty")
+    width = _require_manifest_int(selection.get("width"), "width")
+    if width != len(positions):
+        raise ValueError("target selection width does not match response positions")
+    response_length = _require_manifest_int(item.get("response_token_count"), "response length")
+    if response_length < 1:
+        raise ValueError("target sampling response length must be positive")
+    for position in positions:
+        position = _require_manifest_int(position, "response token position")
+        if not 0 <= position < response_length:
+            raise ValueError("target response position is outside the response")
+
+    sampling = selection.get("sampling")
+    if sampling is None:
+        return
+    if not isinstance(sampling, Mapping):
+        raise ValueError("target_selection.sampling must be an object")
+    if width != 1:
+        raise ValueError("sampled work items must have exactly one target")
+
+    position = positions[0]
+    sampled_position = _require_manifest_int(
+        sampling.get("response_token_position"), "response_token_position"
+    )
+    if sampled_position != position:
+        raise ValueError("target sampling position does not match selected position")
+    stratum_index = _require_manifest_int(sampling.get("stratum_index"), "stratum_index")
+    stratum_count = _require_manifest_int(sampling.get("stratum_count"), "stratum_count")
+    start = _require_manifest_int(sampling.get("stratum_start"), "stratum_start")
+    end = _require_manifest_int(
+        sampling.get("stratum_end_exclusive"), "stratum_end_exclusive"
+    )
+    size = _require_manifest_int(sampling.get("stratum_size"), "stratum_size")
+    if not 1 <= stratum_count <= response_length:
+        raise ValueError("target sampling stratum_count is invalid")
+    if not 0 <= stratum_index < stratum_count:
+        raise ValueError("target sampling stratum_index is invalid")
+    expected_start = (stratum_index * response_length) // stratum_count
+    expected_end = ((stratum_index + 1) * response_length) // stratum_count
+    if (start, end) != (expected_start, expected_end):
+        raise ValueError("target sampling stratum bounds are inconsistent")
+    if size != end - start or size < 1:
+        raise ValueError("target sampling stratum_size is inconsistent")
+    if not start <= position < end:
+        raise ValueError("sampled target is outside its stratum")
+
+    probability = sampling.get("selection_probability")
+    if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+        raise ValueError("target sampling selection_probability must be numeric")
+    if not math.isfinite(float(probability)) or not math.isclose(
+        float(probability), 1 / size, rel_tol=1e-12, abs_tol=0.0
+    ):
+        raise ValueError("target sampling selection_probability is inconsistent")
+    weight = sampling.get("projection_weight")
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+        raise ValueError("target sampling projection_weight must be numeric")
+    if not math.isfinite(float(weight)) or float(weight) != size:
+        raise ValueError("target sampling projection_weight is inconsistent")
+
+
+def validate_wave_sampling_design(
+    wave: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> None:
+    """Validate the complete probability sample before filtering/resume."""
+
+    items = wave.get("items")
+    if not isinstance(items, list) or not items:
+        raise ValueError("benchmark wave requires non-empty items")
+    design = wave.get("sampling_design")
+    sampled_items = [
+        item
+        for item in items
+        if isinstance(item.get("target_selection"), Mapping)
+        and item["target_selection"].get("sampling") is not None
+    ]
+    if design is None:
+        if sampled_items:
+            raise ValueError("sampled wave requires wave-level sampling_design")
+        return
+    if not isinstance(design, Mapping):
+        raise ValueError("wave sampling_design must be an object")
+    if len(sampled_items) != len(items):
+        raise ValueError("sampling_design wave cannot mix sampled and unsampled items")
+
+    stratum_count = _require_manifest_int(design.get("stratum_count"), "stratum_count")
+    population_size = _require_manifest_int(
+        design.get("response_token_population_size"), "population size"
+    )
+    if wave.get("wave_id", "").startswith("wave2c-") and stratum_count != 8:
+        raise ValueError("Wave 2c sampling_design must contain exactly 8 strata")
+    if len(items) != stratum_count:
+        raise ValueError("sampled wave must contain one item for every stratum")
+
+    reference_id = design.get("excluded_reference_example_id")
+    if not isinstance(reference_id, str) or not reference_id:
+        raise ValueError("sampling_design excluded reference must be non-empty")
+    wave2_matches = [
+        candidate
+        for candidate in manifest.get("waves", [])
+        if candidate.get("wave_id") == "wave2-progressive-target-window"
+    ]
+    if wave2_matches:
+        wave2_items = wave2_matches[0].get("items", [])
+        if not wave2_items or wave2_items[0]["example"]["example_id"] != reference_id:
+            raise ValueError("sampling_design excluded reference disagrees with Wave 2")
+
+    expected_common = {
+        field: design.get(field) for field in ("design", "seed", "sampler")
+    }
+    if any(not isinstance(value, str) or not value for value in expected_common.values()):
+        raise ValueError("sampling_design design, seed, and sampler must be non-empty")
+    seen_strata: set[int] = set()
+    sampled_example_ids: set[str] = set()
+    for item in items:
+        validate_target_selection(item)
+        if item["response_token_count"] != population_size:
+            raise ValueError("sampled item population size disagrees with sampling_design")
+        example_id = item["example"]["example_id"]
+        if example_id == reference_id:
+            raise ValueError("sampled item cannot be the excluded reference example")
+        sampled_example_ids.add(example_id)
+        sampling = item["target_selection"]["sampling"]
+        for field, expected in expected_common.items():
+            if sampling.get(field) != expected:
+                raise ValueError(f"sampled item {field} disagrees with sampling_design")
+        if sampling.get("stratum_count") != stratum_count:
+            raise ValueError("sampled item stratum_count disagrees with sampling_design")
+        seen_strata.add(sampling["stratum_index"])
+    if len(sampled_example_ids) != 1:
+        raise ValueError("sampled wave must contain exactly one response example")
+    if seen_strata != set(range(stratum_count)):
+        raise ValueError("sampled wave strata must be unique and complete")
 
 
 def collect_code_revision(repo_root: Path) -> dict[str, Any]:
@@ -153,14 +338,38 @@ def runtime_artifact_identity(
     config: Mapping[str, Any],
     code_revision: Mapping[str, Any],
     runtime_environment: Mapping[str, Any],
+    *,
+    wave_id: str,
+    warmup_source_item: Mapping[str, Any] | None,
 ) -> tuple[str, dict[str, Any]]:
     """Bind dataset work-unit identity to exact model and tracing configuration."""
 
+    validate_target_selection(item)
+    warmup_policy = normalized_trace_warmup(config)
+    warmup_identity: dict[str, Any] = {
+        **warmup_policy,
+        "applies_to_wave": trace_warmup_applies(warmup_policy, wave_id),
+    }
+    if warmup_identity["applies_to_wave"]:
+        if warmup_source_item is None:
+            raise ValueError("warm-up source item is required for an enabled wave")
+        validate_target_selection(warmup_source_item)
+        warmup_identity.update(
+            {
+                "source_artifact_id": warmup_source_item["artifact_id"],
+                "source_work_item_sha256": _sha256(warmup_source_item),
+                "source_target_selection": dict(
+                    warmup_source_item["target_selection"]
+                ),
+            }
+        )
     identity = {
         "source_artifact_id": item["artifact_id"],
         "source_work_item_sha256": _sha256(item),
+        "source_target_selection": dict(item["target_selection"]),
         "model": dict(config["model"]),
         "adag_config": dict(config["adag_config"]),
+        "trace_warmup": warmup_identity,
         "batch_size": 1,
         "code_revision": dict(code_revision),
         "runtime_environment": dict(runtime_environment),
@@ -354,6 +563,9 @@ def _base_record(
         "response_token_count": item["response_token_count"],
         "target_count": selection["width"],
         "target_response_positions": selection["response_token_positions"],
+        "target_sampling": dict(selection["sampling"])
+        if "sampling" in selection
+        else None,
         "batch_size": 1,
         "objective": item["objective"],
         "model_load_seconds": model_load_seconds,
@@ -361,6 +573,101 @@ def _base_record(
         "runtime_environment": dict(runtime_environment),
         "gpu": dict(gpu_info) if gpu_info is not None else None,
     }
+
+
+def _discarded_trace_warmup(
+    *,
+    item: Mapping[str, Any],
+    model: Any,
+    tokenizer: Any,
+    adag_config: ADAGConfig,
+    device: str,
+    uses_cuda: bool,
+) -> tuple[dict[str, Any], dict[str, Any], Exception | None]:
+    """Run and discard one complete trace, then release all trace-owned state."""
+
+    example = item["example"]
+    positions = item["target_selection"]["response_token_positions"]
+    instrumentation = TraceInstrumentation(device=device, synchronize_cuda=uses_cuda)
+    trace: CircuitData | None = None
+    started = time.perf_counter()
+    outcome = "complete"
+    error_type = None
+    error_message = None
+    node_count = None
+    edge_count = None
+    failure: Exception | None = None
+    cleanup_failure: Exception | None = None
+    try:
+        trace = trace_teacher_forced_response(
+            model=model,
+            tokenizer=tokenizer,
+            prompt=example["prompt"],
+            response=example["response"],
+            target_response_positions=positions,
+            config=adag_config,
+            label=example["example_id"],
+            benchmark_only=bool(item["objective"]["benchmark_only_multi_target"]),
+            instrumentation=instrumentation,
+        )
+        validate_runtime_trace_against_item(trace, item)
+        if uses_cuda:
+            torch.cuda.synchronize()
+        node_count = len(trace.df_node)
+        edge_count = len(trace.df_edge)
+    except torch.cuda.OutOfMemoryError as error:
+        outcome = "oom"
+        failure = error
+        error_type = type(error).__name__
+        error_message = str(error)
+    except Exception as error:
+        outcome = "error"
+        failure = error
+        error_type = type(error).__name__
+        error_message = str(error)
+    elapsed = time.perf_counter() - started
+    instrumentation_snapshot = instrumentation.snapshot()
+
+    # The measured loop must not inherit graph tensors, allocator blocks, or
+    # Python objects from the discarded trace.
+    try:
+        trace = None
+        gc.collect()
+        if uses_cuda:
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except Exception as error:
+        cleanup_failure = error
+        if failure is None:
+            outcome = "error"
+            failure = error
+            error_type = type(error).__name__
+            error_message = str(error)
+
+    provenance = {
+        "enabled": True,
+        "mode": WARMUP_MODE,
+        "source_artifact_id": item["artifact_id"],
+        "source_example_id": example["example_id"],
+        "source_target_selection": item["target_selection"],
+        "status": outcome,
+        "wall_seconds": elapsed,
+    }
+    record = {
+        "record_type": "discarded_trace_warmup",
+        "status": f"warmup_{outcome}",
+        "warmup": provenance,
+        "instrumentation": instrumentation_snapshot,
+        "node_count": node_count,
+        "edge_count": edge_count,
+    }
+    if error_type is not None:
+        record["error_type"] = error_type
+        record["error"] = error_message
+    if cleanup_failure is not None:
+        record["cleanup_error_type"] = type(cleanup_failure).__name__
+        record["cleanup_error"] = str(cleanup_failure)
+    return provenance, record, failure
 
 
 def run_wave(
@@ -377,6 +684,12 @@ def run_wave(
 
     validate_run_config(config)
     wave = select_wave(manifest, wave_id)
+    validate_wave_sampling_design(wave, manifest)
+    wave_items = list(wave["items"])
+    warmup_policy = normalized_trace_warmup(config)
+    warmup_source_item = (
+        wave_items[0] if trace_warmup_applies(warmup_policy, wave_id) else None
+    )
     model_config = config["model"]
     repo_root = Path(__file__).resolve().parents[2]
     code_revision = collect_code_revision(repo_root)
@@ -386,7 +699,7 @@ def run_wave(
     if manifest["tokenizer"]["revision"] != model_config["revision"]:
         raise ValueError("manifest tokenizer revision does not match run config revision")
 
-    items = list(wave["items"])
+    items = wave_items
     if only_artifact_id:
         items = [item for item in items if item["artifact_id"] == only_artifact_id]
         if not items:
@@ -396,7 +709,12 @@ def run_wave(
     results: list[dict[str, Any]] = []
     for item in items:
         artifact_id, identity = runtime_artifact_identity(
-            item, config, code_revision, runtime_environment
+            item,
+            config,
+            code_revision,
+            runtime_environment,
+            wave_id=wave_id,
+            warmup_source_item=warmup_source_item,
         )
         artifact_path = artifact_root / wave_id / artifact_id
         base = _base_record(
@@ -456,6 +774,34 @@ def run_wave(
     gpu_info = _gpu_info(device)
     adag_config = ADAGConfig(**{**config["adag_config"], "device": device})
 
+    warmup_provenance: dict[str, Any] = {
+        "enabled": False,
+        "mode": WARMUP_MODE,
+        "status": "disabled",
+    }
+    if warmup_source_item is not None:
+        warmup_provenance, warmup_record, warmup_failure = _discarded_trace_warmup(
+            item=warmup_source_item,
+            model=model,
+            tokenizer=tokenizer,
+            adag_config=adag_config,
+            device=device,
+            uses_cuda=uses_cuda,
+        )
+        warmup_record.update(
+            {
+                "wave_id": wave_id,
+                "model_load_seconds": model_load_seconds,
+                "code_revision": code_revision,
+                "runtime_environment": runtime_environment,
+                "gpu": gpu_info,
+            }
+        )
+        _append_jsonl(summary_jsonl, warmup_record)
+        results.append(warmup_record)
+        if warmup_failure is not None:
+            raise warmup_failure
+
     limits = config.get("wave_limits", {})
     max_trace_seconds = limits.get("max_trace_seconds")
     min_cuda_headroom_bytes = int(limits.get("min_cuda_headroom_bytes", 0))
@@ -471,6 +817,7 @@ def run_wave(
             runtime_environment=runtime_environment,
             gpu_info=gpu_info,
         )
+        base["trace_warmup"] = warmup_provenance
         example = item["example"]
         positions = item["target_selection"]["response_token_positions"]
         benchmark_only = bool(item["objective"]["benchmark_only_multi_target"])
@@ -546,6 +893,8 @@ def run_wave(
                     "artifact_identity": identity,
                     "benchmark_wave_id": wave_id,
                     "source_artifact_id": item["artifact_id"],
+                    "source_target_selection": item["target_selection"],
+                    "trace_warmup": warmup_provenance,
                     "bonafide_example": example,
                     "objective": item["objective"],
                     "model_revision": model_config["revision"],

@@ -24,6 +24,8 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 SCHEMA_VERSION = "bonafide-trace-benchmark/v1"
 DEFAULT_WAVE2_WIDTHS = (1, 2, 4, 8, 16, 32)
 DEFAULT_WAVE2B_TARGET_COUNT = 16
+DEFAULT_WAVE2C_STRATUM_COUNT = 8
+DEFAULT_WAVE2C_SEED = "bonafide-wave2c-v1"
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -193,6 +195,73 @@ def select_evenly_spaced_positions(response_length: int, count: int) -> list[int
     return [round(index * (response_length - 1) / (count - 1)) for index in range(count)]
 
 
+def select_stratified_random_positions(
+    response_length: int,
+    stratum_count: int,
+    *,
+    seed: str,
+    example_id: str,
+) -> list[dict[str, Any]]:
+    """Draw one stable uniform position from each contiguous response stratum.
+
+    The SHA-256 rejection sampler avoids modulo bias while remaining independent
+    of Python's process hash seed and random-number-generator implementation.
+    Returned records contain the sampling quantities needed to project sampled
+    measurements back to all response positions.
+    """
+
+    if response_length < 1:
+        raise ValueError("response_length must be positive")
+    if stratum_count < 1:
+        raise ValueError("stratum_count must be positive")
+    if stratum_count > response_length:
+        raise ValueError(
+            f"Cannot create {stratum_count} non-empty strata from "
+            f"{response_length} response tokens"
+        )
+    if not seed:
+        raise ValueError("seed must be non-empty")
+    if not example_id:
+        raise ValueError("example_id must be non-empty")
+
+    selections: list[dict[str, Any]] = []
+    digest_range = 1 << 256
+    for stratum_index in range(stratum_count):
+        start = (stratum_index * response_length) // stratum_count
+        end_exclusive = ((stratum_index + 1) * response_length) // stratum_count
+        size = end_exclusive - start
+        rejection_limit = digest_range - (digest_range % size)
+        counter = 0
+        while True:
+            draw_key = {
+                "algorithm": "sha256-rejection-v1",
+                "seed": seed,
+                "example_id": example_id,
+                "response_length": response_length,
+                "stratum_count": stratum_count,
+                "stratum_index": stratum_index,
+                "counter": counter,
+            }
+            draw = int.from_bytes(hashlib.sha256(_canonical_json(draw_key)).digest(), "big")
+            if draw < rejection_limit:
+                break
+            counter += 1
+        selections.append(
+            {
+                "response_token_position": start + (draw % size),
+                "stratum_index": stratum_index,
+                "stratum_count": stratum_count,
+                "stratum_start": start,
+                "stratum_end_exclusive": end_exclusive,
+                "stratum_size": size,
+                "selection_probability": 1 / size,
+                "projection_weight": size,
+                "sampler": "sha256-rejection-v1",
+            }
+        )
+    return selections
+
+
 def _trace_item(
     *,
     wave_id: str,
@@ -200,7 +269,16 @@ def _trace_item(
     token_ids: list[int],
     positions: list[int],
     benchmark_only_multi_target: bool,
+    sampling: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    target_selection = {
+        "kind": "explicit_response_positions",
+        "response_token_positions": positions,
+        "width": len(positions),
+        "final_target_token_id": token_ids[positions[-1]],
+    }
+    if sampling is not None:
+        target_selection["sampling"] = sampling
     identity = {
         "schema_version": SCHEMA_VERSION,
         "wave_id": wave_id,
@@ -208,16 +286,16 @@ def _trace_item(
         "target_response_positions": positions,
         "objective": "sum_selected_logits",
     }
+    # Preserve historical IDs for unsampled waves while ensuring two
+    # probability samples of the same target position remain distinct source
+    # work units.
+    if sampling is not None:
+        identity["target_selection"] = target_selection
     return {
         "artifact_id": f"trace-{_sha256(_canonical_json(identity))[:24]}",
         "example": example.to_dict(),
         "response_token_count": len(token_ids),
-        "target_selection": {
-            "kind": "explicit_response_positions",
-            "response_token_positions": positions,
-            "width": len(positions),
-            "final_target_token_id": token_ids[positions[-1]],
-        },
+        "target_selection": target_selection,
         "objective": {
             "name": "sum_selected_logits",
             "benchmark_only_multi_target": benchmark_only_multi_target,
@@ -237,6 +315,8 @@ def build_manifest(
     wave2_annotation_id: str | None = None,
     wave2_widths: Sequence[int] = DEFAULT_WAVE2_WIDTHS,
     wave2b_target_count: int = DEFAULT_WAVE2B_TARGET_COUNT,
+    wave2c_stratum_count: int = DEFAULT_WAVE2C_STRATUM_COUNT,
+    wave2c_seed: str = DEFAULT_WAVE2C_SEED,
 ) -> dict[str, Any]:
     examples = [
         example
@@ -287,6 +367,13 @@ def build_manifest(
         eligible = sorted(eligible, key=lambda item: (len(item[1]), item[0].example_id))
         wave2_example, wave2_ids = eligible[len(eligible) // 2]
 
+    wave1_example_ids = {example.example_id for example, _ in wave1_examples}
+    if wave2_example.example_id not in wave1_example_ids:
+        raise ValueError(
+            "Wave 2 reference must belong to Wave 1 so Wave 2c is exactly the "
+            "remaining Wave 1 prompts"
+        )
+
     widths = sorted(set(wave2_widths))
     if not widths or widths[0] < 1:
         raise ValueError("wave2 widths must be positive")
@@ -320,6 +407,54 @@ def build_manifest(
         )
         for position in wave2b_positions
     ]
+
+    wave2c_waves: list[dict[str, Any]] = []
+    wave2c_examples = [
+        item for item in wave1_examples if item[0].example_id != wave2_example.example_id
+    ]
+    for prompt_index, (example, ids) in enumerate(wave2c_examples, start=1):
+        stratum_count = min(wave2c_stratum_count, len(ids))
+        selections = select_stratified_random_positions(
+            len(ids),
+            stratum_count,
+            seed=wave2c_seed,
+            example_id=example.example_id,
+        )
+        wave2c_id = (
+            f"wave2c-stratified-independent-{prompt_index:02d}-{example.example_id}"
+        )
+        wave2c_items = [
+            _trace_item(
+                wave_id=wave2c_id,
+                example=example,
+                token_ids=ids,
+                positions=[selection["response_token_position"]],
+                benchmark_only_multi_target=False,
+                sampling={
+                    "design": "one_uniform_position_per_contiguous_response_stratum",
+                    "seed": wave2c_seed,
+                    **selection,
+                },
+            )
+            for selection in selections
+        ]
+        wave2c_waves.append(
+            {
+                "wave_id": wave2c_id,
+                "purpose": (
+                    "stratified-random independent targets for one Wave 1 response"
+                ),
+                "sampling_design": {
+                    "design": "one_uniform_position_per_contiguous_response_stratum",
+                    "seed": wave2c_seed,
+                    "sampler": "sha256-rejection-v1",
+                    "response_token_population_size": len(ids),
+                    "stratum_count": stratum_count,
+                    "excluded_reference_example_id": wave2_example.example_id,
+                },
+                "items": wave2c_items,
+            }
+        )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -357,6 +492,7 @@ def build_manifest(
                 "purpose": "independent single-target traces across response positions",
                 "items": wave2b_items,
             },
+            *wave2c_waves,
         ],
     }
 
@@ -418,6 +554,17 @@ def parse_args() -> argparse.Namespace:
         help="Number of evenly spaced independent target positions (default: 16)",
     )
     parser.add_argument(
+        "--wave2c-stratum-count",
+        type=int,
+        default=DEFAULT_WAVE2C_STRATUM_COUNT,
+        help="Number of response-position strata per non-reference Wave 1 prompt (default: 8)",
+    )
+    parser.add_argument(
+        "--wave2c-seed",
+        default=DEFAULT_WAVE2C_SEED,
+        help="Stable seed recorded with deterministic Wave 2c samples",
+    )
+    parser.add_argument(
         "--allow-download",
         action="store_true",
         help="Allow tokenizer downloads (default: local cache only)",
@@ -449,6 +596,8 @@ def main() -> None:
         wave2_annotation_id=args.wave2_id,
         wave2_widths=args.wave2_widths,
         wave2b_target_count=args.wave2b_target_count,
+        wave2c_stratum_count=args.wave2c_stratum_count,
+        wave2c_seed=args.wave2c_seed,
     )
     write_manifest(manifest, args.output)
     print(

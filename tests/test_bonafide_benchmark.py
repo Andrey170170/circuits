@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 import json
 from pathlib import Path
@@ -19,12 +20,18 @@ from scripts.bonafide.manifest import (
     load_deduplicated_examples,
     response_trace_tokens,
     select_evenly_spaced_positions,
+    select_stratified_random_positions,
 )
 from scripts.bonafide.runner import (
     RUN_CONFIG_SCHEMA,
     _completed_artifact_matches,
     collect_runtime_environment,
+    normalized_trace_warmup,
     run_wave,
+    runtime_artifact_identity,
+    trace_warmup_applies,
+    validate_target_selection,
+    validate_wave_sampling_design,
     validate_runtime_trace_against_item,
     validate_run_config,
     wave_stop_reason,
@@ -98,9 +105,9 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
     csv_path = tmp_path / "bonafide.csv"
     rows = [
         _row(index, prompt=f"p{index}", response="x" * length)
-        for index, length in enumerate((2, 4, 8, 16, 32, 40), start=1)
+        for index, length in enumerate((8, 10, 12, 16, 32, 40), start=1)
     ]
-    # A second annotation for the 8-token example must not create another item.
+    # A second annotation for the 12-token example must not create another item.
     rows.append(
         {
             **rows[2],
@@ -126,7 +133,7 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
 
     assert manifest["schema_version"] == SCHEMA_VERSION
     assert manifest["execution_contract"]["merge_graphs"] is False
-    wave1, wave2, wave2b = manifest["waves"]
+    wave1, wave2, wave2b, *wave2c_waves = manifest["waves"]
     assert wave1["wave_id"] == "wave1-mixed-final-token"
     assert len(wave1["items"]) == 4
     assert any("anchor-8" in item["example"]["annotation_row_ids"] for item in wave1["items"])
@@ -167,6 +174,139 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
     assert len({item["artifact_id"] for item in wave2b["items"]}) == 16
     assert manifest["execution_contract"]["model_load_scope"] == "selected_wave"
 
+    assert len(wave2c_waves) == 3
+    assert all(wave["wave_id"].startswith("wave2c-stratified-independent-") for wave in wave2c_waves)
+    assert all(len(wave["items"]) == 8 for wave in wave2c_waves)
+    assert {
+        wave["items"][0]["example"]["example_id"] for wave in wave2c_waves
+    } == {
+        item["example"]["example_id"] for item in wave1["items"]
+    } - {wave2["items"][0]["example"]["example_id"]}
+    for wave in wave2c_waves:
+        validate_wave_sampling_design(wave, manifest)
+        assert len({item["example"]["example_id"] for item in wave["items"]}) == 1
+        assert len({item["artifact_id"] for item in wave["items"]}) == 8
+        for stratum_index, item in enumerate(wave["items"]):
+            sampling = item["target_selection"]["sampling"]
+            position = item["target_selection"]["response_token_positions"][0]
+            assert item["target_selection"]["width"] == 1
+            assert item["objective"]["benchmark_only_multi_target"] is False
+            assert sampling["stratum_index"] == stratum_index
+            assert sampling["stratum_start"] <= position < sampling["stratum_end_exclusive"]
+            assert sampling["stratum_size"] == (
+                sampling["stratum_end_exclusive"] - sampling["stratum_start"]
+            )
+            assert sampling["selection_probability"] == pytest.approx(
+                1 / sampling["stratum_size"]
+            )
+            assert sampling["projection_weight"] == sampling["stratum_size"]
+
+
+def test_manifest_requires_wave2_reference_to_be_in_wave1(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bonafide.csv"
+    _write_csv(
+        csv_path,
+        [
+            _row(1, prompt="short", response="x" * 8),
+            _row(2, prompt="middle", response="x" * 16),
+            _row(3, prompt="long", response="x" * 40),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Wave 2 reference must belong to Wave 1"):
+        build_manifest(
+            csv_path=csv_path,
+            tokenizer=FakeChatTokenizer(),
+            target_model="fake/model",
+            model_revision="exact-revision",
+            sample_count=2,
+            wave2_annotation_id="row-2",
+            wave2_widths=[1, 2, 4, 8, 16],
+        )
+
+
+def test_sample_seed_changes_source_artifact_identity_at_same_positions(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "bonafide.csv"
+    _write_csv(
+        csv_path,
+        [
+            _row(1, prompt="sampled", response="x" * 8),
+            _row(2, prompt="reference", response="x" * 40),
+        ],
+    )
+    kwargs = {
+        "csv_path": csv_path,
+        "tokenizer": FakeChatTokenizer(),
+        "target_model": "fake/model",
+        "model_revision": "exact-revision",
+        "sample_count": 2,
+        "wave2_annotation_id": "row-2",
+        "wave2_widths": [1, 2, 4, 8, 16, 32],
+    }
+    seed_a = build_manifest(**kwargs, wave2c_seed="seed-a")["waves"][3]["items"]
+    seed_b = build_manifest(**kwargs, wave2c_seed="seed-b")["waves"][3]["items"]
+
+    assert [item["target_selection"]["response_token_positions"] for item in seed_a] == [
+        item["target_selection"]["response_token_positions"] for item in seed_b
+    ]
+    assert [item["artifact_id"] for item in seed_a] != [
+        item["artifact_id"] for item in seed_b
+    ]
+
+
+def test_wave_sampling_design_rejects_incomplete_or_disagreeing_items(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "bonafide.csv"
+    _write_csv(
+        csv_path,
+        [
+            _row(1, prompt="sampled", response="x" * 8),
+            _row(2, prompt="reference", response="x" * 40),
+        ],
+    )
+    manifest = build_manifest(
+        csv_path=csv_path,
+        tokenizer=FakeChatTokenizer(),
+        target_model="fake/model",
+        model_revision="exact-revision",
+        sample_count=2,
+        wave2_annotation_id="row-2",
+        wave2_widths=[1, 2, 4, 8, 16, 32],
+    )
+    wave = manifest["waves"][3]
+    validate_wave_sampling_design(wave, manifest)
+
+    broken = copy.deepcopy(wave)
+    broken["items"].pop()
+    with pytest.raises(ValueError, match="one item for every stratum"):
+        validate_wave_sampling_design(broken, manifest)
+
+    broken = copy.deepcopy(wave)
+    broken["items"][1]["target_selection"] = copy.deepcopy(
+        broken["items"][0]["target_selection"]
+    )
+    with pytest.raises(ValueError, match="unique and complete"):
+        validate_wave_sampling_design(broken, manifest)
+
+    for field in ("seed", "sampler", "design"):
+        broken = copy.deepcopy(wave)
+        broken["items"][0]["target_selection"]["sampling"][field] = "disagrees"
+        with pytest.raises(ValueError, match=f"{field} disagrees"):
+            validate_wave_sampling_design(broken, manifest)
+
+    broken = copy.deepcopy(wave)
+    broken["sampling_design"]["response_token_population_size"] = 9
+    with pytest.raises(ValueError, match="population size disagrees"):
+        validate_wave_sampling_design(broken, manifest)
+
+    broken = copy.deepcopy(wave)
+    broken["sampling_design"]["excluded_reference_example_id"] = "wrong-reference"
+    with pytest.raises(ValueError, match="disagrees with Wave 2"):
+        validate_wave_sampling_design(broken, manifest)
+
 
 def test_even_position_selection_spans_response_and_rejects_oversampling() -> None:
     assert select_evenly_spaced_positions(170, 16) == [
@@ -190,6 +330,56 @@ def test_even_position_selection_spans_response_and_rejects_oversampling() -> No
     assert select_evenly_spaced_positions(8, 1) == [7]
     with pytest.raises(ValueError, match="distinct positions"):
         select_evenly_spaced_positions(8, 9)
+
+
+def test_stratified_random_selection_is_stable_and_records_sampling_design() -> None:
+    selections = select_stratified_random_positions(
+        170,
+        8,
+        seed="fixed-seed",
+        example_id="bf-example",
+    )
+
+    assert [selection["response_token_position"] for selection in selections] == [
+        4,
+        25,
+        45,
+        71,
+        98,
+        118,
+        127,
+        164,
+    ]
+    assert selections == select_stratified_random_positions(
+        170,
+        8,
+        seed="fixed-seed",
+        example_id="bf-example",
+    )
+    assert selections != select_stratified_random_positions(
+        170,
+        8,
+        seed="another-seed",
+        example_id="bf-example",
+    )
+    assert [(item["stratum_start"], item["stratum_end_exclusive"]) for item in selections] == [
+        (0, 21),
+        (21, 42),
+        (42, 63),
+        (63, 85),
+        (85, 106),
+        (106, 127),
+        (127, 148),
+        (148, 170),
+    ]
+    assert sum(item["projection_weight"] for item in selections) == 170
+    assert all(
+        item["selection_probability"] == pytest.approx(1 / item["stratum_size"])
+        for item in selections
+    )
+
+    with pytest.raises(ValueError, match="non-empty strata"):
+        select_stratified_random_positions(7, 8, seed="s", example_id="e")
 
 
 def _config() -> dict:
@@ -241,6 +431,31 @@ def test_run_config_rejects_non_unit_batch() -> None:
     config = _config()
     config["batch_size"] = 2
     with pytest.raises(ValueError, match="batch_size=1"):
+        validate_run_config(config)
+
+
+def test_run_config_normalizes_and_validates_trace_warmup() -> None:
+    assert normalized_trace_warmup(_config()) == {
+        "enabled": False,
+        "mode": "first_wave_item_full_trace_discard",
+        "wave_id_prefixes": [],
+    }
+    config = _config()
+    config["trace_warmup"] = {
+        "enabled": True,
+        "mode": "first_wave_item_full_trace_discard",
+        "wave_id_prefixes": ["wave2c-"],
+    }
+    validate_run_config(config)
+    policy = normalized_trace_warmup(config)
+    assert policy["enabled"] is True
+    assert trace_warmup_applies(policy, "wave2c-stratified-independent-01-example")
+    assert not trace_warmup_applies(policy, "wave1-mixed-final-token")
+    assert not trace_warmup_applies(policy, "wave2-progressive-target-window")
+    assert not trace_warmup_applies(policy, "wave2b-independent-target-positions")
+
+    config["trace_warmup"]["mode"] = "partial_forward"
+    with pytest.raises(ValueError, match="trace_warmup.mode"):
         validate_run_config(config)
 
 
@@ -327,6 +542,19 @@ def _single_item_manifest() -> dict:
             "width": 1,
             "response_token_positions": [7],
             "final_target_token_id": 77,
+            "sampling": {
+                "seed": "seed-a",
+                "design": "one_uniform_position_per_contiguous_response_stratum",
+                "sampler": "sha256-rejection-v1",
+                "response_token_position": 7,
+                "stratum_index": 0,
+                "stratum_count": 1,
+                "stratum_start": 0,
+                "stratum_end_exclusive": 8,
+                "stratum_size": 8,
+                "selection_probability": 0.125,
+                "projection_weight": 8,
+            },
         },
         "objective": {"benchmark_only_multi_target": False},
         "example": {
@@ -341,8 +569,85 @@ def _single_item_manifest() -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
         "tokenizer": {"model_id": "fake/model", "revision": "exact-revision"},
-        "waves": [{"wave_id": "instrumented", "items": [item]}],
+        "waves": [
+            {
+                "wave_id": "instrumented",
+                "sampling_design": {
+                    "design": "one_uniform_position_per_contiguous_response_stratum",
+                    "seed": "seed-a",
+                    "sampler": "sha256-rejection-v1",
+                    "response_token_population_size": 8,
+                    "stratum_count": 1,
+                    "excluded_reference_example_id": "reference-example",
+                },
+                "items": [item],
+            }
+        ],
     }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("response_token_position", 6, "position does not match"),
+        ("stratum_start", 1, "bounds are inconsistent"),
+        ("stratum_size", 7, "stratum_size is inconsistent"),
+        ("selection_probability", 0.5, "selection_probability is inconsistent"),
+        ("projection_weight", 7, "projection_weight is inconsistent"),
+    ],
+)
+def test_runner_rejects_inconsistent_sampling_metadata(
+    field: str, value: object, message: str
+) -> None:
+    item = copy.deepcopy(_single_item_manifest()["waves"][0]["items"][0])
+    item["target_selection"]["sampling"][field] = value
+    with pytest.raises(ValueError, match=message):
+        validate_target_selection(item)
+
+
+def test_runtime_identity_explicitly_binds_sampling_and_warmup() -> None:
+    item = copy.deepcopy(_single_item_manifest()["waves"][0]["items"][0])
+    config = _config()
+    artifact_id, identity = runtime_artifact_identity(
+        item,
+        config,
+        {},
+        {},
+        wave_id="instrumented",
+        warmup_source_item=None,
+    )
+
+    assert artifact_id.startswith("trace-")
+    assert identity["source_target_selection"] == item["target_selection"]
+    assert identity["trace_warmup"]["enabled"] is False
+
+    config["trace_warmup"] = {
+        "enabled": True,
+        "mode": "first_wave_item_full_trace_discard",
+        "wave_id_prefixes": ["instrumented"],
+    }
+    _, warm_identity = runtime_artifact_identity(
+        item,
+        config,
+        {},
+        {},
+        wave_id="instrumented",
+        warmup_source_item=item,
+    )
+    assert warm_identity["sha256"] != identity["sha256"]
+    assert warm_identity["trace_warmup"]["source_artifact_id"] == "source-trace-1"
+
+    config["trace_warmup"]["wave_id_prefixes"] = ["wave2c-"]
+    _, wave1_identity = runtime_artifact_identity(
+        item,
+        config,
+        {},
+        {},
+        wave_id="wave1-mixed-final-token",
+        warmup_source_item=None,
+    )
+    assert wave1_identity["trace_warmup"]["applies_to_wave"] is False
+    assert "source_artifact_id" not in wave1_identity["trace_warmup"]
 
 
 def test_runner_persists_instrumentation_in_success_record_and_artifact(
@@ -373,9 +678,240 @@ def test_runner_persists_instrumentation_in_success_record_and_artifact(
     assert records[0]["instrumentation"]["counters"]["probe"] == 5
     summary_record = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[0])
     assert summary_record["instrumentation"]["schema_version"].endswith("v1")
+    assert summary_record["target_sampling"]["stratum_index"] == 0
+    assert summary_record["target_sampling"]["selection_probability"] == 0.125
     loaded = load_compact_trace(records[0]["artifact_path"])
     assert loaded.metrics["instrumentation"]["counters"]["probe"] == 5
     assert loaded.circuit_data.trace_metadata["instrumentation"]["counters"]["probe"] == 5
+    assert loaded.manifest["source_target_selection"]["sampling"]["projection_weight"] == 8
+
+
+def test_runner_discards_full_warmup_then_measures_every_planned_item(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import scripts.bonafide.runner as runner_module
+
+    config = _config()
+    config["model"]["device"] = "cpu"
+    config["trace_warmup"] = {
+        "enabled": True,
+        "mode": "first_wave_item_full_trace_discard",
+        "wave_id_prefixes": ["instrumented"],
+    }
+    manifest = _single_item_manifest()
+    first = manifest["waves"][0]["items"][0]
+    first["target_selection"]["response_token_positions"] = [3]
+    first["target_selection"]["sampling"].update(
+        {
+            "response_token_position": 3,
+            "stratum_index": 0,
+            "stratum_count": 2,
+            "stratum_start": 0,
+            "stratum_end_exclusive": 4,
+            "stratum_size": 4,
+            "selection_probability": 0.25,
+            "projection_weight": 4,
+        }
+    )
+    manifest["waves"][0]["sampling_design"]["stratum_count"] = 2
+    second = copy.deepcopy(manifest["waves"][0]["items"][0])
+    second["artifact_id"] = "source-trace-2"
+    second["target_selection"]["response_token_positions"] = [7]
+    second["target_selection"]["sampling"].update(
+        {
+            "response_token_position": 7,
+            "stratum_index": 1,
+            "stratum_start": 4,
+            "stratum_end_exclusive": 8,
+        }
+    )
+    manifest["waves"][0]["items"].append(second)
+    calls: list[tuple[str, int]] = []
+
+    def fake_trace(**kwargs):
+        calls.append((kwargs["label"], kwargs["target_response_positions"][0]))
+        trace = _valid_runtime_trace()
+        trace.target_provenance[0]["response_token_position"] = kwargs[
+            "target_response_positions"
+        ][0]
+        return trace
+
+    monkeypatch.setattr(
+        runner_module, "_load_model_and_tokenizer", lambda _config: (object(), object())
+    )
+    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", fake_trace)
+    records = run_wave(
+        config=config,
+        manifest=manifest,
+        wave_id="instrumented",
+        artifact_root=tmp_path / "artifacts",
+        summary_jsonl=tmp_path / "summary.jsonl",
+    )
+
+    assert calls == [("example-1", 3), ("example-1", 3), ("example-1", 7)]
+    assert [record["status"] for record in records] == [
+        "warmup_complete",
+        "complete",
+        "complete",
+    ]
+    assert records[0]["warmup"]["source_artifact_id"] == "source-trace-1"
+    assert records[0]["warmup"]["wall_seconds"] >= 0
+    assert records[1]["trace_warmup"]["status"] == "complete"
+    summary = [json.loads(line) for line in (tmp_path / "summary.jsonl").read_text().splitlines()]
+    assert summary[0]["record_type"] == "discarded_trace_warmup"
+    assert summary[1]["trace_warmup"]["source_artifact_id"] == "source-trace-1"
+    loaded = load_compact_trace(records[1]["artifact_path"])
+    assert loaded.manifest["trace_warmup"]["status"] == "complete"
+
+
+def test_filtered_wave_uses_fixed_first_wave_item_as_warmup_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import scripts.bonafide.runner as runner_module
+
+    csv_path = tmp_path / "bonafide.csv"
+    _write_csv(
+        csv_path,
+        [
+            _row(1, prompt="sampled", response="x" * 8),
+            _row(2, prompt="reference", response="x" * 40),
+        ],
+    )
+    manifest = build_manifest(
+        csv_path=csv_path,
+        tokenizer=FakeChatTokenizer(),
+        target_model="fake/model",
+        model_revision="exact-revision",
+        sample_count=2,
+        wave2_annotation_id="row-2",
+        wave2_widths=[1, 2, 4, 8, 16, 32],
+    )
+    wave = manifest["waves"][3]
+    fixed_source = wave["items"][0]
+    selected = wave["items"][1]
+    config = _config()
+    config["model"]["device"] = "cpu"
+    config["trace_warmup"] = {
+        "enabled": True,
+        "mode": "first_wave_item_full_trace_discard",
+        "wave_id_prefixes": ["wave2c-"],
+    }
+    calls: list[int] = []
+
+    def fake_trace(**kwargs):
+        position = kwargs["target_response_positions"][0]
+        calls.append(position)
+        trace = _valid_runtime_trace(token_id=1120)
+        trace.target_provenance[0]["response_token_position"] = position
+        return trace
+
+    monkeypatch.setattr(
+        runner_module, "_load_model_and_tokenizer", lambda _config: (object(), object())
+    )
+    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", fake_trace)
+    records = run_wave(
+        config=config,
+        manifest=manifest,
+        wave_id=wave["wave_id"],
+        only_artifact_id=selected["artifact_id"],
+        artifact_root=tmp_path / "artifacts",
+        summary_jsonl=tmp_path / "summary.jsonl",
+    )
+
+    assert calls == [
+        fixed_source["target_selection"]["response_token_positions"][0],
+        selected["target_selection"]["response_token_positions"][0],
+    ]
+    assert records[0]["warmup"]["source_artifact_id"] == fixed_source["artifact_id"]
+    identity = load_compact_trace(records[1]["artifact_path"]).manifest[
+        "artifact_identity"
+    ]
+    assert identity["trace_warmup"]["source_artifact_id"] == fixed_source["artifact_id"]
+    assert identity["trace_warmup"]["source_target_selection"] == fixed_source[
+        "target_selection"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failure", "status"),
+    [
+        (RuntimeError("warmup failed"), "warmup_error"),
+        (torch.cuda.OutOfMemoryError("warmup OOM"), "warmup_oom"),
+    ],
+)
+def test_failed_warmup_records_failure_and_writes_no_measured_artifact(
+    tmp_path: Path, monkeypatch, failure: Exception, status: str
+) -> None:
+    import scripts.bonafide.runner as runner_module
+
+    config = _config()
+    config["model"]["device"] = "cpu"
+    config["trace_warmup"] = {
+        "enabled": True,
+        "mode": "first_wave_item_full_trace_discard",
+        "wave_id_prefixes": ["instrumented"],
+    }
+
+    def failing_trace(**kwargs):
+        raise failure
+
+    monkeypatch.setattr(
+        runner_module, "_load_model_and_tokenizer", lambda _config: (object(), object())
+    )
+    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", failing_trace)
+    artifact_root = tmp_path / "artifacts"
+    with pytest.raises(type(failure), match="warmup"):
+        run_wave(
+            config=config,
+            manifest=_single_item_manifest(),
+            wave_id="instrumented",
+            artifact_root=artifact_root,
+            summary_jsonl=tmp_path / "summary.jsonl",
+        )
+
+    summary = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[0])
+    assert summary["status"] == status
+    assert summary["warmup"]["source_artifact_id"] == "source-trace-1"
+    assert not list(artifact_root.rglob("manifest.json"))
+
+
+def test_warmup_cleanup_failure_does_not_suppress_recorded_original_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import scripts.bonafide.runner as runner_module
+
+    config = _config()
+    config["model"]["device"] = "cpu"
+    config["trace_warmup"] = {
+        "enabled": True,
+        "mode": "first_wave_item_full_trace_discard",
+        "wave_id_prefixes": ["instrumented"],
+    }
+
+    def failing_trace(**kwargs):
+        raise RuntimeError("original warmup failure")
+
+    def failing_cleanup():
+        raise ValueError("cleanup failure")
+
+    monkeypatch.setattr(
+        runner_module, "_load_model_and_tokenizer", lambda _config: (object(), object())
+    )
+    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", failing_trace)
+    monkeypatch.setattr(runner_module.gc, "collect", failing_cleanup)
+    with pytest.raises(RuntimeError, match="original warmup failure"):
+        run_wave(
+            config=config,
+            manifest=_single_item_manifest(),
+            wave_id="instrumented",
+            artifact_root=tmp_path / "artifacts",
+            summary_jsonl=tmp_path / "summary.jsonl",
+        )
+
+    summary = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[0])
+    assert summary["status"] == "warmup_error"
+    assert summary["error_type"] == "RuntimeError"
+    assert summary["cleanup_error_type"] == "ValueError"
 
 
 @pytest.mark.parametrize(
