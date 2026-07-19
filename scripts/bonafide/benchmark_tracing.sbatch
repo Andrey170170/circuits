@@ -6,12 +6,14 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
-#SBATCH --partition=coe-gpu-class-grn
-#SBATCH --qos=coe-gpu-students-grn
-#SBATCH --account=marasovic
-#SBATCH --gres=gpu:1
+#SBATCH --clusters=notchpeak
+#SBATCH --partition=marasovic-gpu-np
+#SBATCH --qos=marasovic-gpu-np
+#SBATCH --account=marasovic-gpu-np
+#SBATCH --gres=gpu:a100:1
 
-# Run one explicitly selected benchmark wave. For example:
+# Run one explicitly selected benchmark wave on a lab-owned A100. Owner jobs
+# may preempt guest jobs currently borrowing notch369/notch370. For example:
 #
 #   sbatch --export=ALL,MANIFEST=/path/to/manifest.json,WAVE=wave1-mixed-final-token \
 #     scripts/bonafide/benchmark_tracing.sbatch
