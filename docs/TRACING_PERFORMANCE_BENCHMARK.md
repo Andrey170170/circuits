@@ -307,6 +307,42 @@ and may include one-time CUDA/kernel warm-up. Keep its graph and memory measurem
 its time from the position-cost fit unless a warm repeat shows that the first-item effect is
 negligible.
 
+Wave 2b job `14061259` used commit `44e229f` and completed all 16 items in 14m41s of allocation
+time. The sampled traces used 843.8 seconds, peaked at 12.38 GiB reserved CUDA memory, produced
+4.30 MB of compact artifacts, and all passed checksum-aware reload validation:
+
+| Response position | Input tokens | Trace seconds | Peak CUDA reserved (GiB) | Nodes | Edges |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 78 | 56.45 | 8.57 | 417 | 21,532 |
+| 11 | 89 | 41.85 | 8.67 | 288 | 8,186 |
+| 23 | 101 | 35.71 | 8.85 | 269 | 7,132 |
+| 34 | 112 | 57.31 | 9.07 | 476 | 24,356 |
+| 45 | 123 | 51.24 | 9.23 | 356 | 10,141 |
+| 56 | 134 | 29.89 | 9.69 | 230 | 5,035 |
+| 68 | 146 | 73.58 | 9.85 | 687 | 31,782 |
+| 79 | 157 | 41.77 | 9.96 | 382 | 6,948 |
+| 90 | 168 | 39.10 | 10.43 | 354 | 5,540 |
+| 101 | 179 | 55.08 | 10.35 | 411 | 11,206 |
+| 113 | 191 | 218.03 | 12.38 | 1,438 | 131,851 |
+| 124 | 202 | 19.82 | 11.31 | 295 | 8,060 |
+| 135 | 213 | 29.89 | 10.93 | 293 | 5,762 |
+| 146 | 224 | 34.34 | 10.29 | 349 | 6,295 |
+| 158 | 236 | 31.33 | 10.39 | 340 | 5,813 |
+| 169 | 247 | 28.44 | 10.55 | 351 | 6,892 |
+
+For a sensitivity projection, position 0 was excluded from the timing fit and assigned the warm
+position-11 time. Linear interpolation across the other samples projects 9,030 seconds (2.51
+A100-hours) for all 170 independent targets if the position-113 bottleneck represents its local
+interval. Interpolating without that outlier and then restoring its measured cost at position 113
+projects 7,126 seconds (1.98 A100-hours) if the bottleneck is isolated. Treat 2.0--2.5 A100-hours
+as a scenario range for this one response, not a confidence interval or a corpus-wide estimate.
+
+Within these 16 samples, trace time tracks retained edge count much more strongly than warm input
+length (descriptive Pearson correlations `r=0.988` and `r=-0.014`, respectively). Position 113
+alone took 218 seconds and retained 131,851 edges, while position 124 took 19.8 seconds and retained
+8,060. A length-only resource model is therefore inadequate; more responses need position samples
+to estimate the prevalence of these graph-complexity bottlenecks.
+
 ## After the performance check
 
 If resource use is acceptable, trace the reference corpus incrementally (for example 50, then
