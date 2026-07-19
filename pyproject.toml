@@ -14,7 +14,7 @@ dependencies = [
     "jupyter>=1.0.0",
     "statsmodels>=0.14.0",
     "jupyter-collaboration>=1.2.0",
-    "vllm>=0.7.0",
+    "vllm==0.7.3",
     "treescope>=0.1.9",
     "together>=1.5.7",
     "peft>=0.15.0",
@@ -49,5 +49,7 @@ env_util = { path = "lib/env_util", editable = true }
 neurondb = { path = "lib/neurondb", editable = true }
 user_modeling = { path = "lib/user_modeling", editable = true }
 
-# Override vllm to install from source on macOS (PyPI upload is broken)
-vllm = { git = "https://github.com/vllm-project/vllm", tag = "v0.7.0", marker = "platform_system == 'Darwin'" }
+[tool.uv]
+# This experiment fork is run on CHPC Linux x86_64. Restricting the lock target
+# avoids evaluating the upstream macOS-only vLLM source build on CPU nodes.
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

@@ -1,10 +1,13 @@
 .env
+.venv
 
 # data/ (keep committed datasets, ignore generated data)
 notebooks/
 results/
 logs/
 outputs/
+.uv-cache/
+slurm-*.out
 
 .DS_Store
 *.gz
