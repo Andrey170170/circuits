@@ -255,6 +255,37 @@ The four-hour Slurm limit remains the hard job cap. If the long-tail Wave 1 item
 limit, submit them individually with `ONLY_ARTIFACT_ID` so each has its own allocation boundary
 and completed shorter artifacts remain intact.
 
+## Recorded A100 results (2026-07-19)
+
+These measurements used commit `0581d44`, Qwen3-4B-Instruct-2507 at the pinned revision, and one
+NVIDIA A100 80GB PCIe on `notch369`. Wave 1 job `14060289` completed all ten final-token traces in
+12m23s of allocation time. The traces themselves used 717.2 seconds in total; the median was
+42.1 seconds. The 1,992-response-token / 2,259-total-token tail took 337.8 seconds and peaked at
+65.6 GiB reserved CUDA memory, leaving 13.7 GiB headroom. The ten compact artifacts occupy 2.7 MB
+and passed checksum-aware reload validation.
+
+Wave 2 reused the 170-token Wave 1 result as the width-one baseline. Widths greater than one were
+run individually as benchmark-only summed-logit objectives, with a fresh model load for each job:
+
+| Target width | Trace seconds | Peak CUDA reserved (GiB) | Nodes | Edges |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 28.34 | 10.53 | 351 | 6,892 |
+| 2 | 25.68 | 10.96 | 335 | 4,181 |
+| 4 | 18.63 | 11.46 | 309 | 1,669 |
+| 8 | 13.95 | 12.25 | 293 | 919 |
+| 16 | 22.86 | 15.24 | 295 | 456 |
+| 32 | 47.88 | 19.18 | 321 | 794 |
+
+The five new Wave 2 artifacts occupy 440 KB and passed checksum-aware reload validation. Their
+Slurm jobs were `14060720`, `14060736`, `14060824`, `14060839`, and `14060911`; all exited `0:0`.
+
+Interpret this wave narrowly. Memory grows modestly with summed-objective width, but runtime and
+graph size are non-monotonic because changing the summed objective changes attributions and which
+nodes survive pruning. These results do **not** show that 32 independent, provenance-preserving
+per-token traces cost the same as one width-32 trace. The production cost projection still needs
+independent single-target traces or a tracing implementation that shares computation while
+retaining a distinct target axis.
+
 ## After the performance check
 
 If resource use is acceptable, trace the reference corpus incrementally (for example 50, then
