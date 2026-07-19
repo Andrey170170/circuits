@@ -16,6 +16,7 @@ from circuits.tracing.artifact import (
     validate_compact_trace_data,
 )
 from circuits.tracing.clja import ADAGConfig
+from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.trace import (
     CircuitData,
     prepare_teacher_forced_input,
@@ -124,6 +125,7 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
     monkeypatch.setattr(trace_module, "convert_circuit_to_dataframes", fake_convert)
 
     model = FakeModel()
+    instrumentation = TraceInstrumentation(device="cpu")
     data = trace_teacher_forced_response(
         model,
         FakeChatTokenizer(),
@@ -132,6 +134,7 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
         [2],
         ADAGConfig(device="cpu"),
         label="row-1",
+        instrumentation=instrumentation,
     )
 
     assert model.forward_calls == 1
@@ -140,12 +143,21 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
     assert captured["focus_logits"] == [[79]]
     assert captured["tgt_tokens"] == [5]
     assert captured["src_tokens"] == list(range(6))
+    assert captured["instrumentation"] is instrumentation
     assert data.target_logits == [[79]]
     assert data.target_logit_values == [[79.0]]
     assert data.target_provenance[0]["response_token_position"] == 2
     assert data.target_provenance[0]["absolute_token_position"] == 6
     assert data.target_provenance[0]["prediction_token_position"] == 5
     assert data.benchmark_only is False
+    snapshot = data.trace_metadata["instrumentation"]
+    assert set(("prepare_input", "target_scoring", "clja_total", "dataframe_conversion")) <= set(
+        snapshot["stages"]
+    )
+    assert snapshot["counters"]["raw_node_count"] == 1
+    assert snapshot["counters"]["raw_edge_count"] == 1
+    assert snapshot["counters"]["final_dataframe_node_count"] == 1
+    assert snapshot["counters"]["final_dataframe_edge_count"] == 1
 
 
 def test_multi_target_trace_requires_benchmark_only(monkeypatch):
@@ -160,6 +172,55 @@ def test_multi_target_trace_requires_benchmark_only(monkeypatch):
             ADAGConfig(device="cpu"),
         )
     assert model.forward_calls == 0
+
+
+def test_instrumentation_does_not_change_teacher_forced_trace_outputs(monkeypatch):
+    import circuits.tracing.trace as trace_module
+
+    node = object()
+    edge = object()
+    monkeypatch.setattr(
+        trace_module,
+        "get_all_pairs_cl_ja_effects_with_attributions",
+        lambda **_kwargs: ([node], [edge]),
+    )
+    monkeypatch.setattr(
+        trace_module,
+        "convert_circuit_to_dataframes",
+        lambda *_args, **_kwargs: (
+            pd.DataFrame({"layer": [0], "attribution": [0.5]}),
+            pd.DataFrame({"layer": ["0->1"], "weight": [0.25]}),
+        ),
+    )
+    kwargs = {
+        "tokenizer": FakeChatTokenizer(),
+        "prompt": "question",
+        "response": "abcd",
+        "target_response_positions": [2],
+        "config": ADAGConfig(device="cpu"),
+    }
+
+    plain = trace_teacher_forced_response(model=FakeModel(), **kwargs)
+    instrumented = trace_teacher_forced_response(
+        model=FakeModel(),
+        instrumentation=TraceInstrumentation(device="cpu"),
+        **kwargs,
+    )
+
+    pd.testing.assert_frame_equal(plain.df_node, instrumented.df_node)
+    pd.testing.assert_frame_equal(plain.df_edge, instrumented.df_edge)
+    assert plain.cis == instrumented.cis
+    assert plain.attention_masks == instrumented.attention_masks
+    assert plain.target_logits == instrumented.target_logits
+    assert plain.target_logit_probs == instrumented.target_logit_probs
+    assert plain.target_logit_values == instrumented.target_logit_values
+    assert plain.target_provenance == instrumented.target_provenance
+    assert "instrumentation" not in plain.trace_metadata
+    assert {
+        key: value
+        for key, value in instrumented.trace_metadata.items()
+        if key != "instrumentation"
+    } == plain.trace_metadata
 
 
 def _circuit_data(*, target_count=1, benchmark_only=False):

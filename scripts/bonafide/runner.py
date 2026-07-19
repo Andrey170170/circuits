@@ -24,6 +24,7 @@ from circuits.tracing.artifact import (
     validate_compact_trace_integrity,
 )
 from circuits.tracing.clja import ADAGConfig
+from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.trace import CircuitData, trace_teacher_forced_response
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -481,6 +482,10 @@ def run_wave(
             reserved_before = torch.cuda.memory_reserved()
         else:
             allocated_before = reserved_before = 0
+        instrumentation = TraceInstrumentation(
+            device=device,
+            synchronize_cuda=uses_cuda,
+        )
         started = time.perf_counter()
         try:
             trace = trace_teacher_forced_response(
@@ -492,11 +497,14 @@ def run_wave(
                 config=adag_config,
                 label=example["example_id"],
                 benchmark_only=benchmark_only,
+                instrumentation=instrumentation,
             )
             validate_runtime_trace_against_item(trace, item)
             if uses_cuda:
                 torch.cuda.synchronize()
             trace_elapsed = time.perf_counter() - started
+            instrumentation_snapshot = instrumentation.snapshot()
+            trace.trace_metadata["instrumentation"] = instrumentation_snapshot
             metrics = {
                 "status": "complete",
                 "trace_wall_seconds": trace_elapsed,
@@ -526,6 +534,7 @@ def run_wave(
                 "input_token_count": len(trace.cis[0]),
                 "response_token_count": item["response_token_count"],
                 "target_count": len(positions),
+                "instrumentation": instrumentation_snapshot,
             }
             serialization_started = time.perf_counter()
             save_compact_trace(
@@ -587,6 +596,7 @@ def run_wave(
                 "rss_peak_after_bytes": _rss_peak_bytes(),
                 "error_type": type(error).__name__,
                 "error": str(error),
+                "instrumentation": instrumentation.snapshot(),
             }
             if uses_cuda:
                 torch.cuda.empty_cache()
@@ -602,6 +612,7 @@ def run_wave(
                 "rss_peak_after_bytes": _rss_peak_bytes(),
                 "error_type": type(error).__name__,
                 "error": str(error),
+                "instrumentation": instrumentation.snapshot(),
             }
             _append_jsonl(summary_jsonl, record)
             results.append(record)

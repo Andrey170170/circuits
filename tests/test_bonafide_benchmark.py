@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import pandas as pd
 import pytest
+import torch
 
-from circuits.tracing.artifact import DATA_FILENAME, save_compact_trace
+from circuits.tracing.artifact import DATA_FILENAME, load_compact_trace, save_compact_trace
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.trace import CircuitData
 from scripts.bonafide.manifest import (
@@ -315,6 +317,103 @@ def test_runtime_environment_records_core_package_versions() -> None:
     assert environment["python"]
     assert environment["packages"]["torch"]
     assert environment["packages"]["transformers"]
+
+
+def _single_item_manifest() -> dict:
+    item = {
+        "artifact_id": "source-trace-1",
+        "response_token_count": 8,
+        "target_selection": {
+            "width": 1,
+            "response_token_positions": [7],
+            "final_target_token_id": 77,
+        },
+        "objective": {"benchmark_only_multi_target": False},
+        "example": {
+            "example_id": "example-1",
+            "annotation_row_ids": ["row-1"],
+            "question_ids": ["question-1"],
+            "label_types": ["FAITHFUL_STEP"],
+            "prompt": "question",
+            "response": "response",
+        },
+    }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "tokenizer": {"model_id": "fake/model", "revision": "exact-revision"},
+        "waves": [{"wave_id": "instrumented", "items": [item]}],
+    }
+
+
+def test_runner_persists_instrumentation_in_success_record_and_artifact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import scripts.bonafide.runner as runner_module
+
+    config = _config()
+    config["model"]["device"] = "cpu"
+
+    def fake_trace(**kwargs):
+        kwargs["instrumentation"].set_counter("probe", 5)
+        return _valid_runtime_trace()
+
+    monkeypatch.setattr(
+        runner_module, "_load_model_and_tokenizer", lambda _config: (object(), object())
+    )
+    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", fake_trace)
+    records = run_wave(
+        config=config,
+        manifest=_single_item_manifest(),
+        wave_id="instrumented",
+        artifact_root=tmp_path / "artifacts",
+        summary_jsonl=tmp_path / "summary.jsonl",
+    )
+
+    assert records[0]["status"] == "complete"
+    assert records[0]["instrumentation"]["counters"]["probe"] == 5
+    summary_record = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[0])
+    assert summary_record["instrumentation"]["schema_version"].endswith("v1")
+    loaded = load_compact_trace(records[0]["artifact_path"])
+    assert loaded.metrics["instrumentation"]["counters"]["probe"] == 5
+    assert loaded.circuit_data.trace_metadata["instrumentation"]["counters"]["probe"] == 5
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [
+        (RuntimeError("synthetic trace failure"), "error"),
+        (torch.cuda.OutOfMemoryError("synthetic OOM"), "oom"),
+    ],
+)
+def test_runner_retains_partial_instrumentation_in_failure_record(
+    tmp_path: Path, monkeypatch, failure: Exception, expected_status: str
+) -> None:
+    import scripts.bonafide.runner as runner_module
+
+    config = _config()
+    config["model"]["device"] = "cpu"
+    config["continue_on_error"] = True
+
+    def failing_trace(**kwargs):
+        kwargs["instrumentation"].set_counter("selected_neuron_count", 12)
+        raise failure
+
+    monkeypatch.setattr(
+        runner_module, "_load_model_and_tokenizer", lambda _config: (object(), object())
+    )
+    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", failing_trace)
+    records = run_wave(
+        config=config,
+        manifest=_single_item_manifest(),
+        wave_id="instrumented",
+        artifact_root=tmp_path / "artifacts",
+        summary_jsonl=tmp_path / "summary.jsonl",
+    )
+
+    assert records[0]["status"] == expected_status
+    assert records[0]["instrumentation"]["counters"]["selected_neuron_count"] == 12
+    summary_record = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[0])
+    assert summary_record["instrumentation"]["counters"]["selected_neuron_count"] == 12
 
 
 @pytest.mark.parametrize(

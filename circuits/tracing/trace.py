@@ -11,6 +11,10 @@ import numpy as np
 import pandas as pd
 import torch
 from circuits.tracing.clja import ADAGConfig, get_all_pairs_cl_ja_effects_with_attributions
+from circuits.tracing.instrumentation import (
+    TraceInstrumentation,
+    instrumentation_stage,
+)
 from circuits.tracing.utils import Edge, Node
 from tqdm import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizer
@@ -613,6 +617,7 @@ def trace_teacher_forced_response(
     system_prompt: str | None = None,
     ignore_bos: bool = False,
     benchmark_only: bool = False,
+    instrumentation: TraceInstrumentation | None = None,
 ) -> CircuitData:
     """Trace selected tokens from one frozen response without generation.
 
@@ -627,34 +632,47 @@ def trace_teacher_forced_response(
             "benchmark_only=True for performance measurements"
         )
 
-    prepared = prepare_teacher_forced_input(
-        tokenizer,
-        prompt,
-        response,
-        target_response_positions,
-        system_prompt=system_prompt,
-    )
-    target_logit_values, target_probs = _teacher_forced_target_scores(model, prepared)
+    with instrumentation_stage(instrumentation, "prepare_input"):
+        prepared = prepare_teacher_forced_input(
+            tokenizer,
+            prompt,
+            response,
+            target_response_positions,
+            system_prompt=system_prompt,
+        )
+    with instrumentation_stage(instrumentation, "target_scoring"):
+        target_logit_values, target_probs = _teacher_forced_target_scores(
+            model, prepared
+        )
 
-    nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(
-        model=model,
-        tokenizer=tokenizer,
-        cis=[prepared.input_ids],
-        config=config,
-        attention_masks=[prepared.attention_mask],
-        focus_logits=[prepared.target_token_ids],
-        src_tokens=list(range(len(prepared.input_ids) - 1)),
-        tgt_tokens=prepared.target_prediction_positions,
-    )
-    df_node, df_edge = convert_circuit_to_dataframes(
-        [nodes],
-        [edges],
-        [label],
-        [[0]],
-        bs=1,
-        ignore_bos=ignore_bos,
-        percentage_threshold=config.percentage_threshold,
-    )
+    with instrumentation_stage(instrumentation, "clja_total"):
+        nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(
+            model=model,
+            tokenizer=tokenizer,
+            cis=[prepared.input_ids],
+            config=config,
+            attention_masks=[prepared.attention_mask],
+            focus_logits=[prepared.target_token_ids],
+            src_tokens=list(range(len(prepared.input_ids) - 1)),
+            tgt_tokens=prepared.target_prediction_positions,
+            instrumentation=instrumentation,
+        )
+    if instrumentation is not None:
+        instrumentation.set_counter("raw_node_count", len(nodes))
+        instrumentation.set_counter("raw_edge_count", len(edges))
+    with instrumentation_stage(instrumentation, "dataframe_conversion"):
+        df_node, df_edge = convert_circuit_to_dataframes(
+            [nodes],
+            [edges],
+            [label],
+            [[0]],
+            bs=1,
+            ignore_bos=ignore_bos,
+            percentage_threshold=config.percentage_threshold,
+        )
+    if instrumentation is not None:
+        instrumentation.set_counter("final_dataframe_node_count", len(df_node))
+        instrumentation.set_counter("final_dataframe_edge_count", len(df_edge))
 
     target_provenance = []
     for (
@@ -699,6 +717,8 @@ def trace_teacher_forced_response(
         "input_token_count": len(prepared.input_ids),
         "chat_template_sha256": _stable_text_hash(get_chat_template(tokenizer)),
     }
+    if instrumentation is not None:
+        trace_metadata["instrumentation"] = instrumentation.snapshot()
     return CircuitData(
         df_node=df_node,
         df_edge=df_edge,

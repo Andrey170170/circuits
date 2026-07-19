@@ -31,6 +31,60 @@ generate descriptions, or summarize cluster labels. Those are separate downstrea
 Keeping this boundary narrow makes raw traces reusable when graph, clustering, or labeling
 choices change.
 
+## Stage-level trace instrumentation
+
+Performance runs attach a JSON-only `adag.trace-instrumentation.v1` snapshot to
+`trace.trace_metadata.instrumentation`, `metrics.json`, and the benchmark summary JSONL. A
+recorder is created independently for every trace, so an OOM or other error record still retains
+all counters and completed stage timings observed before the failure. Instrumentation is
+observational: it does not alter scientific node/edge tables, attribution values, or tracing
+return signatures.
+
+The snapshot contains:
+
+- `stages`: accumulated synchronized wall seconds and call counts for input preparation, target
+  scoring, initial attribution, mask selection, selected-neuron attribution/contribution,
+  optional stop-grad-on-MLP attribution/contribution, graph expansion, layer-pair Jacobians and
+  materialization, and dataframe conversion;
+- `early_predictors`: values available immediately after important-neuron mask selection,
+  including selected neurons by layer and token, active-layer count/span, planned active layer
+  pairs, `sum(n_src * n_tgt)` candidate MLP edges, planned Jacobian target chunks, and selected
+  attribution chunks;
+- `layers` and `layer_pairs`: selected counts plus, for every active source/target layer pair,
+  source and target counts, candidate edges, target chunks, Jacobian seconds, materialization
+  seconds, and retained edges;
+- `counters`: raw and final dataframe graph sizes and node/edge deltas for logit, MLP, embedding,
+  and cross-layer graph construction.
+
+These are workload measurements, not new causal quantities. In particular,
+`candidate_mlp_edge_count` is known before Jacobian computation, while `retained_edges` is known
+after thresholding. `parent_threshold` is applied after the Jacobian in the current ADAG code, so
+the early selected neurons must not be described as "parents." Counts from benchmark-only summed
+objectives also retain those objective semantics and should not be interpreted as independent
+per-token traces.
+
+Chunk accounting distinguishes work per pass from actual executions. The main selected-neuron
+pass records `selected_attribution_chunks_per_pass` and
+`selected_attribution_chunk_executions`. With integrated gradients, the execution count is
+multiplied by `ig_steps + 1`, matching the implementation's inclusion of the zero-alpha step.
+Layer-pair Jacobians similarly record `target_chunks_per_pass`, `jacobian_pass_count`, and
+`target_chunk_executions`. When stop-grad-on-MLPs is active, its separate chunk-size-10 pass is
+reported explicitly and included in `total_selected_attribution_chunk_executions`. Planned layer
+pairs list their concrete source and target layers and use the same exclusive `start_layer`
+boundary as the runtime loop.
+
+Stage timers are nested and therefore not additive. For example, `clja_total` contains
+`initial_attribution` and `graph_expansion`, while `graph_expansion` contains the layer-pair
+timers. Use the outer timer for end-to-end attribution cost and the inner timers for composition;
+do not sum all stage values into another total.
+
+CUDA performance runs synchronize the device at instrumentation timing boundaries. This makes
+stage measurements meaningful despite asynchronous kernels, but slightly changes scheduling and
+adds overhead. Compare instrumented runs with each other; do not treat their wall times as exactly
+equivalent to earlier unsynchronized benchmarks. A stage interrupted by an exception records
+unsynchronized host elapsed time and increments `failed_calls`; it never attempts a CUDA
+synchronization while unwinding, because that could mask the original tracing error.
+
 ## Required trace semantics
 
 For a frozen response with tokens `y[0], ..., y[n-1]`, target response position `i` means:
