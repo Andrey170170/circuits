@@ -201,7 +201,8 @@ The first Instruct benchmark is frozen in
 `scripts/bonafide/manifests/qwen3_4b_instruct.json`. Its mixed-length wave has ten exact
 chat-template response lengths from 145 to 1,992 tokens and retains all annotations for the three
 initial Instruct anchors. Its separate scaling wave uses one 170-token response with target
-widths 1, 2, 4, 8, 16, and 32.
+widths 1, 2, 4, 8, 16, and 32. Wave 2b uses that same response for 16 independent
+single-target traces at evenly spaced positions spanning the response.
 
 Regenerate the manifest deterministically after changing the dataset or selection policy:
 
@@ -214,7 +215,9 @@ source scripts/chpc_env.sh
   --sample-count 10 \
   --anchor-id f44d85b57fe09ddc \
   --anchor-id 23068c9e9e56a270 \
-  --anchor-id a92b84d0920c5100
+  --anchor-id a92b84d0920c5100 \
+  --wave2-id f44d85b57fe09ddc \
+  --wave2b-target-count 16
 ```
 
 Check the plan without loading the model:
@@ -243,11 +246,17 @@ sbatch --export=ALL,MANIFEST="$PWD/scripts/bonafide/manifests/qwen3_4b_instruct.
 # Later, after the Wave 1 review:
 sbatch --export=ALL,MANIFEST="$PWD/scripts/bonafide/manifests/qwen3_4b_instruct.json",WAVE=wave2-progressive-target-window \
   scripts/bonafide/benchmark_tracing.sbatch
+
+# After reviewing the summed-window scaling results:
+sbatch --export=ALL,MANIFEST="$PWD/scripts/bonafide/manifests/qwen3_4b_instruct.json",WAVE=wave2b-independent-target-positions \
+  scripts/bonafide/benchmark_tracing.sbatch
 ```
 
 The runner loads the pinned local snapshot once, processes trace units at batch size one, resumes
-only exact identity matches, and stops progressive expansion after an OOM, an over-budget trace,
-or insufficient CUDA headroom. Completed artifacts go to the VAST-backed
+only exact identity matches, and keeps that model resident for every item in the selected wave.
+Each Wave 2b item is saved as a separate scientifically reusable single-target artifact; the run
+does not sum targets or merge graphs. The runner stops after an OOM, an over-budget trace, or
+insufficient CUDA headroom. Completed artifacts go to the VAST-backed
 `$CIRCUITS_RESULTS_DIR` by default. No command above merges graphs.
 
 `max_trace_seconds` is a post-completion expansion gate, not an asynchronous CUDA-kernel timeout.
@@ -285,6 +294,18 @@ nodes survive pruning. These results do **not** show that 32 independent, proven
 per-token traces cost the same as one width-32 trace. The production cost projection still needs
 independent single-target traces or a tracing implementation that shares computation while
 retaining a distinct target axis.
+
+Wave 2b measures that independent-target cost directly. It traces response positions
+`0, 11, 23, 34, 45, 56, 68, 79, 90, 101, 113, 124, 135, 146, 158, 169` from the same
+170-token example in one model-resident run. The positions include both response endpoints and
+have gaps of 11 or 12 tokens. Compare per-position runtime, memory, and graph size; sum the trace
+times for the sampled workload, then interpolate across response position and integrate over all
+170 positions to project the no-sharing cost of fully tracing this response.
+
+The items run in ascending position order, so position 0 is also the first trace after model load
+and may include one-time CUDA/kernel warm-up. Keep its graph and memory measurements, but exclude
+its time from the position-cost fit unless a warm repeat shows that the first-item effect is
+negligible.
 
 ## After the performance check
 

@@ -23,6 +23,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 SCHEMA_VERSION = "bonafide-trace-benchmark/v1"
 DEFAULT_WAVE2_WIDTHS = (1, 2, 4, 8, 16, 32)
+DEFAULT_WAVE2B_TARGET_COUNT = 16
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -176,6 +177,22 @@ def select_varied_lengths(
     return sorted(selected, key=lambda item: (len(item[1]), item[0].example_id))
 
 
+def select_evenly_spaced_positions(response_length: int, count: int) -> list[int]:
+    """Select deterministic response positions, including both span endpoints."""
+
+    if response_length < 1:
+        raise ValueError("response_length must be positive")
+    if count < 1:
+        raise ValueError("count must be positive")
+    if count > response_length:
+        raise ValueError(
+            f"Cannot select {count} distinct positions from {response_length} response tokens"
+        )
+    if count == 1:
+        return [response_length - 1]
+    return [round(index * (response_length - 1) / (count - 1)) for index in range(count)]
+
+
 def _trace_item(
     *,
     wave_id: str,
@@ -219,6 +236,7 @@ def build_manifest(
     anchor_annotation_ids: Sequence[str] = (),
     wave2_annotation_id: str | None = None,
     wave2_widths: Sequence[int] = DEFAULT_WAVE2_WIDTHS,
+    wave2b_target_count: int = DEFAULT_WAVE2B_TARGET_COUNT,
 ) -> dict[str, Any]:
     examples = [
         example
@@ -288,6 +306,21 @@ def build_manifest(
         for width in widths
     ]
 
+    wave2b_id = "wave2b-independent-target-positions"
+    wave2b_positions = select_evenly_spaced_positions(
+        len(wave2_ids), wave2b_target_count
+    )
+    wave2b_items = [
+        _trace_item(
+            wave_id=wave2b_id,
+            example=wave2_example,
+            token_ids=wave2_ids,
+            positions=[position],
+            benchmark_only_multi_target=False,
+        )
+        for position in wave2b_positions
+    ]
+
     return {
         "schema_version": SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -305,6 +338,7 @@ def build_manifest(
             "batch_size": 1,
             "trace_units_are_independent": True,
             "merge_graphs": False,
+            "model_load_scope": "selected_wave",
             "wave1_max_response_tokens": max_response_tokens,
         },
         "waves": [
@@ -317,6 +351,11 @@ def build_manifest(
                 "wave_id": wave2_id,
                 "purpose": "Jacobian scaling with progressive target-window width",
                 "items": wave2_items,
+            },
+            {
+                "wave_id": wave2b_id,
+                "purpose": "independent single-target traces across response positions",
+                "items": wave2b_items,
             },
         ],
     }
@@ -373,6 +412,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wave2-id", help="Annotation row ID to use for progressive windows")
     parser.add_argument("--wave2-widths", nargs="+", type=int, default=list(DEFAULT_WAVE2_WIDTHS))
     parser.add_argument(
+        "--wave2b-target-count",
+        type=int,
+        default=DEFAULT_WAVE2B_TARGET_COUNT,
+        help="Number of evenly spaced independent target positions (default: 16)",
+    )
+    parser.add_argument(
         "--allow-download",
         action="store_true",
         help="Allow tokenizer downloads (default: local cache only)",
@@ -403,6 +448,7 @@ def main() -> None:
         anchor_annotation_ids=args.anchor_id,
         wave2_annotation_id=args.wave2_id,
         wave2_widths=args.wave2_widths,
+        wave2b_target_count=args.wave2b_target_count,
     )
     write_manifest(manifest, args.output)
     print(

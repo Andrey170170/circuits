@@ -16,6 +16,7 @@ from scripts.bonafide.manifest import (
     build_manifest,
     load_deduplicated_examples,
     response_trace_tokens,
+    select_evenly_spaced_positions,
 )
 from scripts.bonafide.runner import (
     RUN_CONFIG_SCHEMA,
@@ -123,7 +124,7 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
 
     assert manifest["schema_version"] == SCHEMA_VERSION
     assert manifest["execution_contract"]["merge_graphs"] is False
-    wave1, wave2 = manifest["waves"]
+    wave1, wave2, wave2b = manifest["waves"]
     assert wave1["wave_id"] == "wave1-mixed-final-token"
     assert len(wave1["items"]) == 4
     assert any("anchor-8" in item["example"]["annotation_row_ids"] for item in wave1["items"])
@@ -147,6 +148,46 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
         item["objective"]["benchmark_only_multi_target"]
         for item in wave2["items"][1:]
     )
+
+    assert wave2b["wave_id"] == "wave2b-independent-target-positions"
+    assert [
+        item["target_selection"]["response_token_positions"][0]
+        for item in wave2b["items"]
+    ] == [0, 3, 5, 8, 10, 13, 16, 18, 21, 23, 26, 29, 31, 34, 36, 39]
+    assert all(item["target_selection"]["width"] == 1 for item in wave2b["items"])
+    assert all(
+        item["objective"]["benchmark_only_multi_target"] is False
+        for item in wave2b["items"]
+    )
+    assert {
+        item["example"]["example_id"] for item in wave2b["items"]
+    } == {wave2["items"][0]["example"]["example_id"]}
+    assert len({item["artifact_id"] for item in wave2b["items"]}) == 16
+    assert manifest["execution_contract"]["model_load_scope"] == "selected_wave"
+
+
+def test_even_position_selection_spans_response_and_rejects_oversampling() -> None:
+    assert select_evenly_spaced_positions(170, 16) == [
+        0,
+        11,
+        23,
+        34,
+        45,
+        56,
+        68,
+        79,
+        90,
+        101,
+        113,
+        124,
+        135,
+        146,
+        158,
+        169,
+    ]
+    assert select_evenly_spaced_positions(8, 1) == [7]
+    with pytest.raises(ValueError, match="distinct positions"):
+        select_evenly_spaced_positions(8, 9)
 
 
 def _config() -> dict:
