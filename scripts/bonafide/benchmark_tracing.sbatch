@@ -22,7 +22,11 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"
+if [[ ! -f "${REPO_ROOT}/scripts/chpc_env.sh" ]]; then
+    echo "Submit this job from the circuits repository root; got ${REPO_ROOT}." >&2
+    exit 2
+fi
 cd "$REPO_ROOT"
 
 module load python/3.12.12 uv/0.11.14
