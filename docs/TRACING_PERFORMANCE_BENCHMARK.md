@@ -436,6 +436,69 @@ alone took 218 seconds and retained 131,851 edges, while position 124 took 19.8 
 8,060. A length-only resource model is therefore inadequate; more responses need position samples
 to estimate the prevalence of these graph-complexity bottlenecks.
 
+### Wave 2c: instrumented stratified position sample
+
+Wave 2c used commits `76ed934` (stage/workload instrumentation) and `cc5d63c` (sampling,
+provenance, and warm-up semantics). Jobs `14062598`, `14062748`, `14062752`, `14062758`,
+`14062759`, `14062760`, `14062763`, `14062764`, and `14062766` ran one response per job on the
+four lab A100s. All nine discarded warm-ups and all 72 measured traces completed with exit code
+zero; there were no OOM, error, or stop-gate records. The jobs consumed 81m22s (1.36 A100-hours)
+of allocation time in total. After the 145-token smoke gate, the remaining eight jobs completed in
+28m42s of parallel wall time.
+
+The measured traces used 4,172.3 seconds, the discarded warm-ups used 367.1 seconds, model loads
+used 41.0 seconds, and serialization used 11.3 seconds. Trace time ranged from 17.1 to 278.6
+seconds (median 48.7; 90th percentile 95.2). Peak reserved CUDA memory ranged up to 57.10 GiB
+(median 11.40; 90th percentile 23.03), so even the sampled position 1,823 of the 1,992-token
+response retained about 23 GiB of A100 headroom. The 72 compact artifacts occupy 43.1 MiB and all
+passed checksum-aware integrity validation as numerically valid, scientifically reusable,
+single-target traces.
+
+| Response tokens | Sample median (s) | Sample max (s) | Max peak CUDA (GiB) | Projected full-response A100-hours |
+| ---: | ---: | ---: | ---: | ---: |
+| 145 | 27.7 | 47.4 | 10.20 | 1.15 |
+| 159 | 44.4 | 58.9 | 11.13 | 1.89 |
+| 161 | 39.5 | 54.3 | 10.66 | 1.78 |
+| 244 | 49.2 | 68.3 | 13.42 | 3.28 |
+| 285 | 45.3 | 74.4 | 14.28 | 3.92 |
+| 482 | 55.3 | 90.7 | 18.14 | 7.40 |
+| 715 | 59.1 | 158.7 | 23.06 | 15.09 |
+| 963 | 54.9 | 95.7 | 26.34 | 15.97 |
+| 1,992 | 113.8 | 278.6 | 57.10 | 67.47 |
+
+The last column is the stratified Horvitz--Thompson point estimate
+`sum(stratum_size * sampled_trace_seconds)`. It totals 117.94 A100-hours for every response token
+in these nine prompts and projects about 3.24 GiB of compact artifacts. It does not include the
+170-token Wave 2/2b reference response. With four perfectly utilized lab A100s, the nine-prompt
+compute total is about 29.5 wall-clock hours. These are point estimates, not confidence intervals:
+one observation per stratum supplies no design-based variance estimate, and the 1,992-token prompt
+alone contributes 67.47 hours.
+
+The instrumentation separates the two cost drivers that were confounded in Wave 2b:
+
+- Actual input length has overall Pearson correlation `r=0.824` with trace time.
+- After linearly controlling for input length, selected-neuron count and planned Jacobian chunk
+  count have partial correlations `r=0.738` and `r=0.703` with trace time.
+- A descriptive in-sample linear model using input tokens plus planned chunks has `R^2=0.838`;
+  adding input-length curvature and an input-by-chunk interaction raises it to `R^2=0.929`.
+- Layer-pair Jacobians consume 59.5% of measured trace time and their measured stage time has
+  `r=0.985` correlation with total trace time.
+- The early workload predictors become available after a median 0.161 seconds (90th percentile
+  0.270; maximum 0.853), only 0.38% of total trace time at the median. They are therefore early
+  enough to support a future resource governor before expensive cross-layer Jacobians begin.
+
+Treat the correlations and regressions as descriptive calibration on 72 deliberately sampled
+positions, not a validated runtime predictor. In particular, planned chunks alone have weak
+pooled correlation because the cost of one chunk grows with context length. The 1,992-token
+response makes this concrete: position 1,561 took 278.6 seconds with 406 planned chunks, while
+position 1,823 took 172.0 seconds with 210 chunks but used more memory (57.10 versus 49.03 GiB).
+
+The saved graphs are non-empty and materially variable: 200--2,161 nodes and 1,812--29,842 edges
+per sampled target. This establishes that the tracing stage is producing substantial reusable
+internal structure across positions. It does not yet establish that ADAG clustering will recover
+clean or stable semantic entities; that is the next downstream experiment and does not require
+retracing these 72 targets.
+
 ## After the performance check
 
 If resource use is acceptable, trace the reference corpus incrementally (for example 50, then
