@@ -164,13 +164,30 @@ def _cot_phenotype(rows: Sequence[Mapping[str, str]]) -> str:
     return "faithful"
 
 
+def _valid_annotation_span(
+    row: Mapping[str, str], *, kind: str, response: str
+) -> tuple[int, int] | None:
+    text = row[kind].strip()
+    coordinate_prefix = "sentence" if kind == "sentence_text" else kind
+    start = _optional_int(row[f"{coordinate_prefix}_span_start"])
+    end = _optional_int(row[f"{coordinate_prefix}_span_end"])
+    if (
+        not text
+        or start is None
+        or end is None
+        or not (0 <= start < end <= len(response))
+    ):
+        return None
+    return start, end
+
+
 def _annotation_position_bin(rows: Sequence[Mapping[str, str]], response: str) -> str:
     starts: list[int] = []
     for row in rows:
-        for field in ("sentence_span_start", "extract_span_start"):
-            value = _optional_int(row[field])
-            if value is not None and 0 <= value <= len(response):
-                starts.append(value)
+        for kind in ("sentence_text", "extract"):
+            span = _valid_annotation_span(row, kind=kind, response=response)
+            if span is not None:
+                starts.append(span[0])
     if not starts or not response:
         return "no_valid_annotation_span"
     fraction = min(starts) / len(response)
@@ -211,7 +228,9 @@ def _total_length_bin(count: int) -> str:
     return "1025-plus"
 
 
-def _annotation_spans(rows: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:
+def _annotation_spans(
+    rows: Sequence[Mapping[str, str]], response: str
+) -> list[dict[str, Any]]:
     return [
         {
             "annotation_row_id": row["id"],
@@ -220,9 +239,17 @@ def _annotation_spans(rows: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]
             "sentence_text": row["sentence_text"],
             "sentence_span_start": _optional_int(row["sentence_span_start"]),
             "sentence_span_end": _optional_int(row["sentence_span_end"]),
+            "sentence_span_valid": _valid_annotation_span(
+                row, kind="sentence_text", response=response
+            )
+            is not None,
             "extract": row["extract"],
             "extract_span_start": _optional_int(row["extract_span_start"]),
             "extract_span_end": _optional_int(row["extract_span_end"]),
+            "extract_span_valid": _valid_annotation_span(
+                row, kind="extract", response=response
+            )
+            is not None,
         }
         for row in rows
     ]
@@ -349,7 +376,7 @@ def load_prompt_candidates(
                 "hint_datasets": _unique(row["hint_dataset"] for row in source_rows),
                 "src_types": _unique(row["src_type"] for row in source_rows),
                 "answer_records": answer_records,
-                "annotation_spans": _annotation_spans(source_rows),
+                "annotation_spans": _annotation_spans(source_rows, response),
                 "source_annotations": [
                     {header: row[header] for header in headers} for row in source_rows
                 ],
@@ -467,6 +494,12 @@ def build_corpus_selection(
 
     dense = [example for example in examples if example["eligibility"]["dense_inventory"]]
     broad = [example for example in examples if example["eligibility"]["broad_inventory"]]
+    requested_broad_count = broad_primary_count + broad_alternate_count
+    if requested_broad_count > len(broad):
+        raise ValueError(
+            "requested broad primary + alternate counts exceed the eligible pool: "
+            f"requested={requested_broad_count}, eligible={len(broad)}"
+        )
     primary, feature_counts = _coverage_order(
         broad,
         broad_primary_count,
@@ -488,6 +521,25 @@ def build_corpus_selection(
         for example in broad
         if example["example_id"] not in primary_ids | alternate_ids
     ]
+
+    recommended_ids = set(recommended_dense_ids)
+    for example in examples:
+        example_id = example["example_id"]
+        if example_id in primary_ids:
+            broad_role = "primary"
+        elif example_id in alternate_ids:
+            broad_role = "alternate"
+        elif example["eligibility"]["broad_inventory"]:
+            broad_role = "remaining_eligible"
+        else:
+            broad_role = None
+        example["coverage_features"] = _coverage_features(example)
+        example["selection_membership"] = {
+            "dense_inventory": example["eligibility"]["dense_inventory"],
+            "recommended_dense_core": example_id in recommended_ids,
+            "broad_eligible_inventory": example["eligibility"]["broad_inventory"],
+            "broad_role": broad_role,
+        }
 
     chat_template = get_chat_template(tokenizer)
     return {

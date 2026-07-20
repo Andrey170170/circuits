@@ -268,8 +268,59 @@ def test_metadata_answers_and_annotation_spans_survive_deduplication(tmp_path: P
         "annotation-b",
     ]
     assert example["annotation_spans"][0]["extract_span_start"] == 3
+    assert example["annotation_spans"][0]["extract_span_valid"] is True
     assert example["source_annotations"][0]["sentence_text"] == "other sentence"
     assert len(example["provenance"]["source_annotations_sha256"]) == 64
+
+
+def test_cot_placeholder_span_does_not_mask_real_annotation_position(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "bonafide.csv"
+    response = "r" * 100
+    placeholder = _row(
+        1,
+        prompt="prompt",
+        response=response,
+        annotation_id="cot-level",
+        label_type="UNFAITHFUL_COT",
+    )
+    placeholder.update(
+        {
+            "sentence_text": "",
+            "sentence_span_start": "0",
+            "sentence_span_end": "-1",
+            "extract": "",
+            "extract_span_start": "0",
+            "extract_span_end": "-1",
+        }
+    )
+    real_step = {
+        **placeholder,
+        "id": "real-step",
+        "label_type": "UNFAITHFUL_STEP",
+        "sentence_text": "late sentence",
+        "sentence_span_start": "60",
+        "sentence_span_end": "73",
+        "extract": "late",
+        "extract_span_start": "60",
+        "extract_span_end": "64",
+    }
+    _write_csv(csv_path, [placeholder, real_step])
+
+    examples, _ = load_prompt_candidates(
+        csv_path=csv_path,
+        tokenizer=FakeChatTokenizer(),
+        target_model="fake/model",
+    )
+
+    example = examples[0]
+    assert example["diversity"]["annotation_position_bin"] == "third_quarter"
+    spans = {span["annotation_row_id"]: span for span in example["annotation_spans"]}
+    assert spans["cot-level"]["sentence_span_valid"] is False
+    assert spans["cot-level"]["extract_span_valid"] is False
+    assert spans["real-step"]["sentence_span_valid"] is True
+    assert spans["real-step"]["extract_span_valid"] is True
 
 
 def test_recommended_dense_ids_are_validated(tmp_path: Path) -> None:
@@ -302,6 +353,22 @@ def test_recommended_dense_ids_are_validated(tmp_path: Path) -> None:
         )
 
 
+def test_broad_requested_counts_fail_closed_when_pool_is_too_small(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bonafide.csv"
+    _write_csv(csv_path, [_row(1, prompt="prompt", response="r" * 300)])
+
+    with pytest.raises(ValueError, match="exceed the eligible pool"):
+        build_corpus_selection(
+            csv_path=csv_path,
+            tokenizer=FakeChatTokenizer(),
+            target_model="fake/model",
+            model_revision="revision",
+            recommended_dense_ids=[],
+            broad_primary_count=1,
+            broad_alternate_count=1,
+        )
+
+
 def test_schema_provenance_and_atomic_writer(tmp_path: Path) -> None:
     csv_path = tmp_path / "bonafide.csv"
     _write_csv(csv_path, [_row(1, prompt="short", response="short")])
@@ -313,6 +380,8 @@ def test_schema_provenance_and_atomic_writer(tmp_path: Path) -> None:
         model_revision="revision-sha",
         tokenizer_path=Path("/cached/tokenizer"),
         recommended_dense_ids=dense_ids,
+        broad_primary_count=0,
+        broad_alternate_count=0,
     )
 
     assert selection["schema_version"] == SCHEMA_VERSION
@@ -339,6 +408,14 @@ def test_schema_provenance_and_atomic_writer(tmp_path: Path) -> None:
         "total_length_bin",
         "question_novelty_control_family_marker",
     ]
+    example = selection["examples"][0]
+    assert example["selection_membership"] == {
+        "dense_inventory": True,
+        "recommended_dense_core": True,
+        "broad_eligible_inventory": False,
+        "broad_role": None,
+    }
+    assert "hint_types=validator" in example["coverage_features"]
 
     output_path = tmp_path / "nested" / "selection.json"
     write_corpus_selection(selection, output_path)
