@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import inspect
 import subprocess
@@ -43,7 +44,9 @@ def _predictor_without_clock(snapshot: dict) -> dict:
     return predictors
 
 
-def test_low_level_probe_matches_full_selection_and_skips_graph_work(monkeypatch) -> None:
+def test_low_level_probe_matches_full_selection_and_skips_graph_work(
+    monkeypatch,
+) -> None:
     import circuits.tracing.clja as clja_module
 
     layers, tokens, neurons = 3, 4, 5
@@ -86,9 +89,7 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(monkeypatch
         model=model,
         tokenizer=FakeChatTokenizer(),
         cis=[[1, 2, 3, 4]],
-        config=ADAGConfig(
-            device="cpu", disable_stop_grad=True, skip_attr_contrib=True
-        ),
+        config=ADAGConfig(device="cpu", disable_stop_grad=True, skip_attr_contrib=True),
         src_tokens=[0, 1, 2],
         tgt_tokens=[2],
         keep_tokens=[0, 1, 2, 3],
@@ -210,9 +211,7 @@ def test_probe_rejects_return_only_important_neurons_before_setup() -> None:
             model=model,
             tokenizer=FakeChatTokenizer(),
             cis=[[1]],
-            config=ADAGConfig(
-                device="cpu", return_only_important_neurons=True
-            ),
+            config=ADAGConfig(device="cpu", return_only_important_neurons=True),
             src_tokens=[0],
             tgt_tokens=[0],
             probe_only=True,
@@ -238,7 +237,9 @@ def _fake_selection(recorder: TraceInstrumentation) -> CLJAProbeSelection:
     )
 
 
-def test_public_probe_is_single_target_json_and_never_converts_graph(monkeypatch) -> None:
+def test_public_probe_is_single_target_json_and_never_converts_graph(
+    monkeypatch,
+) -> None:
     import circuits.tracing.trace as trace_module
 
     captured = {}
@@ -346,7 +347,9 @@ def test_public_probe_preserves_active_error_when_model_config_also_leaks(
         )
 
     assert caught.value is original_error
-    assert any("resident model must not be reused" in note for note in caught.value.__notes__)
+    assert any(
+        "resident model must not be reused" in note for note in caught.value.__notes__
+    )
     counters = recorder.snapshot()["counters"]
     assert counters["probe_model_config_restored"] is False
     assert counters["probe_model_config_leak_during_failed_clja"] is True
@@ -475,7 +478,9 @@ def test_probe_artifact_detects_metrics_corruption(tmp_path) -> None:
     )
     with (destination / METRICS_FILENAME).open("a", encoding="utf-8") as handle:
         handle.write(" ")
-    with pytest.raises(ValueError, match="metrics size mismatch|metrics checksum mismatch"):
+    with pytest.raises(
+        ValueError, match="metrics size mismatch|metrics checksum mismatch"
+    ):
         validate_probe_artifact_integrity(destination)
 
 
@@ -504,9 +509,7 @@ def test_probe_validation_rejects_basis_or_post_selection_stage() -> None:
     ("mutation", "message"),
     [
         (
-            lambda probe: probe["target_provenance"].__setitem__(
-                "probability", 1.01
-            ),
+            lambda probe: probe["target_provenance"].__setitem__("probability", 1.01),
             "probability must be in",
         ),
         (
@@ -599,13 +602,158 @@ def test_probe_runner_binds_revision_and_preserves_error_provenance(
     assert captured["model_revision"] == config["model"]["revision"]
     assert record["status"] == "error"
     assert record["artifact_identity_sha256"] == record["artifact_identity"]["sha256"]
-    assert record["source_target_selection"] == _single_item_manifest()["waves"][0][
-        "items"
-    ][0]["target_selection"]
+    assert (
+        record["source_target_selection"]
+        == _single_item_manifest()["waves"][0]["items"][0]["target_selection"]
+    )
     assert record["target_response_positions"] == [7]
     assert record["model_revision"] == config["model"]["revision"]
     summary = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[0])
     assert summary["artifact_identity"] == record["artifact_identity"]
+
+
+def test_probe_wave_loads_one_resident_model_for_multiple_items(
+    tmp_path, monkeypatch
+) -> None:
+    import scripts.bonafide.probe_runner as probe_runner
+
+    config = _config()
+    config["model"]["device"] = "cpu"
+    manifest = copy.deepcopy(_single_item_manifest())
+    wave = manifest["waves"][0]
+    wave.pop("sampling_design")
+    first = wave["items"][0]
+    first["target_selection"].pop("sampling")
+    second = copy.deepcopy(first)
+    second["artifact_id"] = "source-trace-2"
+    second["example"]["example_id"] = "example-2"
+    second["example"]["prompt"] = "another question"
+    wave["items"].append(second)
+
+    loads = []
+    model = object()
+    tokenizer = object()
+
+    def fake_load(received_config):
+        loads.append(received_config)
+        return model, tokenizer
+
+    prompts = []
+
+    def fake_probe(**kwargs):
+        assert kwargs["model"] is model
+        assert kwargs["tokenizer"] is tokenizer
+        prompts.append(kwargs["prompt"])
+        probe = _valid_probe()
+        probe.target_provenance.update(
+            {
+                "response_token_position": 7,
+                "absolute_token_position": 11,
+                "prediction_token_position": 10,
+                "token_id": 77,
+            }
+        )
+        probe.trace_metadata.update(
+            {
+                "response_token_count": 8,
+                "included_response_token_count": 8,
+                "input_token_count": 12,
+            }
+        )
+        return probe
+
+    monkeypatch.setattr(probe_runner, "_load_model_and_tokenizer", fake_load)
+    monkeypatch.setattr(probe_runner, "probe_teacher_forced_response", fake_probe)
+
+    records = probe_runner.run_probe_wave(
+        config=config,
+        manifest=manifest,
+        wave_id="instrumented",
+        artifact_root=tmp_path / "probes",
+        summary_jsonl=tmp_path / "summary.jsonl",
+    )
+
+    assert loads == [config]
+    assert prompts == ["question", "another question"]
+    assert [record["status"] for record in records] == ["complete", "complete"]
+
+
+def test_probe_runner_cli_prints_compact_summary_by_default_and_records_on_request(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    import scripts.bonafide.probe_runner as probe_runner
+
+    config_path = tmp_path / "config.json"
+    manifest_path = tmp_path / "manifest.json"
+    artifact_root = tmp_path / "probes"
+    summary_path = tmp_path / "summary.jsonl"
+    config = _config()
+    manifest = _single_item_manifest()
+    records = [
+        {"status": "complete", "artifact_identity": {"large": "record"}},
+        {"status": "planned", "artifact_identity": {"large": "record"}},
+    ]
+
+    monkeypatch.setattr(
+        probe_runner,
+        "load_json",
+        lambda path: config if path == config_path else manifest,
+    )
+    monkeypatch.setattr(probe_runner, "run_probe_wave", lambda **_kwargs: records)
+    base_argv = [
+        "probe_runner.py",
+        "--config",
+        str(config_path),
+        "--manifest",
+        str(manifest_path),
+        "--wave",
+        "candidate-wave",
+        "--artifact-root",
+        str(artifact_root),
+        "--summary-jsonl",
+        str(summary_path),
+    ]
+
+    monkeypatch.setattr("sys.argv", base_argv)
+    probe_runner.main()
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "mode": "teacher_forced_probe",
+        "wave_id": "candidate-wave",
+        "item_count": 2,
+        "status_counts": {"complete": 1, "planned": 1},
+        "artifact_root": str(artifact_root),
+        "wave_artifact_root": str(artifact_root / "candidate-wave"),
+        "summary_jsonl": str(summary_path),
+    }
+
+    monkeypatch.setattr("sys.argv", [*base_argv, "--print-records"])
+    probe_runner.main()
+    assert json.loads(capsys.readouterr().out) == records
+
+
+def test_probe_wave_progress_is_opt_in_and_compact(tmp_path, capsys) -> None:
+    import scripts.bonafide.probe_runner as probe_runner
+
+    records = probe_runner.run_probe_wave(
+        config=_config(),
+        manifest=_single_item_manifest(),
+        wave_id="instrumented",
+        artifact_root=tmp_path / "probes",
+        summary_jsonl=tmp_path / "summary.jsonl",
+        dry_run=True,
+        progress_every=1,
+    )
+
+    assert records[0]["status"] == "planned"
+    progress = json.loads(capsys.readouterr().err)
+    assert progress == {
+        "event": "probe_wave_progress",
+        "wave_id": "instrumented",
+        "processed_items": 1,
+        "total_items": 1,
+        "status_counts": {"planned": 1},
+    }
 
 
 def test_slurm_launcher_defaults_to_trace_and_dispatches_probe() -> None:

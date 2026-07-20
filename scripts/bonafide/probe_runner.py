@@ -7,7 +7,9 @@ work item is probed and atomically persisted as plain JSON.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -64,7 +66,9 @@ def probe_artifact_identity(
     return f"probe-{digest[:24]}", identity
 
 
-def _validate_probe_against_item(probe: Mapping[str, Any], item: Mapping[str, Any]) -> None:
+def _validate_probe_against_item(
+    probe: Mapping[str, Any], item: Mapping[str, Any]
+) -> None:
     provenance = probe["target_provenance"]
     selection = item["target_selection"]
     expected_position = int(selection["response_token_positions"][0])
@@ -87,7 +91,10 @@ def run_probe_wave(
     summary_jsonl: Path,
     only_artifact_id: str | None = None,
     dry_run: bool = False,
+    progress_every: int = 0,
 ) -> list[dict[str, Any]]:
+    if isinstance(progress_every, bool) or progress_every < 0:
+        raise ValueError("progress_every must be a non-negative integer")
     validate_run_config(config)
     wave = select_wave(manifest, wave_id)
     validate_wave_sampling_design(wave, manifest)
@@ -97,15 +104,43 @@ def run_probe_wave(
         if not items:
             raise ValueError(f"No item {only_artifact_id!r} in wave {wave_id!r}")
     if manifest["tokenizer"]["model_id"] != config["model"]["model_id"]:
-        raise ValueError("manifest tokenizer model_id does not match run config model_id")
+        raise ValueError(
+            "manifest tokenizer model_id does not match run config model_id"
+        )
     if manifest["tokenizer"]["revision"] != config["model"]["revision"]:
-        raise ValueError("manifest tokenizer revision does not match run config revision")
+        raise ValueError(
+            "manifest tokenizer revision does not match run config revision"
+        )
 
     repo_root = Path(__file__).resolve().parents[2]
     code_revision = collect_code_revision(repo_root)
     runtime_environment = collect_runtime_environment()
     planned: list[tuple[Mapping[str, Any], str, dict[str, Any], Path]] = []
     results: list[dict[str, Any]] = []
+    progress_status_counts: Counter[str] = Counter()
+
+    def record_progress(record: Mapping[str, Any]) -> None:
+        progress_status_counts[str(record["status"])] += 1
+        processed = len(results)
+        if progress_every and (
+            processed % progress_every == 0 or processed == len(items)
+        ):
+            print(
+                json.dumps(
+                    {
+                        "event": "probe_wave_progress",
+                        "wave_id": wave_id,
+                        "processed_items": processed,
+                        "total_items": len(items),
+                        "status_counts": dict(sorted(progress_status_counts.items())),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+
     for item in items:
         artifact_id, identity = probe_artifact_identity(
             item, config, code_revision, runtime_environment
@@ -135,14 +170,19 @@ def run_probe_wave(
                 "artifact_bytes": _directory_size(artifact_path),
             }
             results.append(record)
+            record_progress(record)
             if not dry_run:
                 _append_jsonl(summary_jsonl, record)
             continue
         planned.append((item, artifact_id, identity, artifact_path))
         if dry_run:
-            results.append(
-                {**base, "status": "planned", "artifact_path": str(artifact_path)}
-            )
+            record = {
+                **base,
+                "status": "planned",
+                "artifact_path": str(artifact_path),
+            }
+            results.append(record)
+            record_progress(record)
     if dry_run or not planned:
         return results
 
@@ -211,12 +251,12 @@ def run_probe_wave(
                 "selected_occurrence_count": len(probe.selected_occurrences),
                 "rss_peak_before_bytes": rss_before,
                 "rss_peak_after_bytes": _rss_peak_bytes(),
-                "cuda_peak_allocated_bytes": torch.cuda.max_memory_allocated()
-                if uses_cuda
-                else 0,
-                "cuda_peak_reserved_bytes": torch.cuda.max_memory_reserved()
-                if uses_cuda
-                else 0,
+                "cuda_peak_allocated_bytes": (
+                    torch.cuda.max_memory_allocated() if uses_cuda else 0
+                ),
+                "cuda_peak_reserved_bytes": (
+                    torch.cuda.max_memory_reserved() if uses_cuda else 0
+                ),
                 "instrumentation": probe.instrumentation,
             }
             serialization_started = time.perf_counter()
@@ -255,9 +295,9 @@ def run_probe_wave(
                 torch.cuda.empty_cache()
             record = {
                 **runtime_base,
-                "status": "oom"
-                if isinstance(error, torch.cuda.OutOfMemoryError)
-                else "error",
+                "status": (
+                    "oom" if isinstance(error, torch.cuda.OutOfMemoryError) else "error"
+                ),
                 "probe_wall_seconds": time.perf_counter() - started,
                 "error_type": type(error).__name__,
                 "error": str(error),
@@ -265,12 +305,35 @@ def run_probe_wave(
             }
             _append_jsonl(summary_jsonl, record)
             results.append(record)
+            record_progress(record)
             if not config.get("continue_on_error", False):
                 raise
             continue
         _append_jsonl(summary_jsonl, record)
         results.append(record)
+        record_progress(record)
     return results
+
+
+def summarize_probe_wave(
+    results: list[Mapping[str, Any]],
+    *,
+    wave_id: str,
+    artifact_root: Path,
+    summary_jsonl: Path,
+) -> dict[str, Any]:
+    """Return the compact, scheduler-log-friendly CLI result."""
+
+    status_counts = Counter(str(record.get("status", "unknown")) for record in results)
+    return {
+        "mode": "teacher_forced_probe",
+        "wave_id": wave_id,
+        "item_count": len(results),
+        "status_counts": dict(sorted(status_counts.items())),
+        "artifact_root": str(artifact_root),
+        "wave_artifact_root": str(artifact_root / wave_id),
+        "summary_jsonl": str(summary_jsonl),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -282,6 +345,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary-jsonl", type=Path)
     parser.add_argument("--only-artifact-id")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=0,
+        metavar="N",
+        help="emit one compact stderr progress record every N items (default: off)",
+    )
+    parser.add_argument(
+        "--print-records",
+        action="store_true",
+        help="print full per-target records instead of the compact aggregate summary",
+    )
     return parser.parse_args()
 
 
@@ -301,8 +376,19 @@ def main() -> None:
         summary_jsonl=summary,
         only_artifact_id=args.only_artifact_id,
         dry_run=args.dry_run,
+        progress_every=args.progress_every,
     )
-    print(json.dumps(results, indent=2, ensure_ascii=False))
+    output: Any = (
+        results
+        if args.print_records
+        else summarize_probe_wave(
+            results,
+            wave_id=args.wave,
+            artifact_root=artifact_root,
+            summary_jsonl=summary,
+        )
+    )
+    print(json.dumps(output, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
