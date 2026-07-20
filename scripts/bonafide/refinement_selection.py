@@ -27,6 +27,7 @@ from circuits.tracing.probe_artifact import load_probe_artifact
 from scripts.bonafide.manifest import SCHEMA_VERSION as TRACE_MANIFEST_SCHEMA
 from scripts.bonafide.screening_manifest import (
     DEFAULT_SELECTION_PATH,
+    _runner_example,
     _runtime_response_ids,
     _validate_candidate_contract,
     _validate_tokenizer_provenance,
@@ -896,7 +897,7 @@ def _trace_item(
     }
     return {
         "artifact_id": "probe-source-" + _sha256_bytes(_canonical_json(identity))[:24],
-        "example": deepcopy(dict(aggregate.example)),
+        "example": _runner_example(aggregate.example),
         "response_token_count": int(aggregate.example["token_counts"]["response"]),
         "target_selection": {
             "kind": "explicit_response_positions",
@@ -1029,6 +1030,7 @@ def build_refinement_probe_manifest(
                 {
                     "example_id": aggregate.example_id,
                     "corpus_role": corpus_role,
+                    "example_metadata": deepcopy(dict(aggregate.example)),
                     "selection_reason": deepcopy(dict(reason)),
                     "screening_workload_bin": aggregate.workload_bin,
                     "screening_workload": deepcopy(dict(aggregate.workload)),
