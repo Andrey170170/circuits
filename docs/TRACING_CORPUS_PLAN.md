@@ -121,3 +121,49 @@ The immediate sequence is therefore:
 3. define annotation and structural candidate spans on a broader prompt pool;
 4. run probes and freeze sparse target selections with full provenance;
 5. trace in resumable waves and evaluate clustering incrementally.
+
+## Probe implementation and live validation
+
+Implemented checkpoints:
+
+- `ef95aa6`: graph-free single-target probe API, strict JSON artifact, resident-model wave runner,
+  and Slurm dispatch;
+- `ed0bbea`: transactional restoration of model modules, attention configuration, and parameter
+  flags after global or layerwise stop-gradient tracing;
+- `414ce28`: per-target CUDA cache isolation so peak-reserved measurements do not accumulate across
+  a resident-model probe wave.
+
+The final validation ran the eight independent targets from
+`wave2c-stratified-independent-01-bf-2ed391444282be41b715` on one A100 80GB process (Slurm job
+`14065800`). All eight completed, all before/after model-configuration restoration guards passed,
+and every early-predictor dictionary matched its previously saved full trace exactly after removing
+the timing-only `early_predictors_ready_seconds` field.
+
+| Measurement | Final eight-target probe wave |
+| --- | ---: |
+| One-time model load | 3.25 s |
+| Probe time, min / median / max | 0.158 / 0.174 / 0.574 s |
+| Speedup versus corresponding full traces, min / median / max | 82.6x / 144.7x / 238.7x |
+| CUDA peak allocated, min / median / max | 8.36 / 8.85 / 9.44 GiB |
+| CUDA peak reserved, min / median / max | 8.84 / 9.59 / 10.52 GiB |
+| Artifact size, min / median / max | 75 / 102 / 169 KiB |
+
+The maximum probe time is the first target and includes CUDA/kernel warm-up. The remaining seven
+targets were 0.158--0.185 seconds each. Selected-neuron counts ranged from 81 to 203 and predicted
+candidate MLP edges from 2,823 to 19,053, so the sample retains substantial workload variation.
+
+The practical caveat is important: probe mode eliminates selected-attribution, graph expansion,
+and Jacobian time, but it still performs the initial dense attribution needed to select neurons.
+Peak allocated memory was therefore only modestly below the corresponding full traces. Prompt and
+span selection may use large candidate pools cheaply in time, but very long late-response targets
+still need memory-aware screening and staged waves.
+
+The first live comparison also exposed an older state leak: the stop-gradient attention wrapper
+changed the model's shared attention backend without restoring it. A discarded warm-up could thus
+change target logits/probabilities recorded by later traces. The restoration fix is transactional
+and probe mode now fails closed if `model.config` differs after CLJA. Existing pre-fix Wave 2c
+target-score provenance should not be used as a pristine-model score baseline; the early workload
+predictors used in the comparison above were unaffected and matched exactly.
+
+With this checkpoint complete, the next work is prompt diversity selection followed by candidate
+span construction and probe-based target selection. No prompt or span set is frozen yet.
