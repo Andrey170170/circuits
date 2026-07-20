@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -35,6 +36,23 @@ DEFAULT_RECOMMENDED_DENSE_IDS = (
     "bf-d2b6d6de52232d107a08",
     "bf-a430b14be4b2c3a58ac5",
     "bf-3b3dc26f6e91f4bc543a",
+    "bf-662aa74003bb97f2ea07",
+)
+
+TOKENIZER_FILE_NAMES = frozenset(
+    {
+        "added_tokens.json",
+        "config.json",
+        "merges.txt",
+        "sentencepiece.bpe.model",
+        "special_tokens_map.json",
+        "spiece.model",
+        "tokenizer.json",
+        "tokenizer.model",
+        "tokenizer_config.json",
+        "vocab.json",
+        "vocab.txt",
+    }
 )
 
 DENSE_MAX_RESPONSE_TOKENS = 224
@@ -89,6 +107,61 @@ def _file_sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _is_tokenizer_file(path: Path, *, root: Path) -> bool:
+    name = path.name.casefold()
+    template_suffix = path.suffix.casefold() in {".jinja", ".json", ".txt"}
+    relative_parts = tuple(part.casefold() for part in path.relative_to(root).parts)
+    return name in TOKENIZER_FILE_NAMES or template_suffix and (
+        "chat_template" in name or "chat_templates" in relative_parts[:-1]
+    )
+
+
+def _tokenizer_file_manifest(tokenizer_path: Path | None) -> dict[str, Any]:
+    """Return location-independent provenance for tokenizer loader inputs."""
+
+    if tokenizer_path is None:
+        return {
+            "state": "unavailable_not_file_backed",
+            "files": [],
+            "aggregate_sha256": None,
+        }
+    if not tokenizer_path.is_dir():
+        raise ValueError(f"tokenizer path is not a directory: {tokenizer_path}")
+
+    records: list[dict[str, Any]] = []
+    normalized_names: set[str] = set()
+    for path in tokenizer_path.rglob("*"):
+        if not path.is_file() or not _is_tokenizer_file(path, root=tokenizer_path):
+            continue
+        relative_name = unicodedata.normalize(
+            "NFC", path.relative_to(tokenizer_path).as_posix()
+        )
+        if relative_name in normalized_names:
+            raise ValueError(
+                "tokenizer path contains duplicate normalized relative file name: "
+                f"{relative_name}"
+            )
+        normalized_names.add(relative_name)
+        records.append(
+            {
+                "path": relative_name,
+                "size_bytes": path.stat().st_size,
+                "sha256": _file_sha256(path),
+            }
+        )
+    records.sort(key=lambda record: record["path"])
+    if not records:
+        raise ValueError(
+            "tokenizer path contains no recognized tokenizer/config/template files: "
+            f"{tokenizer_path}"
+        )
+    return {
+        "state": "file_backed",
+        "files": records,
+        "aggregate_sha256": _sha256_bytes(_canonical_json(records)),
+    }
 
 
 def _unique(values: Iterable[str]) -> list[str]:
@@ -542,6 +615,7 @@ def build_corpus_selection(
         }
 
     chat_template = get_chat_template(tokenizer)
+    tokenizer_files = _tokenizer_file_manifest(tokenizer_path)
     return {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "bonafide_prompt_candidates",
@@ -561,10 +635,9 @@ def build_corpus_selection(
         "tokenizer": {
             "model_id": target_model,
             "revision": model_revision,
-            "resolved_path": str(tokenizer_path) if tokenizer_path is not None else None,
-            "name_or_path": str(getattr(tokenizer, "name_or_path", "")),
             "class": type(tokenizer).__name__,
             "chat_template_sha256": _sha256_text(chat_template),
+            "file_manifest": tokenizer_files,
             "length_semantics": {
                 "helper": "circuits.tracing.trace.tokenize_teacher_forced_response",
                 "eligibility_total": "assistant_prefix + complete_response",
@@ -672,7 +745,9 @@ def main() -> None:
         tokenizer=tokenizer,
         target_model=args.model_id,
         model_revision=args.revision,
-        tokenizer_path=Path(pretrained_source),
+        tokenizer_path=(
+            None if pretrained_source == args.model_id else Path(pretrained_source)
+        ),
     )
     write_corpus_selection(selection, args.output)
     selected = selection["selections"]

@@ -371,6 +371,11 @@ def test_broad_requested_counts_fail_closed_when_pool_is_too_small(tmp_path: Pat
 
 def test_schema_provenance_and_atomic_writer(tmp_path: Path) -> None:
     csv_path = tmp_path / "bonafide.csv"
+    tokenizer_path = tmp_path / "cached-tokenizer"
+    tokenizer_path.mkdir()
+    (tokenizer_path / "tokenizer.json").write_text(
+        '{"model": "fake"}\n', encoding="utf-8"
+    )
     _write_csv(csv_path, [_row(1, prompt="short", response="short")])
     dense_ids = _recommended_dense_ids(csv_path)
     selection = build_corpus_selection(
@@ -378,7 +383,7 @@ def test_schema_provenance_and_atomic_writer(tmp_path: Path) -> None:
         tokenizer=FakeChatTokenizer(),
         target_model="fake/model",
         model_revision="revision-sha",
-        tokenizer_path=Path("/cached/tokenizer"),
+        tokenizer_path=tokenizer_path,
         recommended_dense_ids=dense_ids,
         broad_primary_count=0,
         broad_alternate_count=0,
@@ -394,7 +399,19 @@ def test_schema_provenance_and_atomic_writer(tmp_path: Path) -> None:
         "trace_work_items_created": False,
     }
     assert selection["tokenizer"]["revision"] == "revision-sha"
-    assert selection["tokenizer"]["resolved_path"] == "/cached/tokenizer"
+    assert selection["tokenizer"]["file_manifest"] == {
+        "state": "file_backed",
+        "files": [
+            {
+                "path": "tokenizer.json",
+                "size_bytes": 18,
+                "sha256": "19780c5dd762fe0b82c87f4c31df282c8a4c99ce2268d8f32a39f9212c9f32e4",
+            }
+        ],
+        "aggregate_sha256": "081708d0f0b939b065545d7267b27507c4cdb13310dd491a9658a4db27be6ffe",
+    }
+    assert "resolved_path" not in selection["tokenizer"]
+    assert "name_or_path" not in selection["tokenizer"]
     assert len(selection["dataset"]["sha256"]) == 64
     assert selection["selection_policy"]["diversity_axes"] == [
         "nonexclusive_label_types",
@@ -421,3 +438,83 @@ def test_schema_provenance_and_atomic_writer(tmp_path: Path) -> None:
     write_corpus_selection(selection, output_path)
     assert json.loads(output_path.read_text(encoding="utf-8")) == selection
     assert not list(output_path.parent.glob(".*.tmp-*"))
+
+
+def test_tokenizer_file_manifest_is_content_addressed_and_location_independent(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "bonafide.csv"
+    _write_csv(csv_path, [_row(1, prompt="short", response="short")])
+    dense_ids = _recommended_dense_ids(csv_path)
+    first_path = tmp_path / "cache-a" / "snapshot"
+    second_path = tmp_path / "other-cache" / "same-snapshot"
+    for index, path in enumerate((first_path, second_path)):
+        (path / "chat_templates").mkdir(parents=True)
+        (path / "tokenizer.json").write_text('{"model":"fake"}', encoding="utf-8")
+        (path / "tokenizer_config.json").write_text(
+            '{"tokenizer_class":"FakeChatTokenizer"}', encoding="utf-8"
+        )
+        (path / "chat_templates" / "default.jinja").write_text(
+            "{{ messages }}",
+            encoding="utf-8",
+        )
+        (path / "model.safetensors").write_bytes(
+            f"different model weight contents {index}".encode()
+        )
+
+    kwargs = {
+        "csv_path": csv_path,
+        "tokenizer": FakeChatTokenizer(),
+        "target_model": "fake/model",
+        "model_revision": "revision-sha",
+        "recommended_dense_ids": dense_ids,
+        "broad_primary_count": 0,
+        "broad_alternate_count": 0,
+    }
+    first = build_corpus_selection(**kwargs, tokenizer_path=first_path)
+    second = build_corpus_selection(**kwargs, tokenizer_path=second_path)
+
+    assert first == second
+    assert first["tokenizer"]["file_manifest"]["state"] == "file_backed"
+    assert [
+        record["path"] for record in first["tokenizer"]["file_manifest"]["files"]
+    ] == [
+        "chat_templates/default.jinja",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    ]
+
+    original_hash = first["tokenizer"]["file_manifest"]["aggregate_sha256"]
+    (second_path / "tokenizer.json").write_text('{"model":"changed"}', encoding="utf-8")
+    modified = build_corpus_selection(**kwargs, tokenizer_path=second_path)
+    assert modified["tokenizer"]["file_manifest"]["aggregate_sha256"] != original_hash
+
+
+def test_tokenizer_file_manifest_unavailable_or_missing_fails_closed(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "bonafide.csv"
+    _write_csv(csv_path, [_row(1, prompt="short", response="short")])
+    dense_ids = _recommended_dense_ids(csv_path)
+    kwargs = {
+        "csv_path": csv_path,
+        "tokenizer": FakeChatTokenizer(),
+        "target_model": "fake/model",
+        "model_revision": "revision-sha",
+        "recommended_dense_ids": dense_ids,
+        "broad_primary_count": 0,
+        "broad_alternate_count": 0,
+    }
+
+    synthetic = build_corpus_selection(**kwargs)
+    assert synthetic["tokenizer"]["file_manifest"] == {
+        "state": "unavailable_not_file_backed",
+        "files": [],
+        "aggregate_sha256": None,
+    }
+
+    empty_path = tmp_path / "empty-tokenizer"
+    empty_path.mkdir()
+    (empty_path / "model.safetensors").write_bytes(b"weights are not tokenizer inputs")
+    with pytest.raises(ValueError, match="no recognized tokenizer/config/template files"):
+        build_corpus_selection(**kwargs, tokenizer_path=empty_path)
