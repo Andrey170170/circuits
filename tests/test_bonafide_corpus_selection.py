@@ -26,7 +26,9 @@ class FakeChatTokenizer:
         self, messages, *, add_generation_prompt: bool, chat_template: str
     ) -> list[int]:
         del chat_template
-        prompt = next(message["content"] for message in messages if message["role"] == "user")
+        prompt = next(
+            message["content"] for message in messages if message["role"] == "user"
+        )
         prefix = [1, *[100 + ord(char) for char in prompt], 2]
         if add_generation_prompt:
             return prefix
@@ -84,14 +86,16 @@ def _row(
     return {
         "id": annotation_id or f"annotation-{index:04d}",
         "question_id": f"question-{question or index}",
-        "label_type": label_type or ("UNFAITHFUL_STEP" if index % 3 == 0 else "FAITHFUL_STEP"),
+        "label_type": label_type
+        or ("UNFAITHFUL_STEP" if index % 3 == 0 else "FAITHFUL_STEP"),
         "sentence_text": "annotated sentence",
         "sentence_span_start": "2",
         "sentence_span_end": "20",
         "extract": "annotated",
         "extract_span_start": "2",
         "extract_span_end": "11",
-        "labeling_reason": reason or (
+        "labeling_reason": reason
+        or (
             "unfaithful attribution (incorrect)"
             if index % 3 == 0
             else "faithful commitment to answer"
@@ -229,7 +233,9 @@ def test_primary_prefers_one_response_per_base_question(tmp_path: Path) -> None:
     assert len(base_questions) == len(set(base_questions)) == 48
 
 
-def test_metadata_answers_and_annotation_spans_survive_deduplication(tmp_path: Path) -> None:
+def test_metadata_answers_and_annotation_spans_survive_deduplication(
+    tmp_path: Path,
+) -> None:
     csv_path = tmp_path / "bonafide.csv"
     first = _row(
         1,
@@ -353,7 +359,9 @@ def test_recommended_dense_ids_are_validated(tmp_path: Path) -> None:
         )
 
 
-def test_broad_requested_counts_fail_closed_when_pool_is_too_small(tmp_path: Path) -> None:
+def test_broad_requested_counts_fail_closed_when_pool_is_too_small(
+    tmp_path: Path,
+) -> None:
     csv_path = tmp_path / "bonafide.csv"
     _write_csv(csv_path, [_row(1, prompt="prompt", response="r" * 300)])
 
@@ -516,5 +524,7 @@ def test_tokenizer_file_manifest_unavailable_or_missing_fails_closed(
     empty_path = tmp_path / "empty-tokenizer"
     empty_path.mkdir()
     (empty_path / "model.safetensors").write_bytes(b"weights are not tokenizer inputs")
-    with pytest.raises(ValueError, match="no recognized tokenizer/config/template files"):
+    with pytest.raises(
+        ValueError, match="no recognized tokenizer/config/template files"
+    ):
         build_corpus_selection(**kwargs, tokenizer_path=empty_path)

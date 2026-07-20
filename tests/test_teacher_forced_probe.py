@@ -668,9 +668,12 @@ def test_probe_wave_aborts_after_failed_clja_leaks_resident_model(
     assert record["error_type"] == "RuntimeError"
     assert record["error"] == str(original_error)
     assert record["resident_model_reuse_forbidden"] is True
-    assert record["instrumentation"]["counters"][
-        "probe_model_config_leak_during_failed_clja"
-    ] is True
+    assert (
+        record["instrumentation"]["counters"][
+            "probe_model_config_leak_during_failed_clja"
+        ]
+        is True
+    )
 
 
 def test_probe_wave_loads_one_resident_model_for_multiple_items(

@@ -69,6 +69,12 @@ chat-template token counts, eligibility decisions, diversity features, and selec
 It is a prompt-candidate artifact, not a tracing manifest: no response target position is selected
 or frozen in it.
 
+Tokenizer provenance is content-addressed rather than tied to a scratch path. The artifact records
+the normalized relative name, size, and SHA-256 of every tokenizer/config/chat-template input plus
+an aggregate hash, while excluding model weight shards. Identical cached snapshots at different
+locations therefore produce the same selection artifact; a changed tokenizer input changes its
+identity.
+
 Selection uses the maximum teacher-forced input length, `assistant prefix + complete response`,
 not response length alone. This matters because one response below 1,024 tokens has a 9,741-token
 prompt and would pass a response-only cap while being unsuitable for this run.
@@ -76,7 +82,7 @@ prompt and would pass a response-only cap while being unsuitable for this run.
 | Candidate set | Rule | Examples | Role |
 | --- | --- | ---: | --- |
 | Dense inventory | response <=224 and total input <=512 | 25 | Keep all short examples available for workload/feature comparison |
-| Recommended dense core | explicit diversity review within the dense inventory | 9 | Proposed full-response traces; 1,666 independent targets |
+| Recommended dense core | explicit diversity review within the dense inventory | 10 | Proposed full-response traces; 1,871 independent targets |
 | Broad eligible inventory | disjoint from dense; response <=768 and total input <=1,024 | 108 | Full safe option pool |
 | Broad primary | deterministic coverage-first selection | 48 | Proposed sparse-context corpus |
 | Broad alternates | next coverage-first choices | 24 | Replacements or expansion after probes |
@@ -92,12 +98,14 @@ The recommended dense core is:
 | `bf-2981baca0442c8e8021f` | 170 | unfaithful CoT + step | sycophancy | Earliest annotated commission case in the short pool |
 | `bf-6145690c43f611af97cb` | 176 | unfaithful step | validator | Validator-format source fabrication |
 | `bf-c5acd500a6bcb288be61` | 195 | unfaithful step | unauthorized access | Different intervention channel and answer form |
+| `bf-662aa74003bb97f2ea07` | 205 | unfaithful CoT | error message | Only pure omission case in the short pool |
 | `bf-d2b6d6de52232d107a08` | 213 | faithful CoT | security audit | CoT-level faithful control without a selected step span |
 | `bf-a430b14be4b2c3a58ac5` | 221 | faithful step + unfaithful CoT + step | security audit | Mixed labels and the only HLE dense example |
 | `bf-3b3dc26f6e91f4bc543a` | 224 | faithful CoT | unauthorized access | Faithful CoT contrast for an adversarial hint format |
 
-Together these nine examples cover all four nonexclusive BonaFide label types and all six hint
-formats. Their maximum complete teacher-forced input is 386 tokens. The 48 broad primaries use 48
+Together these ten examples cover all four nonexclusive BonaFide label types, all six hint
+formats, and faithful, omission, commission, and combined omission/commission CoT phenotypes.
+Their maximum complete teacher-forced input is 386 tokens. The 48 broad primaries use 48
 distinct base questions and have the following coverage before any internal probe measurements are
 used:
 

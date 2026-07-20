@@ -23,10 +23,39 @@
   "tokenizer": {
     "model_id": "Qwen/Qwen3-4B-Instruct-2507",
     "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
-    "resolved_path": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554",
-    "name_or_path": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554",
     "class": "Qwen2TokenizerFast",
     "chat_template_sha256": "64f85b198065d0fba2a81f37e10ed68161ce2c19a754c7100e67e0ca2ee9c326",
+    "file_manifest": {
+      "state": "file_backed",
+      "files": [
+        {
+          "path": "config.json",
+          "size_bytes": 727,
+          "sha256": "5beea1a4a34c62782bfb2f911c606741a3bab8f92d80a118fa053c28af12e8ba"
+        },
+        {
+          "path": "merges.txt",
+          "size_bytes": 1671839,
+          "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"
+        },
+        {
+          "path": "tokenizer.json",
+          "size_bytes": 11422654,
+          "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size_bytes": 9377,
+          "sha256": "a62ff0a2472a0fa1b8eaabcb57c59b58afa42a22831dc141400b6e0cf2b65ce3"
+        },
+        {
+          "path": "vocab.json",
+          "size_bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        }
+      ],
+      "aggregate_sha256": "11c1f39e39752862d308d799d018e07492a90e56e95ced0f83e021171ef24213"
+    },
     "length_semantics": {
       "helper": "circuits.tracing.trace.tokenize_teacher_forced_response",
       "eligibility_total": "assistant_prefix + complete_response",
@@ -104,6 +133,7 @@
       "bf-2981baca0442c8e8021f",
       "bf-6145690c43f611af97cb",
       "bf-c5acd500a6bcb288be61",
+      "bf-662aa74003bb97f2ea07",
       "bf-d2b6d6de52232d107a08",
       "bf-a430b14be4b2c3a58ac5",
       "bf-3b3dc26f6e91f4bc543a"
@@ -14941,7 +14971,7 @@
       ],
       "selection_membership": {
         "dense_inventory": true,
-        "recommended_dense_core": false,
+        "recommended_dense_core": true,
         "broad_eligible_inventory": false,
         "broad_role": null
       }

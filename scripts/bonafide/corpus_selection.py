@@ -33,10 +33,10 @@ DEFAULT_RECOMMENDED_DENSE_IDS = (
     "bf-2981baca0442c8e8021f",
     "bf-6145690c43f611af97cb",
     "bf-c5acd500a6bcb288be61",
+    "bf-662aa74003bb97f2ea07",
     "bf-d2b6d6de52232d107a08",
     "bf-a430b14be4b2c3a58ac5",
     "bf-3b3dc26f6e91f4bc543a",
-    "bf-662aa74003bb97f2ea07",
 )
 
 TOKENIZER_FILE_NAMES = frozenset(
@@ -113,8 +113,10 @@ def _is_tokenizer_file(path: Path, *, root: Path) -> bool:
     name = path.name.casefold()
     template_suffix = path.suffix.casefold() in {".jinja", ".json", ".txt"}
     relative_parts = tuple(part.casefold() for part in path.relative_to(root).parts)
-    return name in TOKENIZER_FILE_NAMES or template_suffix and (
-        "chat_template" in name or "chat_templates" in relative_parts[:-1]
+    return (
+        name in TOKENIZER_FILE_NAMES
+        or template_suffix
+        and ("chat_template" in name or "chat_templates" in relative_parts[:-1])
     )
 
 
@@ -182,7 +184,9 @@ def _normalized_answer(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
-def _answer_relation(rows: Sequence[Mapping[str, str]]) -> tuple[str, list[dict[str, str]]]:
+def _answer_relation(
+    rows: Sequence[Mapping[str, str]],
+) -> tuple[str, list[dict[str, str]]]:
     answer_records = sorted(
         {
             (
@@ -389,7 +393,9 @@ def _coverage_order(
     return selected, feature_counts
 
 
-def _read_target_rows(csv_path: Path, target_model: str) -> tuple[list[str], list[dict[str, str]], int]:
+def _read_target_rows(
+    csv_path: Path, target_model: str
+) -> tuple[list[str], list[dict[str, str]], int]:
     with csv_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         headers = list(reader.fieldnames or ())
@@ -397,9 +403,15 @@ def _read_target_rows(csv_path: Path, target_model: str) -> tuple[list[str], lis
         if missing:
             raise ValueError(f"BonaFide CSV is missing columns: {sorted(missing)}")
         all_rows = [dict(row) for row in reader]
-    rows = [row for row in all_rows if row["target_model"] == target_model and row["cot"].strip()]
+    rows = [
+        row
+        for row in all_rows
+        if row["target_model"] == target_model and row["cot"].strip()
+    ]
     if not rows:
-        raise ValueError(f"No non-empty BonaFide responses found for model {target_model!r}")
+        raise ValueError(
+            f"No non-empty BonaFide responses found for model {target_model!r}"
+        )
     return headers, rows, len(all_rows)
 
 
@@ -418,7 +430,9 @@ def load_prompt_candidates(
 
     preliminary: list[dict[str, Any]] = []
     for (model, prompt, response), source_rows in grouped.items():
-        source_rows = sorted(source_rows, key=lambda row: (row["id"], _canonical_json(row)))
+        source_rows = sorted(
+            source_rows, key=lambda row: (row["id"], _canonical_json(row))
+        )
         identity = {"target_model": model, "prompt": prompt, "response": response}
         example_id = f"bf-{_sha256_bytes(_canonical_json(identity))[:20]}"
         question_values = _unique(row["question"] for row in source_rows)
@@ -444,7 +458,9 @@ def load_prompt_candidates(
                 "annotation_row_ids": _unique(row["id"] for row in source_rows),
                 "question_ids": _unique(row["question_id"] for row in source_rows),
                 "label_types": _unique(row["label_type"] for row in source_rows),
-                "labeling_reasons": _unique(row["labeling_reason"] for row in source_rows),
+                "labeling_reasons": _unique(
+                    row["labeling_reason"] for row in source_rows
+                ),
                 "hint_types": _unique(row["hint_type"] for row in source_rows),
                 "hint_datasets": _unique(row["hint_dataset"] for row in source_rows),
                 "src_types": _unique(row["src_type"] for row in source_rows),
@@ -463,11 +479,15 @@ def load_prompt_candidates(
                 "diversity": {
                     "label_types": _unique(row["label_type"] for row in source_rows),
                     "hint_types": _unique(row["hint_type"] for row in source_rows),
-                    "hint_datasets": _unique(row["hint_dataset"] for row in source_rows),
+                    "hint_datasets": _unique(
+                        row["hint_dataset"] for row in source_rows
+                    ),
                     "src_types": _unique(row["src_type"] for row in source_rows),
                     "cot_phenotype": _cot_phenotype(source_rows),
                     "answer_relation": answer_relation,
-                    "annotation_position_bin": _annotation_position_bin(source_rows, response),
+                    "annotation_position_bin": _annotation_position_bin(
+                        source_rows, response
+                    ),
                     "response_length_bin": _response_length_bin(response_count),
                     "total_length_bin": _total_length_bin(maximum_input_count),
                     # Filled after all responses have been grouped by base question.
@@ -565,8 +585,12 @@ def build_corpus_selection(
     )
     _validate_recommended_dense_ids(examples, recommended_dense_ids)
 
-    dense = [example for example in examples if example["eligibility"]["dense_inventory"]]
-    broad = [example for example in examples if example["eligibility"]["broad_inventory"]]
+    dense = [
+        example for example in examples if example["eligibility"]["dense_inventory"]
+    ]
+    broad = [
+        example for example in examples if example["eligibility"]["broad_inventory"]
+    ]
     requested_broad_count = broad_primary_count + broad_alternate_count
     if requested_broad_count > len(broad):
         raise ValueError(
@@ -688,7 +712,9 @@ def build_corpus_selection(
             "broad_eligible_inventory": [example["example_id"] for example in broad],
             "broad_primary": [example["example_id"] for example in primary],
             "broad_alternates": [example["example_id"] for example in alternates],
-            "broad_remaining_eligible": [example["example_id"] for example in remaining],
+            "broad_remaining_eligible": [
+                example["example_id"] for example in remaining
+            ],
         },
         "examples": examples,
     }
@@ -712,8 +738,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", type=Path, default=Path("BonaFide.csv"))
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--model", "--model-id", dest="model_id", default=DEFAULT_TARGET_MODEL)
-    parser.add_argument("--revision", required=True, help="Exact Hugging Face model revision")
+    parser.add_argument(
+        "--model", "--model-id", dest="model_id", default=DEFAULT_TARGET_MODEL
+    )
+    parser.add_argument(
+        "--revision", required=True, help="Exact Hugging Face model revision"
+    )
     parser.add_argument(
         "--tokenizer-path",
         type=Path,
@@ -762,7 +792,9 @@ def main() -> None:
                 "broad_primary": len(selected["broad_primary"]),
                 "broad_alternates": len(selected["broad_alternates"]),
                 "broad_remaining": len(selected["broad_remaining_eligible"]),
-                "target_spans_frozen": selection["candidate_contract"]["target_spans_frozen"],
+                "target_spans_frozen": selection["candidate_contract"][
+                    "target_spans_frozen"
+                ],
             },
             indent=2,
         )
