@@ -962,7 +962,7 @@ def build_refinement_probe_manifest(
     }
     dense_anchor_reasons = {
         example_id: "pre-screening recommended dense core"
-        for example_id in recommended_dense_ids
+        for example_id in sorted(recommended_dense_ids)
     }
     for example_id in dense_augmentation_ids:
         dense_anchor_reasons[example_id] = (
@@ -1129,7 +1129,14 @@ def write_manifest(manifest: Mapping[str, Any], output_path: Path) -> None:
     temporary = output_path.with_name(f".{output_path.name}.tmp-{os.getpid()}")
     try:
         temporary.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+            json.dumps(
+                manifest,
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            + "\n",
             encoding="utf-8",
         )
         temporary.replace(output_path)
