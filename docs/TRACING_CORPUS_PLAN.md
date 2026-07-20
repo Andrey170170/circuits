@@ -258,3 +258,25 @@ predictors used in the comparison above were unaffected and matched exactly.
 With this checkpoint and prompt selection complete, the next work is candidate span construction
 and probe-based target selection. Prompt-candidate membership is recorded in the versioned
 selection artifact; target spans and final trace membership are not yet frozen.
+
+## Prompt-screening estimation launch
+
+The prompt-screening manifest is
+`scripts/bonafide/manifests/qwen3_4b_instruct_prompt_screening.json` (SHA-256
+`89fc8695bf56c93424caae965e4566271fb3453fe686acaa93678e293bc7923a`). It contains one
+consolidated resident-model wave, `prompt-screening-estimation`, with all 25 dense-inventory and
+108 broad-inventory examples. Each response contributes one deterministic target from each of 16
+contiguous response strata, for 2,128 independent probes. These positions are frozen only for
+prompt-screening estimation; they do not freeze final trace prompts or target spans.
+
+The wave was submitted to the lab-owned Notchpeak A100 queue as job `14066556` on 2026-07-19.
+It runs on `notch369` with one A100 80GB, a four-hour limit, and one resident Qwen model process.
+Artifacts and the append-only summary are written to:
+
+```text
+/scratch/general/vast/u1653998/circuits/results/bonafide/probes/prompt-screening-v1/
+```
+
+The first operational checkpoint reached 200/2,128 complete probes with no errors. The runner
+emits a compact progress record every 100 items, validates and skips complete artifacts on resume,
+and aborts rather than reusing the model if a failed probe reports model-configuration leakage.
