@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -485,3 +486,34 @@ def test_builds_per_prompt_waves_and_excludes_holdout_from_cluster_fit() -> None
     for wave in result["waves"]:
         for item in wave["items"]:
             validate_target_selection(item)
+
+
+def test_extreme_workload_target_is_retained_in_isolated_preflight_wave() -> None:
+    dense_example = _example("dense-extreme", 2)
+    probes = [
+        _probe(_item(dense_example, position, role="dense_full_response_refinement"))
+        for position in range(2)
+    ]
+    probes[1] = dataclasses.replace(
+        probes[1], candidate_edge_count=final.EXTREME_EDGE_ISOLATION_THRESHOLD
+    )
+    manifest = _refinement_manifest([probe.item for probe in probes])
+
+    result = final.build_final_trace_manifest(
+        refinement_manifest=manifest,
+        refinement_manifest_path=Path("refinement.json"),
+        refinement_manifest_sha256="a" * 64,
+        refinement_summary_path=Path("summary.jsonl"),
+        refinement_summary_sha256="b" * 64,
+        refinement_artifact_root=Path("probe-root"),
+        probes_by_source={probe.item["artifact_id"]: probe for probe in probes},
+        summary_audit={"authoritative_artifact_count": len(probes)},
+    )
+
+    assert len(result["waves"]) == 2
+    routine = next(wave for wave in result["waves"] if not wave["extreme_workload_isolation"])
+    extreme = next(wave for wave in result["waves"] if wave["extreme_workload_isolation"])
+    assert len(routine["items"]) == 1
+    assert len(extreme["items"]) == 1
+    assert extreme["full_trace_preflight_required"] is True
+    assert extreme["screening_candidate_mlp_edge_count"] == final.EXTREME_EDGE_ISOLATION_THRESHOLD

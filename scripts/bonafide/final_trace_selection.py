@@ -28,6 +28,7 @@ from scripts.bonafide.runner import validate_target_selection
 SCHEMA_VERSION = "bonafide-final-trace-selection/v1"
 EXPECTED_BROAD_TARGETS = 16
 EXPECTED_PHASE_INDICES = (0, 5, 10, 15)
+EXTREME_EDGE_ISOLATION_THRESHOLD = 500_000
 
 
 def _file_sha256(path: Path) -> str:
@@ -749,17 +750,52 @@ def build_final_trace_manifest(
         for item in final:
             validate_target_selection(item)
         selected_counts[role] += len(final)
-        waves.append(
-            {
-                "wave_id": f"final-trace-{role}-{example_id}",
-                "purpose": "independent full ADAG traces for one frozen BonaFide response",
-                "example_id": example_id,
-                "corpus_role": role,
-                "cluster_fit_eligible": cluster_fit_eligible,
-                "holdout_excluded_from_cluster_fitting": role == "broad_confirmatory_holdout",
-                "items": final,
-            }
-        )
+        wave_base = {
+            "purpose": "independent full ADAG traces for one frozen BonaFide response",
+            "example_id": example_id,
+            "corpus_role": role,
+            "cluster_fit_eligible": cluster_fit_eligible,
+            "holdout_excluded_from_cluster_fitting": role == "broad_confirmatory_holdout",
+        }
+        routine = [
+            item
+            for item in final
+            if item["target_selection"]["final_selection"]["refinement_diagnostics"][
+                "candidate_mlp_edge_count"
+            ]
+            < EXTREME_EDGE_ISOLATION_THRESHOLD
+        ]
+        extreme = [item for item in final if item not in routine]
+        if routine:
+            waves.append(
+                {
+                    **wave_base,
+                    "wave_id": f"final-trace-{role}-{example_id}",
+                    "extreme_workload_isolation": False,
+                    "items": routine,
+                }
+            )
+        for item in extreme:
+            position = int(item["target_selection"]["response_token_positions"][0])
+            edge_count = int(
+                item["target_selection"]["final_selection"]["refinement_diagnostics"][
+                    "candidate_mlp_edge_count"
+                ]
+            )
+            waves.append(
+                {
+                    **wave_base,
+                    "wave_id": f"final-trace-{role}-{example_id}-extreme-p{position}",
+                    "purpose": (
+                        "isolated extreme-workload target; run a full-trace preflight "
+                        "before the routine corpus"
+                    ),
+                    "extreme_workload_isolation": True,
+                    "full_trace_preflight_required": True,
+                    "screening_candidate_mlp_edge_count": edge_count,
+                    "items": [item],
+                }
+            )
     return {
         "schema_version": TRACE_MANIFEST_SCHEMA,
         "artifact_kind": "bonafide_final_trace_manifest",
@@ -772,6 +808,7 @@ def build_final_trace_manifest(
             "trace_units_are_independent": True,
             "merge_graphs": False,
             "confirmatory_holdouts_excluded_from_cluster_fitting": True,
+            "extreme_workload_targets_remain_selected_but_are_isolated": True,
         },
         "source_artifacts": {
             "refinement_manifest": {
@@ -791,7 +828,7 @@ def build_final_trace_manifest(
             "batch_size": 1,
             "trace_units_are_independent": True,
             "merge_graphs": False,
-            "wave_parallelism_unit": "prompt",
+            "wave_parallelism_unit": "prompt_or_isolated_extreme_target",
         },
         "selection_policy": {
             "version": "bonafide-post-refinement-freeze-v1",
@@ -799,6 +836,8 @@ def build_final_trace_manifest(
             "phase_indices": list(EXPECTED_PHASE_INDICES),
             "deduplication": "one target position with all bucket reasons preserved",
             "refill": "semantic count, local feature change, probability, median workload, position",
+            "extreme_edge_isolation_threshold": EXTREME_EDGE_ISOLATION_THRESHOLD,
+            "extreme_target_policy": "retain selection, isolate wave, require full-trace preflight",
         },
         "selected_trace_counts": dict(sorted(selected_counts.items())),
         "waves": waves,
