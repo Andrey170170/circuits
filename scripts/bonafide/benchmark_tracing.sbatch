@@ -19,7 +19,8 @@
 #     scripts/bonafide/benchmark_tracing.sbatch
 #
 # Optional exports: EXECUTION_MODE=trace|probe, CONFIG, ARTIFACT_ROOT,
-# SUMMARY_JSONL, ONLY_ARTIFACT_ID. The default remains full tracing.
+# SUMMARY_JSONL, ONLY_ARTIFACT_ID, PROGRESS_EVERY, PRINT_RECORDS. The default
+# remains full tracing. PROGRESS_EVERY and PRINT_RECORDS apply only to probes.
 
 set -euo pipefail
 
@@ -92,6 +93,14 @@ runner_args=(
 )
 if [[ -n "${ONLY_ARTIFACT_ID:-}" ]]; then
     runner_args+=(--only-artifact-id "$ONLY_ARTIFACT_ID")
+fi
+if [[ "$EXECUTION_MODE" == "probe" ]]; then
+    if [[ -n "${PROGRESS_EVERY:-}" ]]; then
+        runner_args+=(--progress-every "$PROGRESS_EVERY")
+    fi
+    if [[ "${PRINT_RECORDS:-0}" == "1" ]]; then
+        runner_args+=(--print-records)
+    fi
 fi
 
 "$PYTHON_BIN" -m "$RUNNER_MODULE" "${runner_args[@]}"
