@@ -176,6 +176,10 @@ def run_probe_wave(
         }
         if uses_cuda:
             torch.cuda.synchronize()
+            # Probes share one resident model, but allocator cache from an earlier
+            # target must not inflate this target's peak-reserved measurement or
+            # accumulate across a long candidate wave.
+            torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
         recorder = TraceInstrumentation(device=device, synchronize_cuda=uses_cuda)
         started = time.perf_counter()
