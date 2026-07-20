@@ -283,9 +283,73 @@ def test_public_probe_is_single_target_json_and_never_converts_graph(monkeypatch
     assert len(result.trace_metadata["input_sha256"]) == 64
     assert len(result.trace_metadata["adag_config_sha256"]) == 64
     assert result.instrumentation["counters"]["probe_graph_work_skipped"] is True
+    assert result.instrumentation["counters"]["probe_model_config_restored"] is True
     assert "dataframe_conversion" not in result.instrumentation["stages"]
     json.dumps(result.to_dict(), allow_nan=False)
     validate_teacher_forced_probe_result(result)
+
+
+def test_public_probe_fails_closed_on_model_config_leak(monkeypatch) -> None:
+    import circuits.tracing.trace as trace_module
+
+    model = FakeModel()
+    model.config._attn_implementation = "sdpa"
+
+    def leaking_clja(**kwargs):
+        model.config._attn_implementation = "noqk"
+        return _fake_selection(kwargs["instrumentation"])
+
+    monkeypatch.setattr(
+        trace_module, "get_all_pairs_cl_ja_effects_with_attributions", leaking_clja
+    )
+    with pytest.raises(RuntimeError, match="poisoned resident model"):
+        probe_teacher_forced_response(
+            model,
+            FakeChatTokenizer(),
+            "question",
+            "abcd",
+            [2],
+            ADAGConfig(device="cpu"),
+            model_revision="exact-test-revision",
+        )
+
+
+def test_public_probe_preserves_active_error_when_model_config_also_leaks(
+    monkeypatch,
+) -> None:
+    import circuits.tracing.trace as trace_module
+
+    model = FakeModel()
+    model.config._attn_implementation = "sdpa"
+    recorder = TraceInstrumentation(device="cpu")
+    original_error = torch.cuda.OutOfMemoryError("active probe OOM")
+
+    def failing_leaking_clja(**_kwargs):
+        model.config._attn_implementation = "noqk"
+        raise original_error
+
+    monkeypatch.setattr(
+        trace_module,
+        "get_all_pairs_cl_ja_effects_with_attributions",
+        failing_leaking_clja,
+    )
+    with pytest.raises(torch.cuda.OutOfMemoryError, match="active probe OOM") as caught:
+        probe_teacher_forced_response(
+            model,
+            FakeChatTokenizer(),
+            "question",
+            "abcd",
+            [2],
+            ADAGConfig(device="cpu"),
+            instrumentation=recorder,
+            model_revision="exact-test-revision",
+        )
+
+    assert caught.value is original_error
+    assert any("resident model must not be reused" in note for note in caught.value.__notes__)
+    counters = recorder.snapshot()["counters"]
+    assert counters["probe_model_config_restored"] is False
+    assert counters["probe_model_config_leak_during_failed_clja"] is True
 
 
 def test_public_probe_rejects_multi_target_before_model_work() -> None:

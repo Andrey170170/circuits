@@ -15,6 +15,7 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 _NORM_TYPES: tuple[type[nn.Module], ...] = (LlamaRMSNorm, Qwen3RMSNorm)
 _ATTN_TYPES: tuple[type[nn.Module], ...] = (LlamaAttention, Qwen3Attention)
 _MLP_TYPES: tuple[type[nn.Module], ...] = (LlamaMLP, Qwen3MLP)
+_STOP_GRAD_STATE_ATTRIBUTE = "_adag_stop_gradient_model_state"
 
 
 def _rms_layernorm_fn(
@@ -128,7 +129,6 @@ class NoQKGradAttention(StopGradientModule):
         self.k_proj = attn.k_proj
         self.v_proj = attn.v_proj
         self.o_proj = attn.o_proj
-        self.attn.config._attn_implementation = "noqk"
 
     def forward(self, *args, **kwargs):
         attn_output, attn_weights = self.attn(*args, **kwargs)
@@ -227,6 +227,129 @@ class RelPGradMLP(StopGradientModule):
         )
 
 
+def _valid_layer_scope(model, layer_indices) -> tuple[int, ...]:
+    layer_count = len(model.model.layers)
+    return tuple(
+        sorted(
+            {
+                int(layer_index)
+                for layer_index in layer_indices
+                if 0 <= int(layer_index) < layer_count
+            }
+        )
+    )
+
+
+def _layerwise_scope(model, start_layer: int, end_layer: int) -> tuple[int, ...]:
+    candidates = [start_layer, end_layer]
+    if start_layer < end_layer:
+        candidates.extend(range(start_layer + 1, end_layer))
+    return _valid_layer_scope(model, candidates)
+
+
+def _begin_stop_gradient_state(
+    model, *, operation: str, scope: tuple[int, ...]
+) -> None:
+    """Snapshot exact modules and mutable state before any replacement."""
+
+    if hasattr(model, _STOP_GRAD_STATE_ATTRIBUTE):
+        raise RuntimeError("stop-gradient model state is already active")
+    layer_modules = {
+        layer_index: {
+            "input_layernorm": model.model.layers[layer_index].input_layernorm,
+            "post_attention_layernorm": model.model.layers[
+                layer_index
+            ].post_attention_layernorm,
+            "self_attn": model.model.layers[layer_index].self_attn,
+            "mlp": model.model.layers[layer_index].mlp,
+        }
+        for layer_index in scope
+    }
+    affected_modules = [model.model.norm]
+    for modules in layer_modules.values():
+        affected_modules.extend(modules.values())
+
+    parameters = []
+    seen_parameters: set[int] = set()
+    for module in affected_modules:
+        for parameter in module.parameters():
+            if id(parameter) in seen_parameters:
+                continue
+            seen_parameters.add(id(parameter))
+            parameters.append((parameter, bool(parameter.requires_grad)))
+
+    attention_configs = []
+    seen_configs: set[int] = set()
+    for modules in layer_modules.values():
+        config = modules["self_attn"].config
+        if id(config) in seen_configs:
+            continue
+        seen_configs.add(id(config))
+        attention_configs.append(
+            (
+                config,
+                hasattr(config, "_attn_implementation"),
+                getattr(config, "_attn_implementation", None),
+            )
+        )
+    setattr(
+        model,
+        _STOP_GRAD_STATE_ATTRIBUTE,
+        {
+            "operation": operation,
+            "scope": scope,
+            "global_norm": model.model.norm,
+            "layer_modules": layer_modules,
+            "attention_configs": attention_configs,
+            "parameters": parameters,
+        },
+    )
+    try:
+        for config, _had_attribute, _original_value in attention_configs:
+            config._attn_implementation = "noqk"
+    except BaseException:
+        _restore_stop_gradient_state(
+            model, expected_operation=operation, expected_scope=scope
+        )
+        raise
+
+
+def _restore_stop_gradient_state(
+    model,
+    *,
+    expected_operation: str,
+    expected_scope: tuple[int, ...],
+) -> bool:
+    """Restore an exact stop-gradient transaction, or no-op when clean."""
+
+    state = getattr(model, _STOP_GRAD_STATE_ATTRIBUTE, None)
+    if state is None:
+        return False
+    if state["operation"] != expected_operation or state["scope"] != expected_scope:
+        raise RuntimeError(
+            "stop-gradient revert does not match active operation/scope: "
+            f"active={state['operation']}:{state['scope']}, "
+            f"requested={expected_operation}:{expected_scope}"
+        )
+
+    model.model.norm = state["global_norm"]
+    for layer_index, modules in state["layer_modules"].items():
+        layer = model.model.layers[layer_index]
+        layer.input_layernorm = modules["input_layernorm"]
+        layer.post_attention_layernorm = modules["post_attention_layernorm"]
+        layer.self_attn = modules["self_attn"]
+        layer.mlp = modules["mlp"]
+    for config, had_attribute, original_value in state["attention_configs"]:
+        if had_attribute:
+            config._attn_implementation = original_value
+        elif hasattr(config, "_attn_implementation"):
+            delattr(config, "_attn_implementation")
+    for parameter, original_requires_grad in state["parameters"]:
+        parameter.requires_grad_(original_requires_grad)
+    delattr(model, _STOP_GRAD_STATE_ATTRIBUTE)
+    return True
+
+
 def stop_nonlinear_grad(
     model,
     use_relp_grad: bool = False,
@@ -240,21 +363,33 @@ def stop_nonlinear_grad(
     - MLP: if use_relp_grad, activation gate is detached and Shapley halving applied;
            otherwise, entire gate branch is detached
     """
-    model.model.norm = StraightThroughRMSNorm(model.model.norm)
-    for layer in range(len(model.model.layers)):
-        model.model.layers[layer].input_layernorm = StraightThroughRMSNorm(
-            model.model.layers[layer].input_layernorm
-        )
-        model.model.layers[layer].post_attention_layernorm = StraightThroughRMSNorm(
-            model.model.layers[layer].post_attention_layernorm
-        )
-        model.model.layers[layer].self_attn = NoQKGradAttention(model.model.layers[layer].self_attn)
-        if use_relp_grad:
-            model.model.layers[layer].mlp = RelPGradMLP(
-                model.model.layers[layer].mlp, use_half_rule
+    scope = _valid_layer_scope(model, range(len(model.model.layers)))
+    _begin_stop_gradient_state(model, operation="global", scope=scope)
+    try:
+        model.model.norm = StraightThroughRMSNorm(model.model.norm)
+        for layer in scope:
+            model.model.layers[layer].input_layernorm = StraightThroughRMSNorm(
+                model.model.layers[layer].input_layernorm
             )
-        else:
-            model.model.layers[layer].mlp = StopGradGateMLP(model.model.layers[layer].mlp)
+            model.model.layers[layer].post_attention_layernorm = StraightThroughRMSNorm(
+                model.model.layers[layer].post_attention_layernorm
+            )
+            model.model.layers[layer].self_attn = NoQKGradAttention(
+                model.model.layers[layer].self_attn
+            )
+            if use_relp_grad:
+                model.model.layers[layer].mlp = RelPGradMLP(
+                    model.model.layers[layer].mlp, use_half_rule
+                )
+            else:
+                model.model.layers[layer].mlp = StopGradGateMLP(
+                    model.model.layers[layer].mlp
+                )
+    except BaseException:
+        _restore_stop_gradient_state(
+            model, expected_operation="global", expected_scope=scope
+        )
+        raise
     return model
 
 
@@ -262,14 +397,10 @@ def revert_stop_nonlinear_grad(model):
     """
     Revert stop gradient for all non-linear layers in the model.
     """
-    model.model.norm = model.model.norm.norm
-    for layer in range(len(model.model.layers)):
-        model.model.layers[layer].input_layernorm = model.model.layers[layer].input_layernorm.norm
-        model.model.layers[layer].post_attention_layernorm = model.model.layers[
-            layer
-        ].post_attention_layernorm.norm
-        model.model.layers[layer].self_attn = model.model.layers[layer].self_attn.attn
-        model.model.layers[layer].mlp = model.model.layers[layer].mlp.mlp
+    scope = _valid_layer_scope(model, range(len(model.model.layers)))
+    _restore_stop_gradient_state(
+        model, expected_operation="global", expected_scope=scope
+    )
     return model
 
 
@@ -281,37 +412,53 @@ def layerwise_stop_nonlinear_grad(
     use_stop_grad_on_mlps: bool = True,
     use_half_rule: bool = True,
 ):
-    model.model.norm = StraightThroughRMSNorm(model.model.norm)
-    # for the start and the end layer, we don't do stop grad on mlp
-    for layer in [start_layer, end_layer]:
-        if layer < 0 or layer >= len(model.model.layers):
-            continue
-        model.model.layers[layer].input_layernorm = StraightThroughRMSNorm(
-            model.model.layers[layer].input_layernorm
-        )
-        model.model.layers[layer].post_attention_layernorm = StraightThroughRMSNorm(
-            model.model.layers[layer].post_attention_layernorm
-        )
-        model.model.layers[layer].self_attn = NoQKGradAttention(model.model.layers[layer].self_attn)
-        if use_relp_grad:
-            model.model.layers[layer].mlp = RelPGradMLP(
-                model.model.layers[layer].mlp, use_half_rule
+    scope = _layerwise_scope(model, start_layer, end_layer)
+    _begin_stop_gradient_state(model, operation="layerwise", scope=scope)
+    boundary_layers = {
+        layer for layer in (start_layer, end_layer) if layer in scope
+    }
+    interior_layers = [layer for layer in scope if layer not in boundary_layers]
+    try:
+        model.model.norm = StraightThroughRMSNorm(model.model.norm)
+        # Boundaries use the ordinary gated-MLP rule and are wrapped once even
+        # when start_layer == end_layer.
+        for layer in sorted(boundary_layers):
+            model.model.layers[layer].input_layernorm = StraightThroughRMSNorm(
+                model.model.layers[layer].input_layernorm
             )
-        else:
-            model.model.layers[layer].mlp = StopGradGateMLP(model.model.layers[layer].mlp)
+            model.model.layers[layer].post_attention_layernorm = StraightThroughRMSNorm(
+                model.model.layers[layer].post_attention_layernorm
+            )
+            model.model.layers[layer].self_attn = NoQKGradAttention(
+                model.model.layers[layer].self_attn
+            )
+            if use_relp_grad:
+                model.model.layers[layer].mlp = RelPGradMLP(
+                    model.model.layers[layer].mlp, use_half_rule
+                )
+            else:
+                model.model.layers[layer].mlp = StopGradGateMLP(
+                    model.model.layers[layer].mlp
+                )
 
-    # for layers in between, we do stop grad on mlp
-    for layer in range(start_layer + 1, end_layer):
-        if layer < 0 or layer >= len(model.model.layers):
-            continue
-        model.model.layers[layer].input_layernorm = StraightThroughRMSNorm(
-            model.model.layers[layer].input_layernorm
+        for layer in interior_layers:
+            model.model.layers[layer].input_layernorm = StraightThroughRMSNorm(
+                model.model.layers[layer].input_layernorm
+            )
+            model.model.layers[layer].post_attention_layernorm = StraightThroughRMSNorm(
+                model.model.layers[layer].post_attention_layernorm
+            )
+            model.model.layers[layer].self_attn = NoQKGradAttention(
+                model.model.layers[layer].self_attn
+            )
+            model.model.layers[layer].mlp = StopGradMLP(
+                model.model.layers[layer].mlp
+            )
+    except BaseException:
+        _restore_stop_gradient_state(
+            model, expected_operation="layerwise", expected_scope=scope
         )
-        model.model.layers[layer].post_attention_layernorm = StraightThroughRMSNorm(
-            model.model.layers[layer].post_attention_layernorm
-        )
-        model.model.layers[layer].self_attn = NoQKGradAttention(model.model.layers[layer].self_attn)
-        model.model.layers[layer].mlp = StopGradMLP(model.model.layers[layer].mlp)
+        raise
 
     return model
 
@@ -321,16 +468,10 @@ def layerwise_revert_stop_nonlinear_grad(
     start_layer: int,
     end_layer: int,
 ):
-    model.model.norm = model.model.norm.norm
-    for layer in range(start_layer, end_layer + 1):
-        if layer < 0 or layer >= len(model.model.layers):
-            continue
-        model.model.layers[layer].input_layernorm = model.model.layers[layer].input_layernorm.norm
-        model.model.layers[layer].post_attention_layernorm = model.model.layers[
-            layer
-        ].post_attention_layernorm.norm
-        model.model.layers[layer].self_attn = model.model.layers[layer].self_attn.attn
-        model.model.layers[layer].mlp = model.model.layers[layer].mlp.mlp
+    scope = _layerwise_scope(model, start_layer, end_layer)
+    _restore_stop_gradient_state(
+        model, expected_operation="layerwise", expected_scope=scope
+    )
     return model
 
 

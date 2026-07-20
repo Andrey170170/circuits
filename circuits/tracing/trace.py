@@ -144,6 +144,20 @@ def _stable_json_hash(value: Any) -> str:
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
 
 
+def _model_config_for_hash(model: PreTrainedModel) -> dict[str, object]:
+    config_to_dict = getattr(model.config, "to_dict", None)
+    if callable(config_to_dict):
+        return config_to_dict()
+    return {
+        "_name_or_path": getattr(model.config, "_name_or_path", None),
+        "_commit_hash": getattr(model.config, "_commit_hash", None),
+        "model_type": getattr(model.config, "model_type", None),
+        "_attn_implementation": getattr(
+            model.config, "_attn_implementation", None
+        ),
+    }
+
+
 @dataclass(frozen=True)
 class TeacherForcedProbeResult:
     """Versioned, graph-free estimate for one teacher-forced target token."""
@@ -688,19 +702,47 @@ def probe_teacher_forced_response(
         )
     with instrumentation_stage(recorder, "target_scoring"):
         target_logit_values, target_probs = _teacher_forced_target_scores(model, prepared)
-    with instrumentation_stage(recorder, "clja_probe_total"):
-        selection = get_all_pairs_cl_ja_effects_with_attributions(
-            model=model,
-            tokenizer=tokenizer,
-            cis=[prepared.input_ids],
-            config=config,
-            attention_masks=[prepared.attention_mask],
-            focus_logits=[prepared.target_token_ids],
-            src_tokens=list(range(len(prepared.input_ids) - 1)),
-            tgt_tokens=prepared.target_prediction_positions,
-            instrumentation=recorder,
-            probe_only=True,
+    declared_model_config = _model_config_for_hash(model)
+    pre_probe_model_config_sha256 = _stable_json_hash(declared_model_config)
+    clja_error: BaseException | None = None
+    try:
+        with instrumentation_stage(recorder, "clja_probe_total"):
+            selection = get_all_pairs_cl_ja_effects_with_attributions(
+                model=model,
+                tokenizer=tokenizer,
+                cis=[prepared.input_ids],
+                config=config,
+                attention_masks=[prepared.attention_mask],
+                focus_logits=[prepared.target_token_ids],
+                src_tokens=list(range(len(prepared.input_ids) - 1)),
+                tgt_tokens=prepared.target_prediction_positions,
+                instrumentation=recorder,
+                probe_only=True,
+            )
+    except BaseException as error:
+        clja_error = error
+        raise
+    finally:
+        post_probe_model_config_sha256 = _stable_json_hash(
+            _model_config_for_hash(model)
         )
+        recorder.set_counter(
+            "probe_model_config_restored",
+            post_probe_model_config_sha256 == pre_probe_model_config_sha256,
+        )
+        if post_probe_model_config_sha256 != pre_probe_model_config_sha256:
+            if clja_error is not None:
+                recorder.set_counter(
+                    "probe_model_config_leak_during_failed_clja", True
+                )
+                clja_error.add_note(
+                    "ADAG probe also leaked model.config state while failing; "
+                    "the resident model must not be reused"
+                )
+            else:
+                raise RuntimeError(
+                    "probe CLJA mutated model.config; refusing a poisoned resident model"
+                )
     if not isinstance(selection, CLJAProbeSelection):
         raise TypeError("CLJA probe mode returned an unexpected result")
     recorder.set_counter(
@@ -743,13 +785,7 @@ def probe_teacher_forced_response(
         "model_type": getattr(model.config, "model_type", None),
         "hash_semantics": "declared_source_revision_and_model_config_v1",
     }
-    config_to_dict = getattr(model.config, "to_dict", None)
-    declared_model_config = config_to_dict() if callable(config_to_dict) else {
-        "model_id": model_source,
-        "revision": model_identity["revision"],
-        "model_type": model_identity["model_type"],
-    }
-    model_identity["model_config_sha256"] = _stable_json_hash(declared_model_config)
+    model_identity["model_config_sha256"] = pre_probe_model_config_sha256
     model_identity["sha256"] = _stable_json_hash(model_identity)
     input_identity = {
         "input_ids": prepared.input_ids,
