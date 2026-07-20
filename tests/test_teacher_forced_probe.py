@@ -612,6 +612,67 @@ def test_probe_runner_binds_revision_and_preserves_error_provenance(
     assert summary["artifact_identity"] == record["artifact_identity"]
 
 
+def test_probe_wave_aborts_after_failed_clja_leaks_resident_model(
+    tmp_path, monkeypatch
+) -> None:
+    import scripts.bonafide.probe_runner as probe_runner
+
+    config = _config()
+    config["model"]["device"] = "cpu"
+    config["continue_on_error"] = True
+    manifest = copy.deepcopy(_single_item_manifest())
+    wave = manifest["waves"][0]
+    wave.pop("sampling_design")
+    first = wave["items"][0]
+    first["target_selection"].pop("sampling")
+    second = copy.deepcopy(first)
+    second["artifact_id"] = "source-trace-2"
+    second["example"]["example_id"] = "example-2"
+    second["example"]["prompt"] = "must not be probed"
+    wave["items"].append(second)
+
+    monkeypatch.setattr(
+        probe_runner, "_load_model_and_tokenizer", lambda _config: (object(), object())
+    )
+    original_error = RuntimeError("failed CLJA poisoned resident model")
+    probed_prompts = []
+
+    def failing_probe(**kwargs):
+        probed_prompts.append(kwargs["prompt"])
+        kwargs["instrumentation"].set_counter(
+            "probe_model_config_leak_during_failed_clja", True
+        )
+        raise original_error
+
+    monkeypatch.setattr(probe_runner, "probe_teacher_forced_response", failing_probe)
+    summary_path = tmp_path / "summary.jsonl"
+
+    with pytest.raises(RuntimeError, match="poisoned resident model") as caught:
+        probe_runner.run_probe_wave(
+            config=config,
+            manifest=manifest,
+            wave_id="instrumented",
+            artifact_root=tmp_path / "probes",
+            summary_jsonl=summary_path,
+        )
+
+    assert caught.value is original_error
+    assert probed_prompts == ["question"]
+    summary_records = [
+        json.loads(line) for line in summary_path.read_text().splitlines()
+    ]
+    assert len(summary_records) == 1
+    record = summary_records[0]
+    assert record["source_artifact_id"] == first["artifact_id"]
+    assert record["status"] == "error"
+    assert record["error_type"] == "RuntimeError"
+    assert record["error"] == str(original_error)
+    assert record["resident_model_reuse_forbidden"] is True
+    assert record["instrumentation"]["counters"][
+        "probe_model_config_leak_during_failed_clja"
+    ] is True
+
+
 def test_probe_wave_loads_one_resident_model_for_multiple_items(
     tmp_path, monkeypatch
 ) -> None:

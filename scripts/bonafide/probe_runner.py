@@ -293,6 +293,13 @@ def run_probe_wave(
         except Exception as error:
             if isinstance(error, torch.cuda.OutOfMemoryError) and uses_cuda:
                 torch.cuda.empty_cache()
+            instrumentation = recorder.snapshot()
+            resident_model_reuse_forbidden = (
+                instrumentation.get("counters", {}).get(
+                    "probe_model_config_leak_during_failed_clja"
+                )
+                is True
+            )
             record = {
                 **runtime_base,
                 "status": (
@@ -301,11 +308,18 @@ def run_probe_wave(
                 "probe_wall_seconds": time.perf_counter() - started,
                 "error_type": type(error).__name__,
                 "error": str(error),
-                "instrumentation": recorder.snapshot(),
+                "instrumentation": instrumentation,
+                "resident_model_reuse_forbidden": resident_model_reuse_forbidden,
             }
             _append_jsonl(summary_jsonl, record)
             results.append(record)
             record_progress(record)
+            # A failed probe may leave the shared resident model mutated. The
+            # public probe records that condition without masking its active
+            # exception; fail closed here even when ordinary per-item failures
+            # are configured to continue.
+            if resident_model_reuse_forbidden:
+                raise
             if not config.get("continue_on_error", False):
                 raise
             continue
