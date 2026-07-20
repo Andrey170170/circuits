@@ -18,7 +18,8 @@
 #   sbatch --export=ALL,MANIFEST=/path/to/manifest.json,WAVE=wave1-mixed-final-token \
 #     scripts/bonafide/benchmark_tracing.sbatch
 #
-# Optional exports: CONFIG, ARTIFACT_ROOT, SUMMARY_JSONL, ONLY_ARTIFACT_ID.
+# Optional exports: EXECUTION_MODE=trace|probe, CONFIG, ARTIFACT_ROOT,
+# SUMMARY_JSONL, ONLY_ARTIFACT_ID. The default remains full tracing.
 
 set -euo pipefail
 
@@ -37,8 +38,23 @@ source scripts/chpc_env.sh
 : "${WAVE:?Set WAVE to exactly one wave ID from the manifest}"
 
 CONFIG="${CONFIG:-${REPO_ROOT}/scripts/bonafide/configs/qwen3_4b_instruct.json}"
-ARTIFACT_ROOT="${ARTIFACT_ROOT:-${CIRCUITS_RESULTS_DIR}/bonafide/performance}"
-SUMMARY_JSONL="${SUMMARY_JSONL:-${ARTIFACT_ROOT}/benchmark-summary.jsonl}"
+EXECUTION_MODE="${EXECUTION_MODE:-trace}"
+case "$EXECUTION_MODE" in
+    trace)
+        RUNNER_MODULE="scripts.bonafide.runner"
+        ARTIFACT_ROOT="${ARTIFACT_ROOT:-${CIRCUITS_RESULTS_DIR}/bonafide/performance}"
+        SUMMARY_JSONL="${SUMMARY_JSONL:-${ARTIFACT_ROOT}/benchmark-summary.jsonl}"
+        ;;
+    probe)
+        RUNNER_MODULE="scripts.bonafide.probe_runner"
+        ARTIFACT_ROOT="${ARTIFACT_ROOT:-${CIRCUITS_RESULTS_DIR}/bonafide/probes}"
+        SUMMARY_JSONL="${SUMMARY_JSONL:-${ARTIFACT_ROOT}/probe-summary.jsonl}"
+        ;;
+    *)
+        echo "EXECUTION_MODE must be trace or probe; got ${EXECUTION_MODE}." >&2
+        exit 2
+        ;;
+esac
 PYTHON_BIN="${UV_PROJECT_ENVIRONMENT}/bin/python"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
@@ -49,7 +65,7 @@ fi
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
-echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} wave=${WAVE}"
+echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} mode=${EXECUTION_MODE} wave=${WAVE}"
 echo "config=${CONFIG} manifest=${MANIFEST} artifact_root=${ARTIFACT_ROOT}"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
@@ -78,4 +94,4 @@ if [[ -n "${ONLY_ARTIFACT_ID:-}" ]]; then
     runner_args+=(--only-artifact-id "$ONLY_ARTIFACT_ID")
 fi
 
-"$PYTHON_BIN" -m scripts.bonafide.runner "${runner_args[@]}"
+"$PYTHON_BIN" -m "$RUNNER_MODULE" "${runner_args[@]}"

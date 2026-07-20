@@ -3,14 +3,21 @@ High-level circuit tracing: prepare inputs, run CLJA, and produce a CircuitData 
 """
 
 import hashlib
+import json
+import math
 import pickle
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
 import torch
-from circuits.tracing.clja import ADAGConfig, get_all_pairs_cl_ja_effects_with_attributions
+from circuits.tracing.clja import (
+    ADAGConfig,
+    CLJAProbeSelection,
+    get_all_pairs_cl_ja_effects_with_attributions,
+)
 from circuits.tracing.instrumentation import (
     TraceInstrumentation,
     instrumentation_stage,
@@ -116,6 +123,267 @@ class CircuitData:
         """Load CircuitData from a pickle file."""
         with open(path, "rb") as f:
             return pickle.load(f)
+
+
+PROBE_SCHEMA_VERSION = "adag.teacher-forced-probe.v1"
+PROBE_OCCURRENCE_SCHEMA_VERSION = "adag.selected-neuron-occurrences.v1"
+PROBE_FEATURE_BASIS_SCHEMA_VERSION = "adag.selected-neuron-feature-basis.v1"
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _stable_json_hash(value: Any) -> str:
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+@dataclass(frozen=True)
+class TeacherForcedProbeResult:
+    """Versioned, graph-free estimate for one teacher-forced target token."""
+
+    target_provenance: dict[str, object]
+    selected_occurrences: list[dict[str, int | float]]
+    occurrence_signature: dict[str, object]
+    feature_basis_signature: dict[str, object]
+    instrumentation: dict[str, object]
+    trace_metadata: dict[str, object]
+    model_identity: dict[str, object]
+    adag_config: dict[str, object]
+    schema_version: str = PROBE_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, object]:
+        value: dict[str, object] = {
+            "schema_version": self.schema_version,
+            "target_provenance": self.target_provenance,
+            "selected_occurrences": self.selected_occurrences,
+            "occurrence_signature": self.occurrence_signature,
+            "feature_basis_signature": self.feature_basis_signature,
+            "instrumentation": self.instrumentation,
+            "trace_metadata": self.trace_metadata,
+            "model_identity": self.model_identity,
+            "adag_config": self.adag_config,
+        }
+        # Probe artifacts are deliberately plain JSON rather than pickle-backed
+        # CircuitData. Fail here if a caller accidentally adds tensor state.
+        _canonical_json_bytes(value)
+        return value
+
+
+def validate_teacher_forced_probe_result(
+    probe: TeacherForcedProbeResult | Mapping[str, object],
+) -> dict[str, object]:
+    """Fail closed on malformed or scientifically ambiguous probe output."""
+
+    value = probe.to_dict() if isinstance(probe, TeacherForcedProbeResult) else dict(probe)
+    if value.get("schema_version") != PROBE_SCHEMA_VERSION:
+        raise ValueError(f"unsupported probe schema: {value.get('schema_version')!r}")
+    provenance = value.get("target_provenance")
+    if not isinstance(provenance, Mapping):
+        raise ValueError("probe requires exactly one target_provenance object")
+    for field_name in (
+        "response_token_position",
+        "absolute_token_position",
+        "prediction_token_position",
+        "token_id",
+        "token_text",
+        "logit",
+        "probability",
+    ):
+        if field_name not in provenance:
+            raise ValueError(f"probe target_provenance is missing {field_name}")
+    for field_name in (
+        "response_token_position",
+        "absolute_token_position",
+        "prediction_token_position",
+        "token_id",
+    ):
+        numeric = provenance[field_name]
+        if isinstance(numeric, bool) or not isinstance(numeric, int) or numeric < 0:
+            raise ValueError(f"probe target {field_name} must be a non-negative integer")
+    if not isinstance(provenance["token_text"], str):
+        raise ValueError("probe target token_text must be a string")
+    for field_name in ("logit", "probability"):
+        numeric = provenance[field_name]
+        if isinstance(numeric, bool) or not isinstance(numeric, (int, float)):
+            raise ValueError(f"probe target {field_name} must be numeric")
+        if not math.isfinite(float(numeric)):
+            raise ValueError(f"probe target {field_name} must be finite")
+    if not 0.0 <= float(provenance["probability"]) <= 1.0:
+        raise ValueError("probe target probability must be in [0, 1]")
+
+    occurrences = value.get("selected_occurrences")
+    if not isinstance(occurrences, list):
+        raise ValueError("probe selected_occurrences must be a list")
+    occurrence_ids: list[list[int]] = []
+    for occurrence in occurrences:
+        if not isinstance(occurrence, Mapping):
+            raise ValueError("probe selected occurrence must be an object")
+        occurrence_id = []
+        for field_name in ("layer", "token_position", "neuron"):
+            component = occurrence.get(field_name)
+            if (
+                isinstance(component, bool)
+                or not isinstance(component, int)
+                or component < 0
+            ):
+                raise ValueError(
+                    f"probe occurrence {field_name} must be a non-negative integer"
+                )
+            occurrence_id.append(component)
+        attribution = occurrence.get("attribution")
+        if isinstance(attribution, bool) or not isinstance(attribution, (int, float)):
+            raise ValueError("probe occurrence attribution must be numeric")
+        if not math.isfinite(float(attribution)):
+            raise ValueError("probe occurrence attribution must be finite")
+        occurrence_ids.append(occurrence_id)
+    if occurrence_ids != sorted(occurrence_ids) or len(occurrence_ids) != len(
+        {tuple(item) for item in occurrence_ids}
+    ):
+        raise ValueError("probe occurrence IDs must be sorted and unique")
+
+    occurrence_signature = value.get("occurrence_signature")
+    if not isinstance(occurrence_signature, Mapping):
+        raise ValueError("probe occurrence_signature must be an object")
+    if occurrence_signature.get("schema_version") != PROBE_OCCURRENCE_SCHEMA_VERSION:
+        raise ValueError("unsupported probe occurrence signature schema")
+    if occurrence_signature.get("occurrence_ids") != occurrence_ids:
+        raise ValueError(
+            "probe signature occurrence IDs disagree with selected occurrences"
+        )
+    if occurrence_signature.get("sha256") != _stable_json_hash(occurrence_ids):
+        raise ValueError("probe occurrence signature checksum mismatch")
+
+    feature_ids = sorted({(item[0], item[2]) for item in occurrence_ids})
+    feature_ids_json = [[layer, neuron] for layer, neuron in feature_ids]
+    feature_basis = value.get("feature_basis_signature")
+    if not isinstance(feature_basis, Mapping):
+        raise ValueError("probe feature_basis_signature must be an object")
+    if feature_basis.get("schema_version") != PROBE_FEATURE_BASIS_SCHEMA_VERSION:
+        raise ValueError("unsupported probe feature basis signature schema")
+    if feature_basis.get("feature_ids") != feature_ids_json:
+        raise ValueError("probe feature basis disagrees with selected occurrences")
+    if feature_basis.get("sha256") != _stable_json_hash(feature_ids_json):
+        raise ValueError("probe feature basis signature checksum mismatch")
+
+    instrumentation = value.get("instrumentation")
+    if not isinstance(instrumentation, Mapping):
+        raise ValueError("probe instrumentation must be an object")
+    predictors = instrumentation.get("early_predictors")
+    if not isinstance(predictors, Mapping):
+        raise ValueError("probe instrumentation is missing early predictors")
+    if predictors.get("selected_neuron_count") != len(occurrences):
+        raise ValueError("probe selected count disagrees with instrumentation")
+    forbidden_stages = {
+        "selected_attribution_contribution",
+        "stop_grad_mlp_attribution_contribution",
+        "graph_expansion",
+        "activation_collection",
+        "logit_graph_materialization",
+        "mlp_node_materialization",
+        "embedding_graph_materialization",
+        "cross_layer_graph_expansion",
+        "layer_pair_jacobian",
+        "layer_pair_materialization",
+        "dataframe_conversion",
+    }
+    stages = instrumentation.get("stages")
+    if not isinstance(stages, Mapping):
+        raise ValueError("probe instrumentation stages must be an object")
+    leaked = forbidden_stages.intersection(stages)
+    if leaked:
+        raise ValueError(f"probe contains forbidden post-selection stages: {sorted(leaked)}")
+
+    adag_config = value.get("adag_config")
+    if not isinstance(adag_config, Mapping) or not isinstance(
+        adag_config.get("device"), str
+    ):
+        raise ValueError("probe adag_config must include a device string")
+    metadata = value.get("trace_metadata")
+    if not isinstance(metadata, Mapping):
+        raise ValueError("probe trace_metadata must be an object")
+    if metadata.get("trace_mode") != "teacher_forced_probe":
+        raise ValueError("probe trace_metadata trace_mode is invalid")
+    required_hashes = (
+        "prompt_sha256",
+        "response_sha256",
+        "text_bundle_sha256",
+        "input_sha256",
+        "adag_config_sha256",
+        "chat_template_sha256",
+    )
+    for field_name in required_hashes:
+        _validate_sha256(metadata.get(field_name), f"trace_metadata.{field_name}")
+    system_hash = metadata.get("system_prompt_sha256")
+    if system_hash is not None:
+        _validate_sha256(system_hash, "trace_metadata.system_prompt_sha256")
+    if metadata.get("adag_config_sha256") != _stable_json_hash(dict(adag_config)):
+        raise ValueError("probe ADAG config checksum mismatch")
+    integer_metadata = (
+        "assistant_prefix_token_count",
+        "response_token_count",
+        "included_response_token_count",
+        "input_token_count",
+        "effective_start_layer",
+        "effective_end_layer",
+    )
+    for field_name in integer_metadata:
+        item = metadata.get(field_name)
+        minimum = -1 if field_name == "effective_start_layer" else 0
+        if isinstance(item, bool) or not isinstance(item, int) or item < minimum:
+            raise ValueError(f"probe trace_metadata.{field_name} is invalid")
+    prefix_count = metadata["assistant_prefix_token_count"]
+    response_count = metadata["response_token_count"]
+    included_count = metadata["included_response_token_count"]
+    input_count = metadata["input_token_count"]
+    response_position = provenance["response_token_position"]
+    if included_count != response_position + 1 or response_count < included_count:
+        raise ValueError("probe response-position metadata is inconsistent")
+    if input_count != prefix_count + included_count:
+        raise ValueError("probe input-token metadata is inconsistent")
+    if provenance["absolute_token_position"] != prefix_count + response_position:
+        raise ValueError("probe absolute target position is inconsistent")
+    if provenance["prediction_token_position"] != provenance[
+        "absolute_token_position"
+    ] - 1:
+        raise ValueError("probe prediction target position is inconsistent")
+    if metadata["effective_end_layer"] < max(metadata["effective_start_layer"], 0):
+        raise ValueError("probe effective layer bounds are inconsistent")
+
+    model_identity = value.get("model_identity")
+    if not isinstance(model_identity, Mapping):
+        raise ValueError("probe model_identity must be an object")
+    for field_name in ("model_id", "revision", "hash_semantics"):
+        if not isinstance(model_identity.get(field_name), str) or not model_identity[
+            field_name
+        ]:
+            raise ValueError(f"probe model_identity.{field_name} is required")
+    _validate_sha256(
+        model_identity.get("model_config_sha256"),
+        "model_identity.model_config_sha256",
+    )
+    _validate_sha256(model_identity.get("sha256"), "model_identity.sha256")
+    unhashed_model_identity = dict(model_identity)
+    declared_model_hash = unhashed_model_identity.pop("sha256")
+    if declared_model_hash != _stable_json_hash(unhashed_model_identity):
+        raise ValueError("probe model identity checksum mismatch")
+    _canonical_json_bytes(value)
+    return value
+
+
+def _validate_sha256(value: object, field_name: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"probe {field_name} must be a lowercase SHA-256 digest")
 
 
 # Copied from util.chat_input — removes default system preamble ("Cutting Knowledge Date: ...")
@@ -345,6 +613,180 @@ def _teacher_forced_target_scores(
         target_logits.append(float(position_logits[token_id].item()))
         target_probs.append(float(torch.softmax(position_logits, dim=-1)[token_id].item()))
     return target_logits, target_probs
+
+
+def _teacher_forced_target_provenance(
+    prepared: TeacherForcedInput,
+    target_logit_values: list[float],
+    target_probs: list[float],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "response_token_position": response_position,
+            "absolute_token_position": prepared.assistant_prefix_token_count
+            + response_position,
+            "prediction_token_position": prediction_position,
+            "token_id": token_id,
+            "token_text": token_text,
+            "logit": logit,
+            "probability": probability,
+        }
+        for (
+            response_position,
+            prediction_position,
+            token_id,
+            token_text,
+            logit,
+            probability,
+        ) in zip(
+            prepared.selected_response_positions,
+            prepared.target_prediction_positions,
+            prepared.target_token_ids,
+            prepared.target_token_texts,
+            target_logit_values,
+            target_probs,
+        )
+    ]
+
+
+def probe_teacher_forced_response(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    prompt: str,
+    response: str,
+    target_response_positions: list[int],
+    config: ADAGConfig,
+    *,
+    system_prompt: str | None = None,
+    instrumentation: TraceInstrumentation | None = None,
+    model_revision: str | None = None,
+) -> TeacherForcedProbeResult:
+    """Estimate one frozen-response target without constructing a graph.
+
+    This API deliberately rejects multiple targets. The initial attribution and
+    important-neuron mask are objective-dependent, so a combined-target probe
+    would not be a scientifically meaningful stand-in for independent probes.
+    """
+
+    if len(target_response_positions) != 1:
+        raise ValueError("probe mode requires exactly one teacher-forced target")
+    declared_model_revision = model_revision or getattr(
+        model.config, "_commit_hash", None
+    )
+    if not isinstance(declared_model_revision, str) or not declared_model_revision:
+        raise ValueError(
+            "probe mode requires model_revision or model.config._commit_hash"
+        )
+    recorder = instrumentation or TraceInstrumentation(device=config.device)
+    with instrumentation_stage(recorder, "prepare_input"):
+        prepared = prepare_teacher_forced_input(
+            tokenizer,
+            prompt,
+            response,
+            target_response_positions,
+            system_prompt=system_prompt,
+        )
+    with instrumentation_stage(recorder, "target_scoring"):
+        target_logit_values, target_probs = _teacher_forced_target_scores(model, prepared)
+    with instrumentation_stage(recorder, "clja_probe_total"):
+        selection = get_all_pairs_cl_ja_effects_with_attributions(
+            model=model,
+            tokenizer=tokenizer,
+            cis=[prepared.input_ids],
+            config=config,
+            attention_masks=[prepared.attention_mask],
+            focus_logits=[prepared.target_token_ids],
+            src_tokens=list(range(len(prepared.input_ids) - 1)),
+            tgt_tokens=prepared.target_prediction_positions,
+            instrumentation=recorder,
+            probe_only=True,
+        )
+    if not isinstance(selection, CLJAProbeSelection):
+        raise TypeError("CLJA probe mode returned an unexpected result")
+    recorder.set_counter(
+        "probe_selected_occurrence_count", len(selection.selected_occurrences)
+    )
+    recorder.set_counter("probe_graph_work_skipped", True)
+
+    occurrence_ids = [
+        [
+            int(occurrence["layer"]),
+            int(occurrence["token_position"]),
+            int(occurrence["neuron"]),
+        ]
+        for occurrence in selection.selected_occurrences
+    ]
+    occurrence_signature: dict[str, object] = {
+        "schema_version": PROBE_OCCURRENCE_SCHEMA_VERSION,
+        "ordering": "layer_token_neuron_ascending",
+        "occurrence_ids": occurrence_ids,
+        "sha256": _stable_json_hash(occurrence_ids),
+    }
+    feature_ids = sorted(
+        {
+            (int(occurrence["layer"]), int(occurrence["neuron"]))
+            for occurrence in selection.selected_occurrences
+        }
+    )
+    feature_ids_json = [[layer, neuron] for layer, neuron in feature_ids]
+    feature_basis_signature: dict[str, object] = {
+        "schema_version": PROBE_FEATURE_BASIS_SCHEMA_VERSION,
+        "ordering": "layer_neuron_ascending_unique",
+        "feature_ids": feature_ids_json,
+        "sha256": _stable_json_hash(feature_ids_json),
+    }
+    adag_config = asdict(config)
+    model_source = str(getattr(model.config, "_name_or_path", ""))
+    model_identity: dict[str, object] = {
+        "model_id": model_source,
+        "revision": declared_model_revision,
+        "model_type": getattr(model.config, "model_type", None),
+        "hash_semantics": "declared_source_revision_and_model_config_v1",
+    }
+    config_to_dict = getattr(model.config, "to_dict", None)
+    declared_model_config = config_to_dict() if callable(config_to_dict) else {
+        "model_id": model_source,
+        "revision": model_identity["revision"],
+        "model_type": model_identity["model_type"],
+    }
+    model_identity["model_config_sha256"] = _stable_json_hash(declared_model_config)
+    model_identity["sha256"] = _stable_json_hash(model_identity)
+    input_identity = {
+        "input_ids": prepared.input_ids,
+        "attention_mask": prepared.attention_mask,
+    }
+    trace_metadata: dict[str, object] = {
+        "trace_mode": "teacher_forced_probe",
+        "prompt_sha256": _stable_text_hash(prompt),
+        "response_sha256": _stable_text_hash(response),
+        "system_prompt_sha256": _stable_text_hash(system_prompt),
+        "text_bundle_sha256": _stable_json_hash(
+            {"prompt": prompt, "response": response, "system_prompt": system_prompt}
+        ),
+        "input_sha256": _stable_json_hash(input_identity),
+        "adag_config_sha256": _stable_json_hash(adag_config),
+        "assistant_prefix_token_count": prepared.assistant_prefix_token_count,
+        "response_token_count": prepared.response_token_count,
+        "included_response_token_count": prepared.included_response_token_count,
+        "input_token_count": len(prepared.input_ids),
+        "chat_template_sha256": _stable_text_hash(get_chat_template(tokenizer)),
+        "effective_start_layer": selection.effective_start_layer,
+        "effective_end_layer": selection.effective_end_layer,
+    }
+    result = TeacherForcedProbeResult(
+        target_provenance=_teacher_forced_target_provenance(
+            prepared, target_logit_values, target_probs
+        )[0],
+        selected_occurrences=selection.selected_occurrences,
+        occurrence_signature=occurrence_signature,
+        feature_basis_signature=feature_basis_signature,
+        instrumentation=recorder.snapshot(),
+        trace_metadata=trace_metadata,
+        model_identity=model_identity,
+        adag_config=adag_config,
+    )
+    validate_teacher_forced_probe_result(result)
+    return result
 
 
 def _strip_starting_at_rindex_in_place(arr: list, value: object) -> list:
@@ -674,34 +1116,9 @@ def trace_teacher_forced_response(
         instrumentation.set_counter("final_dataframe_node_count", len(df_node))
         instrumentation.set_counter("final_dataframe_edge_count", len(df_edge))
 
-    target_provenance = []
-    for (
-        response_position,
-        prediction_position,
-        token_id,
-        token_text,
-        logit,
-        probability,
-    ) in zip(
-        prepared.selected_response_positions,
-        prepared.target_prediction_positions,
-        prepared.target_token_ids,
-        prepared.target_token_texts,
-        target_logit_values,
-        target_probs,
-    ):
-        target_provenance.append(
-            {
-                "response_token_position": response_position,
-                "absolute_token_position": prepared.assistant_prefix_token_count
-                + response_position,
-                "prediction_token_position": prediction_position,
-                "token_id": token_id,
-                "token_text": token_text,
-                "logit": logit,
-                "probability": probability,
-            }
-        )
+    target_provenance = _teacher_forced_target_provenance(
+        prepared, target_logit_values, target_probs
+    )
 
     trace_metadata: dict[str, object] = {
         "trace_mode": "teacher_forced_response",

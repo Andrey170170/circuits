@@ -98,7 +98,70 @@ class ADAGConfig:
     focus_last_residual: bool = False
 
 
-def get_all_pairs_cl_ja_effects_with_attributions(
+@dataclass(frozen=True)
+class CLJAProbeSelection:
+    """Compact result available before selected-attribution and graph work.
+
+    ``selected_occurrences`` is ordered by ``(layer, token, neuron)`` and is
+    intentionally JSON-shaped.  Attribution values are the initial-logit
+    attributions used to construct the important-neuron mask, not later edge
+    or contribution values.
+    """
+
+    selected_occurrences: list[dict[str, int | float]]
+    effective_start_layer: int
+    effective_end_layer: int
+
+
+def _selected_probe_occurrences(
+    mlp_final_attributions: torch.Tensor,
+    neuron_cfg: dict[int, list[list[int]]],
+    keep_tokens: list[int],
+) -> list[dict[str, int | float]]:
+    """Export selected occurrence attributions with one device transfer."""
+
+    keep = set(keep_tokens)
+    occurrence_ids = [
+        (int(layer), int(token), int(neuron))
+        for layer in sorted(neuron_cfg)
+        for token, neuron in neuron_cfg[layer]
+        if int(token) in keep
+    ]
+    if not occurrence_ids:
+        return []
+    device = mlp_final_attributions.device
+    layer_indices = torch.tensor(
+        [item[0] for item in occurrence_ids], device=device, dtype=torch.long
+    )
+    token_indices = torch.tensor(
+        [item[1] for item in occurrence_ids], device=device, dtype=torch.long
+    )
+    neuron_indices = torch.tensor(
+        [item[2] for item in occurrence_ids], device=device, dtype=torch.long
+    )
+    attribution_values = (
+        mlp_final_attributions[
+            layer_indices, 0, token_indices, neuron_indices, 0
+        ]
+        .detach()
+        .float()
+        .cpu()
+        .tolist()
+    )
+    return [
+        {
+            "layer": layer,
+            "token_position": token,
+            "neuron": neuron,
+            "attribution": float(attribution),
+        }
+        for (layer, token, neuron), attribution in zip(
+            occurrence_ids, attribution_values
+        )
+    ]
+
+
+def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     model,
     tokenizer: PreTrainedTokenizer,
     cis: list[list[int]],
@@ -112,7 +175,12 @@ def get_all_pairs_cl_ja_effects_with_attributions(
     focus_positions: list[int] | None = None,
     focus_logits: list[list[int]] | list[int] | None = None,
     instrumentation: TraceInstrumentation | None = None,
-) -> tuple[list[Node], list[Edge]] | tuple[torch.Tensor, torch.Tensor]:
+    probe_only: bool = False,
+) -> (
+    tuple[list[Node], list[Edge]]
+    | tuple[torch.Tensor, torch.Tensor]
+    | CLJAProbeSelection
+):
     """
     Cross Layer Jacobian Attribution (CLJA) for circuit tracing.
 
@@ -176,6 +244,12 @@ def get_all_pairs_cl_ja_effects_with_attributions(
             print(e)
             max_token_expected = max(focus_positions) + 1
             raise ValueError(f"failed to get labels for {max_token_expected} tokens.")
+
+    if probe_only:
+        if len(cis) != 1:
+            raise ValueError("probe_only requires exactly one input sequence")
+        if len(focus_positions) != 1:
+            raise ValueError("probe_only requires exactly one target position")
 
     if keep_tokens is None:
         keep_tokens = list(range(max(tgt_tokens) + 1))
@@ -318,6 +392,15 @@ def get_all_pairs_cl_ja_effects_with_attributions(
         if len(neurons) > 0:
             last_non_zero_layer = max(last_non_zero_layer, layer)
     end_layer = min(end_layer, last_non_zero_layer + 1)
+
+    if probe_only:
+        return CLJAProbeSelection(
+            selected_occurrences=_selected_probe_occurrences(
+                mlp_final_attributions, neuron_cfg, keep_tokens
+            ),
+            effective_start_layer=start_layer,
+            effective_end_layer=end_layer,
+        )
 
     # if we only want to return the important neurons, we can do that now
     if return_only_important_neurons:
@@ -489,6 +572,77 @@ def get_all_pairs_cl_ja_effects_with_attributions(
 
     # final return
     return nodes, edges
+
+
+def get_all_pairs_cl_ja_effects_with_attributions(
+    model,
+    tokenizer: PreTrainedTokenizer,
+    cis: list[list[int]],
+    config: ADAGConfig,
+    src_tokens: list[int],
+    tgt_tokens: list[int],
+    keep_tokens: list[int] | None = None,
+    attention_masks: list[list[int]] | torch.Tensor | None = None,
+    focus_positions: list[int] | None = None,
+    focus_logits: list[list[int]] | list[int] | None = None,
+    instrumentation: TraceInstrumentation | None = None,
+    probe_only: bool = False,
+) -> (
+    tuple[list[Node], list[Edge]]
+    | tuple[torch.Tensor, torch.Tensor]
+    | CLJAProbeSelection
+):
+    """Run CLJA, with exception-safe cleanup for the graph-free probe path."""
+
+    if probe_only and config.return_only_important_neurons:
+        raise ValueError(
+            "probe_only and return_only_important_neurons cannot be enabled together"
+        )
+    if not probe_only:
+        # Keep normal full-trace control flow and cleanup semantics unchanged.
+        return _get_all_pairs_cl_ja_effects_with_attributions_impl(
+            model=model,
+            tokenizer=tokenizer,
+            cis=cis,
+            config=config,
+            src_tokens=src_tokens,
+            tgt_tokens=tgt_tokens,
+            keep_tokens=keep_tokens,
+            attention_masks=attention_masks,
+            focus_positions=focus_positions,
+            focus_logits=focus_logits,
+            instrumentation=instrumentation,
+            probe_only=False,
+        )
+
+    tracing_failed = False
+    try:
+        return _get_all_pairs_cl_ja_effects_with_attributions_impl(
+            model=model,
+            tokenizer=tokenizer,
+            cis=cis,
+            config=config,
+            src_tokens=src_tokens,
+            tgt_tokens=tgt_tokens,
+            keep_tokens=keep_tokens,
+            attention_masks=attention_masks,
+            focus_positions=focus_positions,
+            focus_logits=focus_logits,
+            instrumentation=instrumentation,
+            probe_only=True,
+        )
+    except BaseException:
+        tracing_failed = True
+        raise
+    finally:
+        if not config.disable_stop_grad:
+            try:
+                revert_stop_nonlinear_grad(model)
+            except BaseException:
+                # Preserve the scientific tracing failure. On a successful
+                # probe, cleanup failure remains fatal.
+                if not tracing_failed:
+                    raise
 
 
 def _get_cl_ja_based_edges(

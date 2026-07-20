@@ -8,6 +8,7 @@ logs/
 outputs/
 .uv-cache/
 slurm-*.out
+*.gpulog
 
 .DS_Store
 *.gz
