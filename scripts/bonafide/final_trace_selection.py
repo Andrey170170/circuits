@@ -69,6 +69,8 @@ class RefinementProbe:
     item: Mapping[str, Any]
     artifact_path: Path
     artifact_id: str
+    token_text: str
+    logit: float
     probability: float
     candidate_edge_count: int
     selected_occurrence_count: int
@@ -204,8 +206,13 @@ def _probe_from_artifact(
     if provenance.get("token_id") != token_id:
         raise ValueError(f"probe token ID disagrees for {source_id}")
     probability = provenance.get("probability")
-    if isinstance(probability, bool) or not isinstance(probability, (int, float)):
-        raise ValueError(f"probe probability is invalid for {source_id}")
+    logit = provenance.get("logit")
+    token_text = provenance.get("token_text")
+    for value, label in ((probability, "probability"), (logit, "logit")):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"probe {label} is invalid for {source_id}")
+    if not isinstance(token_text, str):
+        raise ValueError(f"probe token text is invalid for {source_id}")
     counters = loaded.metrics.get("instrumentation", {}).get("counters", {})
     edge_count = counters.get("candidate_mlp_edge_count")
     occurrences = loaded.metrics.get("selected_occurrence_count")
@@ -220,6 +227,8 @@ def _probe_from_artifact(
         item=item,
         artifact_path=loaded.path,
         artifact_id=str(manifest["artifact_id"]),
+        token_text=token_text,
+        logit=float(logit),
         probability=float(probability),
         candidate_edge_count=int(edge_count),
         selected_occurrence_count=int(occurrences),
@@ -657,6 +666,8 @@ def _final_item(
                 "source_probe_sha256": probe.probe_sha256,
                 "source_metrics_sha256": probe.metrics_sha256,
                 "refinement_diagnostics": {
+                    "token_text": probe.token_text,
+                    "logit": probe.logit,
                     "probability": probe.probability,
                     "candidate_mlp_edge_count": probe.candidate_edge_count,
                     "selected_occurrence_count": probe.selected_occurrence_count,

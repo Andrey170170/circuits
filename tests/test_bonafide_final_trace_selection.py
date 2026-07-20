@@ -79,6 +79,8 @@ def _probe(item: dict, *, probability: float | None = None) -> final.RefinementP
         item=item,
         artifact_path=Path(f"/artifact/{position}"),
         artifact_id=f"runtime-{item['artifact_id']}",
+        token_text=f" token-{position}",
+        logit=10.0 + position,
         probability=float(probability if probability is not None else 0.5 + position / 1000),
         candidate_edge_count=100 + position * 10,
         selected_occurrence_count=20 + position,
@@ -402,6 +404,8 @@ def test_authoritative_artifact_overrides_append_only_summary_order(
             "target_provenance": {
                 "response_token_position": 0,
                 "token_id": 1000,
+                "token_text": " token-0",
+                "logit": 10.0,
                 "probability": 0.5,
             },
             "feature_basis_signature": {"feature_ids": [[0, 1]]},
