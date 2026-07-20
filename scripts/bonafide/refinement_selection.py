@@ -1,12 +1,14 @@
 """Select a frozen BonaFide corpus and build second-stage refinement probes.
 
 The selector treats screening as a measurement, not as ground truth.  It
-validates reviewed prompt membership and its exact semantic/workload balances;
-feature signatures remain diagnostics rather than selection evidence.  Dense
-prompts probe every response position, while broad prompts probe at most 64
-annotation-, answer-, source-, boundary-, and phase-centered candidates.  One
-resident-model wave holds every independent probe.  Final broad trace targets
-remain unfrozen until these refinement probes are analyzed.
+validates reviewed prompt membership and its exact semantic/workload balances.
+The discovery set used screened feature count only as a final tie-break after
+the semantic optimum; confirmatory holdout membership was fixed without feature
+selection.  Feature signatures otherwise remain diagnostics.  Dense prompts
+probe every response position, while broad prompts probe at most 64 annotation-,
+answer-, source-, boundary-, and phase-centered candidates.  One resident-model
+wave holds every independent probe.  Final broad trace targets remain unfrozen
+until these refinement probes are analyzed.
 """
 
 from __future__ import annotations
@@ -1100,7 +1102,12 @@ def build_refinement_probe_manifest(
                 for token in _coverage_tokens(aggregate.example)
             }),
             "workload_axis": "within-inventory tertiles of screened p90 candidate MLP edges",
-            "feature_axis": "diagnostic only; reviewed membership is frozen explicitly",
+            "feature_axis": (
+                "reviewed discovery membership used screened feature count only as "
+                "the final tie-break after the semantic optimum; confirmatory "
+                "holdout membership did not use feature signatures; retained "
+                "signatures are otherwise diagnostic"
+            ),
             "uncertainty_axis": "mean CV of target edge and selected-occurrence counts",
             "tie_break": "ascending example_id",
         },
