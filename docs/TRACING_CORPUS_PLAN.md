@@ -277,6 +277,22 @@ Artifacts and the append-only summary are written to:
 /scratch/general/vast/u1653998/circuits/results/bonafide/probes/prompt-screening-v1/
 ```
 
-The first operational checkpoint reached 200/2,128 complete probes with no errors. The runner
-emits a compact progress record every 100 items, validates and skips complete artifacts on resume,
-and aborts rather than reusing the model if a failed probe reports model-configuration leakage.
+The job completed successfully in 10m29s with exit code 0. All 2,128 probes completed; there were
+no errors or OOMs, all 133 examples have 16 distinct target positions, and every probe reports both
+model-configuration restoration and graph-work skipping. The saved corpus occupies approximately
+336 MiB and contains 2,128 atomic artifact directories with no temporary-directory leftovers.
+
+| Measurement | Prompt-screening result |
+| --- | ---: |
+| Probe wall time, median / p90 / max | 0.195 / 0.239 / 0.569 s |
+| Total unit wall time, median / p90 / max | 0.250 / 0.313 / 0.639 s |
+| CUDA peak allocated, median / p90 / max | 10.01 / 12.60 / 15.71 GiB |
+| CUDA peak reserved, median / p90 / max | 11.48 / 16.08 / 21.89 GiB |
+| Selected occurrences, median / p90 / max | 138 / 254 / 1,432 |
+| Candidate MLP edges, median / p90 / max | 8,662 / 29,942 / 934,125 |
+
+The candidate-edge distribution is strongly heavy-tailed: its p99 is approximately 140,512 while
+the maximum is 934,125. Prompt selection for full tracing must therefore use target-level workload
+distributions rather than response length alone. The runner emits a compact progress record every
+100 items, validates and skips complete artifacts on resume, and aborts rather than reusing the
+model if a failed probe reports model-configuration leakage.
