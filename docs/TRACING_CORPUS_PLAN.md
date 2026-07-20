@@ -1,7 +1,7 @@
 # BonaFide tracing corpus plan
 
-Status: agreed next-stage plan after the Wave 2c resource sample. Prompt selection and target-span
-selection are deliberately deferred until the cheap probe path is implemented and validated.
+Status: probe mode is validated and the prompt-candidate corpus is selected. Target-span selection
+is the next stage and remains deliberately unfrozen.
 
 ## Objective
 
@@ -57,6 +57,89 @@ Sixteen to 32 targets must not be applied blindly to all remaining 235 responses
 for every remaining response would add 3,760 traces before accounting for the dense core, and the
 longest responses remain a memory risk. If eventual dataset-wide representation is valuable, use
 a later breadth tier with about four landmark targets per otherwise unselected response.
+
+## Selected Qwen Instruct prompt candidates
+
+The versioned selection artifact is
+`scripts/bonafide/selections/qwen3_4b_instruct_candidates.json`. It was generated from the exact
+cached `Qwen/Qwen3-4B-Instruct-2507` tokenizer revision
+`cdbee75f17c01a7cc42f958dc650907174af0554` and the checked dataset hash. It contains every
+deduplicated Qwen Instruct example with its source annotations, text and annotation hashes, exact
+chat-template token counts, eligibility decisions, diversity features, and selection membership.
+It is a prompt-candidate artifact, not a tracing manifest: no response target position is selected
+or frozen in it.
+
+Selection uses the maximum teacher-forced input length, `assistant prefix + complete response`,
+not response length alone. This matters because one response below 1,024 tokens has a 9,741-token
+prompt and would pass a response-only cap while being unsuitable for this run.
+
+| Candidate set | Rule | Examples | Role |
+| --- | --- | ---: | --- |
+| Dense inventory | response <=224 and total input <=512 | 25 | Keep all short examples available for workload/feature comparison |
+| Recommended dense core | explicit diversity review within the dense inventory | 9 | Proposed full-response traces; 1,666 independent targets |
+| Broad eligible inventory | disjoint from dense; response <=768 and total input <=1,024 | 108 | Full safe option pool |
+| Broad primary | deterministic coverage-first selection | 48 | Proposed sparse-context corpus |
+| Broad alternates | next coverage-first choices | 24 | Replacements or expansion after probes |
+| Broad remaining | other eligible examples | 36 | Retained for later expansion |
+
+The recommended dense core is:
+
+| Example ID | Response tokens | BonaFide labels | Hint format | Selection value |
+| --- | ---: | --- | --- | --- |
+| `bf-2ed391444282be41b715` | 145 | faithful step | sycophancy | Very short faithful hint commitment |
+| `bf-5f186d2224cd8a515ac9` | 159 | unfaithful CoT + step | error message | Short omission-and-commission anchor |
+| `bf-89f277b79caf27f7f6ad` | 163 | faithful CoT + step | metadata | Complete faithful acknowledgment contrast |
+| `bf-2981baca0442c8e8021f` | 170 | unfaithful CoT + step | sycophancy | Earliest annotated commission case in the short pool |
+| `bf-6145690c43f611af97cb` | 176 | unfaithful step | validator | Validator-format source fabrication |
+| `bf-c5acd500a6bcb288be61` | 195 | unfaithful step | unauthorized access | Different intervention channel and answer form |
+| `bf-d2b6d6de52232d107a08` | 213 | faithful CoT | security audit | CoT-level faithful control without a selected step span |
+| `bf-a430b14be4b2c3a58ac5` | 221 | faithful step + unfaithful CoT + step | security audit | Mixed labels and the only HLE dense example |
+| `bf-3b3dc26f6e91f4bc543a` | 224 | faithful CoT | unauthorized access | Faithful CoT contrast for an adversarial hint format |
+
+Together these nine examples cover all four nonexclusive BonaFide label types and all six hint
+formats. Their maximum complete teacher-forced input is 386 tokens. The 48 broad primaries use 48
+distinct base questions and have the following coverage before any internal probe measurements are
+used:
+
+- hint formats: 7--10 examples per format;
+- source datasets: 23 SimpleQA, 8 HLE, and 17 DDXPlus examples;
+- CoT phenotype: 17 faithful, 12 omission, 14 commission, and 5 both;
+- response-length strata: 18 at 225--384, 14 at 385--512, and 16 at 513--768 tokens;
+- nonexclusive labels: 3 faithful CoT, 14 faithful step, 18 unfaithful CoT, and 15 unfaithful step.
+
+There is a real scope boundary here. Every example under the safe dense and broad caps has
+`src_type=hinting`. The nine Qwen Instruct `complex_hints` responses containing explicit arithmetic
+bottleneck annotations begin at 1,428 response tokens / 1,576 total input tokens and place their
+annotated computations late in the response. They are excluded from this safe corpus rather than
+quietly weakening the memory policy. Thus this Qwen Instruct corpus directly tests diversionary
+hint/intervention structure. The separate Qwen Thinking Collatz anchor remains the better initial
+outright-bottleneck example and must not be mixed into the same neuron or cluster identity space.
+
+Regenerate the candidate selection deterministically with:
+
+```bash
+source scripts/chpc_env.sh
+"$UV_PROJECT_ENVIRONMENT/bin/python" -m scripts.bonafide.corpus_selection \
+  --csv BonaFide.csv \
+  --output scripts/bonafide/selections/qwen3_4b_instruct_candidates.json \
+  --model-id Qwen/Qwen3-4B-Instruct-2507 \
+  --revision cdbee75f17c01a7cc42f958dc650907174af0554 \
+  --tokenizer-path "$HF_HUB_CACHE/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554"
+```
+
+### Estimation job shape
+
+Probe estimation is scheduler-batched, not tensor-batched. A consolidated manifest wave may
+contain targets from many prompts. One Slurm job loads the model and tokenizer once, then probes
+the targets sequentially and writes each result as an independent atomic artifact. This removes
+the model-load and scheduler overhead without changing the single-target scientific contract.
+Completed artifacts are validated and skipped on a resumed job.
+
+The current runner already implements this resident-model loop. Its default terminal output is a
+compact wave summary; `--print-records` restores full per-target output and `--progress-every N`
+adds bounded progress records for a large wave. The later span-selection stage should therefore
+emit one consolidated dense-candidate probe wave and one consolidated broad-candidate probe wave,
+or split only by an explicit memory stratum. It should not emit one Slurm job per subsecond probe.
 
 ## Sparse-target selection policy
 
@@ -114,13 +197,12 @@ correlated and must not dominate clustering merely by count. Downstream clusteri
 - distinguish prompt-local clusters from clusters recurring across examples;
 - measure cluster and label stability across corpus-size checkpoints and prompt-level resamples.
 
-The immediate sequence is therefore:
+The remaining sequence is therefore:
 
-1. implement and validate `probe_only`;
-2. select the dense prompt set for label/intervention diversity;
-3. define annotation and structural candidate spans on a broader prompt pool;
-4. run probes and freeze sparse target selections with full provenance;
-5. trace in resumable waves and evaluate clustering incrementally.
+1. define exact annotation-to-token and structural candidate spans for the selected prompt pools;
+2. emit consolidated probe waves and run the cheap workload/feature estimator;
+3. freeze sparse target selections with full provenance;
+4. trace in resumable waves and evaluate clustering incrementally.
 
 ## Probe implementation and live validation
 
@@ -165,5 +247,6 @@ and probe mode now fails closed if `model.config` differs after CLJA. Existing p
 target-score provenance should not be used as a pristine-model score baseline; the early workload
 predictors used in the comparison above were unaffected and matched exactly.
 
-With this checkpoint complete, the next work is prompt diversity selection followed by candidate
-span construction and probe-based target selection. No prompt or span set is frozen yet.
+With this checkpoint and prompt selection complete, the next work is candidate span construction
+and probe-based target selection. Prompt-candidate membership is recorded in the versioned
+selection artifact; target spans and final trace membership are not yet frozen.
