@@ -15,6 +15,7 @@ import math
 import os
 import platform
 import resource
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -31,6 +32,10 @@ from circuits.tracing.trace import CircuitData, trace_teacher_forced_response
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from scripts.bonafide.manifest import SCHEMA_VERSION, resolve_pretrained_source
+from scripts.bonafide.execution_plan import (
+    sha256_file,
+    validate_execution_plan,
+)
 
 
 RUN_CONFIG_SCHEMA = "bonafide-trace-run-config/v1"
@@ -679,6 +684,10 @@ def run_wave(
     summary_jsonl: Path,
     only_artifact_id: str | None = None,
     dry_run: bool = False,
+    _model_bundle: tuple[Any, Any] | None = None,
+    _model_load_seconds: float = 0.0,
+    _code_revision: Mapping[str, Any] | None = None,
+    _runtime_environment: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Run exactly one explicitly selected wave, never subsequent waves."""
 
@@ -692,8 +701,8 @@ def run_wave(
     )
     model_config = config["model"]
     repo_root = Path(__file__).resolve().parents[2]
-    code_revision = collect_code_revision(repo_root)
-    runtime_environment = collect_runtime_environment()
+    code_revision = dict(_code_revision or collect_code_revision(repo_root))
+    runtime_environment = dict(_runtime_environment or collect_runtime_environment())
     if manifest["tokenizer"]["model_id"] != model_config["model_id"]:
         raise ValueError("manifest tokenizer model_id does not match run config model_id")
     if manifest["tokenizer"]["revision"] != model_config["revision"]:
@@ -766,9 +775,13 @@ def run_wave(
     if not planned:
         return results
 
-    load_started = time.perf_counter()
-    model, tokenizer = _load_model_and_tokenizer(config)
-    model_load_seconds = time.perf_counter() - load_started
+    if _model_bundle is None:
+        load_started = time.perf_counter()
+        model, tokenizer = _load_model_and_tokenizer(config)
+        model_load_seconds = time.perf_counter() - load_started
+    else:
+        model, tokenizer = _model_bundle
+        model_load_seconds = _model_load_seconds
     device = model_config["device"]
     uses_cuda = device.startswith("cuda")
     gpu_info = _gpu_info(device)
@@ -995,11 +1008,287 @@ def run_wave(
     return results
 
 
+def _ensure_execution_cohort(
+    *,
+    artifact_root: Path,
+    plan_sha256: str,
+    config: Mapping[str, Any],
+    code_revision: Mapping[str, Any],
+    runtime_environment: Mapping[str, Any],
+) -> Path:
+    """Atomically establish one numerical/software cohort for a plan."""
+
+    cohort = {
+        "schema_version": "bonafide-execution-cohort/v1",
+        "plan_sha256": plan_sha256,
+        "config_sha256": _sha256(config),
+        "code_revision": dict(code_revision),
+        "runtime_environment": dict(runtime_environment),
+    }
+    cohort_dir = artifact_root / "execution-cohorts"
+    cohort_dir.mkdir(parents=True, exist_ok=True)
+    path = cohort_dir / f"{plan_sha256}.json"
+    encoded = _canonical_json(cohort) + b"\n"
+    temporary = cohort_dir / f".{plan_sha256}.{os.getpid()}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    if not path.is_file():
+        raise RuntimeError(f"failed to establish execution cohort lock: {path}")
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid execution cohort lock: {path}") from error
+    if existing != cohort:
+        raise ValueError(
+            "execution cohort mismatch; refusing to mix config, code, or runtime environments"
+        )
+    return path
+
+
+def _compound_item_lookup(
+    manifest: Mapping[str, Any], refs: list[Mapping[str, Any]]
+) -> list[tuple[str, str]]:
+    available: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for wave in manifest.get("waves", []):
+        wave_id = wave.get("wave_id")
+        for item in wave.get("items", []):
+            key = (wave_id, item.get("artifact_id"))
+            if key in available:
+                raise ValueError(f"duplicate item in source manifest: {key}")
+            available[key] = item
+    selected: list[tuple[str, str]] = []
+    for ref in refs:
+        key = (ref.get("source_wave_id"), ref.get("source_artifact_id"))
+        if not all(isinstance(value, str) and value for value in key):
+            raise ValueError(f"invalid compound item reference: {key}")
+        if key in selected:
+            raise ValueError(f"duplicate compound assignment: {key}")
+        if key not in available:
+            raise ValueError(f"compound item is absent from source manifest: {key}")
+        selected.append(key)
+    if not selected:
+        raise ValueError("compound shard contains no work items")
+    return selected
+
+
+def run_compound_shard(
+    *,
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+    execution_plan: dict[str, Any],
+    task_index: int,
+    artifact_root: Path,
+    summary_jsonl: Path,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Run one explicit cross-wave routine shard with one resident model."""
+
+    validate_run_config(config)
+    validate_execution_plan(execution_plan, manifest=manifest, verify_sources=True)
+    source_manifest = execution_plan["sources"]["final_trace_manifest"]
+    if sha256_file(Path(source_manifest["path"])) != source_manifest["sha256"]:
+        raise ValueError("execution plan source manifest hash drift")
+    if isinstance(task_index, bool) or not isinstance(task_index, int):
+        raise ValueError("compound task index must be an integer")
+    tasks = execution_plan["tasks"]
+    if not 0 <= task_index < len(tasks):
+        raise ValueError(f"compound task index {task_index} is out of range")
+    task = tasks[task_index]
+    if task.get("task_index") != task_index:
+        raise ValueError("compound task index disagrees with execution plan")
+    task_kind = task["task_kind"]
+    source_index = task["source_index"]
+    if task_kind == "routine":
+        refs = execution_plan["sharding"]["shards"][source_index]["items"]
+    elif task_kind == "extreme_preflight":
+        refs = [execution_plan["extremes"]["preflight"][source_index]]
+    elif task_kind == "pathological_manual":
+        refs = [execution_plan["extremes"]["manual_pathological"][source_index]]
+    else:
+        raise ValueError(f"unsupported compound task kind {task_kind!r}")
+    selected = _compound_item_lookup(manifest, refs)
+    warmup_policy = normalized_trace_warmup(config)
+    warmup_waves = sorted(
+        {wave_id for wave_id, _ in selected if trace_warmup_applies(warmup_policy, wave_id)}
+    )
+    if warmup_waves:
+        raise ValueError(
+            "compound shards cannot contain warmup-applicable source waves: "
+            + ", ".join(warmup_waves)
+        )
+
+    # Complete the entire identity/resume preflight before loading the model.
+    repo_root = Path(__file__).resolve().parents[2]
+    code_revision = collect_code_revision(repo_root)
+    runtime_environment = collect_runtime_environment()
+    preflight: list[dict[str, Any]] = []
+    for wave_id, artifact_id in selected:
+        preflight.extend(
+            run_wave(
+                config=config,
+                manifest=manifest,
+                wave_id=wave_id,
+                artifact_root=artifact_root,
+                summary_jsonl=summary_jsonl,
+                only_artifact_id=artifact_id,
+                dry_run=True,
+                _code_revision=code_revision,
+                _runtime_environment=runtime_environment,
+            )
+        )
+    if dry_run:
+        return preflight
+    source_config = execution_plan["sources"]["trace_run_config"]
+    if _sha256(config) != source_config.get("canonical_sha256"):
+        raise ValueError("execution plan tracing-config identity disagrees with loaded config")
+    if _sha256(manifest) != source_manifest.get("canonical_sha256"):
+        raise ValueError("execution plan manifest identity disagrees with loaded manifest")
+    _ensure_execution_cohort(
+        artifact_root=artifact_root,
+        plan_sha256=execution_plan["plan_sha256"],
+        config=config,
+        code_revision=code_revision,
+        runtime_environment=runtime_environment,
+    )
+    expected_count = len(selected)
+    task_base = {
+        "task_index": task_index,
+        "task_kind": task_kind,
+        "plan_sha256": execution_plan["plan_sha256"],
+        "expected_item_count": expected_count,
+    }
+    _append_jsonl(
+        summary_jsonl,
+        {"record_type": "compound_task", "status": "task_started", **task_base},
+    )
+    has_planned = any(record.get("status") == "planned" for record in preflight)
+    if has_planned:
+        load_started = time.perf_counter()
+        model_bundle = _load_model_and_tokenizer(config)
+        model_load_seconds = time.perf_counter() - load_started
+    else:
+        skipped_count = sum(
+            record.get("status") == "skipped_complete" for record in preflight
+        )
+        complete_record = {
+            "record_type": "compound_task",
+            "status": "task_complete",
+            **task_base,
+            "completed_item_count": 0,
+            "skipped_item_count": skipped_count,
+            "remaining_item_count": 0,
+        }
+        _append_jsonl(summary_jsonl, complete_record)
+        return [*preflight, complete_record]
+    results: list[dict[str, Any]] = []
+    completed_count = 0
+    skipped_count = 0
+    signal_state = {"requested": False}
+    previous_handler = signal.getsignal(signal.SIGUSR1)
+
+    def request_stop(_signum, _frame) -> None:
+        signal_state["requested"] = True
+
+    signal.signal(signal.SIGUSR1, request_stop)
+    for selected_index, (wave_id, artifact_id) in enumerate(selected):
+        if signal_state["requested"]:
+            stop_record = {
+                "record_type": "compound_task",
+                "status": "task_stopped",
+                **task_base,
+                "stop_reason": "slurm_time_limit_signal",
+                "completed_item_count": completed_count,
+                "skipped_item_count": skipped_count,
+                "remaining_item_count": expected_count - selected_index,
+            }
+            _append_jsonl(summary_jsonl, stop_record)
+            signal.signal(signal.SIGUSR1, previous_handler)
+            raise RuntimeError(f"compound task {task_index} stopped after SIGUSR1")
+        try:
+            records = run_wave(
+                config=config,
+                manifest=manifest,
+                wave_id=wave_id,
+                artifact_root=artifact_root,
+                summary_jsonl=summary_jsonl,
+                only_artifact_id=artifact_id,
+                dry_run=False,
+                _model_bundle=model_bundle,
+                _model_load_seconds=model_load_seconds,
+                _code_revision=code_revision,
+                _runtime_environment=runtime_environment,
+            )
+        except Exception as error:
+            stop_record = {
+                "record_type": "compound_task",
+                "status": "task_stopped",
+                **task_base,
+                "source_wave_id": wave_id,
+                "source_artifact_id": artifact_id,
+                "stop_reason": "trace_error",
+                "completed_item_count": completed_count,
+                "skipped_item_count": skipped_count,
+                "remaining_item_count": expected_count - selected_index,
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+            _append_jsonl(summary_jsonl, stop_record)
+            signal.signal(signal.SIGUSR1, previous_handler)
+            raise
+        results.extend(records)
+        completed_count += sum(record.get("status") == "complete" for record in records)
+        skipped_count += sum(record.get("status") == "skipped_complete" for record in records)
+        stop = next((record for record in records if record.get("status") == "wave_stopped"), None)
+        if stop is not None:
+            shard_stop = {
+                "record_type": "compound_task",
+                "status": "task_stopped",
+                **task_base,
+                "source_wave_id": wave_id,
+                "source_artifact_id": artifact_id,
+                "stop_reason": stop["stop_reason"],
+                "completed_item_count": completed_count,
+                "skipped_item_count": skipped_count,
+                "remaining_item_count": expected_count - selected_index - 1,
+            }
+            _append_jsonl(summary_jsonl, shard_stop)
+            results.append(shard_stop)
+            signal.signal(signal.SIGUSR1, previous_handler)
+            raise RuntimeError(
+                f"compound task {task_index} stopped: {stop['stop_reason']} at {artifact_id}"
+            )
+    signal.signal(signal.SIGUSR1, previous_handler)
+    complete_record = {
+        "record_type": "compound_task",
+        "status": "task_complete",
+        **task_base,
+        "completed_item_count": completed_count,
+        "skipped_item_count": skipped_count,
+        "remaining_item_count": 0,
+    }
+    _append_jsonl(summary_jsonl, complete_record)
+    results.append(complete_record)
+    return results
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--wave", required=True, help="One exact wave_id; no later wave is implied")
+    selector = parser.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--wave", help="One exact wave_id; no later wave is implied")
+    selector.add_argument("--execution-plan", type=Path, help="Validated compound execution plan")
+    parser.add_argument("--execution-task-index", type=int)
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--summary-jsonl", type=Path)
     parser.add_argument("--only-artifact-id")
@@ -1012,16 +1301,40 @@ def main() -> None:
     config = load_json(args.config)
     manifest = load_json(args.manifest)
     artifact_root = args.artifact_root or Path(config.get("artifact_root", "results/bonafide"))
-    summary_jsonl = args.summary_jsonl or artifact_root / "benchmark-summary.jsonl"
-    results = run_wave(
-        config=config,
-        manifest=manifest,
-        wave_id=args.wave,
-        artifact_root=artifact_root,
-        summary_jsonl=summary_jsonl,
-        only_artifact_id=args.only_artifact_id,
-        dry_run=args.dry_run,
-    )
+    if args.execution_plan is not None:
+        if args.execution_task_index is None:
+            raise ValueError("--execution-plan requires --execution-task-index")
+        if args.only_artifact_id is not None:
+            raise ValueError("--only-artifact-id is only valid with legacy --wave")
+        execution_plan = load_json(args.execution_plan)
+        summary_jsonl = args.summary_jsonl or (
+            artifact_root
+            / "execution-summaries"
+            / execution_plan["plan_sha256"]
+            / f"task-{args.execution_task_index:02d}.jsonl"
+        )
+        results = run_compound_shard(
+            config=config,
+            manifest=manifest,
+            execution_plan=execution_plan,
+            task_index=args.execution_task_index,
+            artifact_root=artifact_root,
+            summary_jsonl=summary_jsonl,
+            dry_run=args.dry_run,
+        )
+    else:
+        if args.execution_task_index is not None:
+            raise ValueError("--execution-task-index requires --execution-plan")
+        summary_jsonl = args.summary_jsonl or artifact_root / "benchmark-summary.jsonl"
+        results = run_wave(
+            config=config,
+            manifest=manifest,
+            wave_id=args.wave,
+            artifact_root=artifact_root,
+            summary_jsonl=summary_jsonl,
+            only_artifact_id=args.only_artifact_id,
+            dry_run=args.dry_run,
+        )
     print(json.dumps(results, indent=2, ensure_ascii=False))
 
 
