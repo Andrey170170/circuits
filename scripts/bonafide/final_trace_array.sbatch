@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=bonafide-final-traces
-#SBATCH --output=slurm-%x-%A_%a.out
+#SBATCH --output=logs/slurm-%x-%A_%a.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -86,7 +86,10 @@ GPU_MONITOR=/uufs/chpc.utah.edu/sys/installdir/chpcscripts/gpu/gpu-monitor.sh
 monitor_pid=""
 runner_pid=""
 if [[ -x "$GPU_MONITOR" ]]; then
-    "$GPU_MONITOR" &
+    (
+        cd "${REPO_ROOT}/logs"
+        exec "$GPU_MONITOR"
+    ) &
     monitor_pid=$!
 fi
 forward_usr1() {

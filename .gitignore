@@ -4,7 +4,8 @@
 # data/ (keep committed datasets, ignore generated data)
 notebooks/
 results/
-logs/
+logs/*
+!logs/.gitkeep
 outputs/
 .uv-cache/
 slurm-*.out
