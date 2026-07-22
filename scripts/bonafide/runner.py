@@ -320,11 +320,47 @@ def collect_runtime_environment() -> dict[str, Any]:
             versions[distribution] = importlib.metadata.version(distribution)
         except importlib.metadata.PackageNotFoundError:
             versions[distribution] = None
+    gpu_runtime: dict[str, Any] | None = None
+    if torch.cuda.is_available():
+        devices = []
+        for index in range(torch.cuda.device_count()):
+            properties = torch.cuda.get_device_properties(index)
+            devices.append(
+                {
+                    "index": index,
+                    "name": properties.name,
+                    "total_memory_bytes": properties.total_memory,
+                    "compute_capability": [properties.major, properties.minor],
+                }
+            )
+        driver_versions: list[str] = []
+        try:
+            completed = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=driver_version",
+                    "--format=csv,noheader",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            driver_versions = sorted(
+                {line.strip() for line in completed.stdout.splitlines() if line.strip()}
+            )
+        except (OSError, subprocess.CalledProcessError):
+            driver_versions = []
+        gpu_runtime = {
+            "visible_device_count": len(devices),
+            "devices": devices,
+            "driver_versions": driver_versions,
+        }
     return {
         "python": platform.python_version(),
         "platform": platform.platform(),
         "packages": versions,
         "torch_cuda_version": torch.version.cuda,
+        "gpu_runtime": gpu_runtime,
     }
 
 
@@ -1267,7 +1303,44 @@ def run_compound_shard(
             raise RuntimeError(
                 f"compound task {task_index} stopped: {stop['stop_reason']} at {artifact_id}"
             )
+        failed = next(
+            (record for record in records if record.get("status") in {"error", "oom"}),
+            None,
+        )
+        if failed is not None:
+            stop_record = {
+                "record_type": "compound_task",
+                "status": "task_stopped",
+                **task_base,
+                "source_wave_id": wave_id,
+                "source_artifact_id": artifact_id,
+                "stop_reason": "failed_item_without_stop_gate",
+                "completed_item_count": completed_count,
+                "skipped_item_count": skipped_count,
+                "remaining_item_count": expected_count - completed_count - skipped_count,
+                "error_type": failed.get("error_type"),
+                "error": failed.get("error"),
+            }
+            _append_jsonl(summary_jsonl, stop_record)
+            results.append(stop_record)
+            signal.signal(signal.SIGUSR1, previous_handler)
+            raise RuntimeError(
+                f"compound task {task_index} contains failed item {artifact_id}"
+            )
     signal.signal(signal.SIGUSR1, previous_handler)
+    if completed_count + skipped_count != expected_count:
+        stop_record = {
+            "record_type": "compound_task",
+            "status": "task_stopped",
+            **task_base,
+            "stop_reason": "incomplete_item_accounting",
+            "completed_item_count": completed_count,
+            "skipped_item_count": skipped_count,
+            "remaining_item_count": expected_count - completed_count - skipped_count,
+        }
+        _append_jsonl(summary_jsonl, stop_record)
+        results.append(stop_record)
+        raise RuntimeError(f"compound task {task_index} has incomplete item accounting")
     complete_record = {
         "record_type": "compound_task",
         "status": "task_complete",

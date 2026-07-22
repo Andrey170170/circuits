@@ -42,14 +42,30 @@ fi
 
 readarray -t plan_fields < <(
     "$PYTHON_BIN" -c \
-        'import json,sys; p=json.load(open(sys.argv[1])); print(p["sources"]["final_trace_manifest"]["path"]); print(p["sources"]["trace_run_config"]["path"]); print(p["plan_sha256"]); print(p["tasks"][int(sys.argv[2])]["task_kind"])' \
+        'import json,sys; p=json.load(open(sys.argv[1])); print(p["sources"]["final_trace_manifest"]["path"]); print(p["sources"]["trace_run_config"]["path"]); print(p["plan_sha256"]); print(p["tasks"][int(sys.argv[2])]["task_kind"]); print(p["sharding"]["routine_shard_count"])' \
         "$EXECUTION_PLAN" "$SLURM_ARRAY_TASK_ID"
 )
 MANIFEST="${plan_fields[0]}"
 CONFIG="${CONFIG:-${plan_fields[1]}}"
 PLAN_SHA256="${plan_fields[2]}"
 TASK_KIND="${plan_fields[3]}"
+ROUTINE_SHARD_COUNT="${plan_fields[4]}"
 
+if [[ "${ALLOW_EXTREMES:-0}" != "1" ]]; then
+    if [[ "$TASK_KIND" != "routine" ]]; then
+        echo "The default launcher accepts routine tasks only; got ${TASK_KIND}." >&2
+        echo "Set ALLOW_EXTREMES=1 only for a separately reviewed extreme submission." >&2
+        exit 2
+    fi
+    expected_max=$((ROUTINE_SHARD_COUNT - 1))
+    if [[ "${SLURM_ARRAY_TASK_MIN}" != "0" ]] || \
+       [[ "${SLURM_ARRAY_TASK_MAX}" != "$expected_max" ]] || \
+       [[ "${SLURM_ARRAY_TASK_COUNT}" != "$ROUTINE_SHARD_COUNT" ]] || \
+       [[ "${SLURM_ARRAY_TASK_STEP}" != "1" ]]; then
+        echo "Default array shape must be 0-${expected_max} with step 1 and ${ROUTINE_SHARD_COUNT} tasks." >&2
+        exit 2
+    fi
+fi
 if [[ "$TASK_KIND" == "pathological_manual" ]] && [[ "${ALLOW_PATHOLOGICAL:-0}" != "1" ]]; then
     echo "Task ${SLURM_ARRAY_TASK_ID} is pathological_manual; set ALLOW_PATHOLOGICAL=1 explicitly." >&2
     exit 2
@@ -68,16 +84,24 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
 GPU_MONITOR=/uufs/chpc.utah.edu/sys/installdir/chpcscripts/gpu/gpu-monitor.sh
 monitor_pid=""
+runner_pid=""
 if [[ -x "$GPU_MONITOR" ]]; then
     "$GPU_MONITOR" &
     monitor_pid=$!
 fi
+forward_usr1() {
+    echo "Forwarding Slurm USR1 warning to tracing runner pid=${runner_pid}." >&2
+    if [[ -n "$runner_pid" ]] && kill -0 "$runner_pid" 2>/dev/null; then
+        kill -USR1 "$runner_pid"
+    fi
+}
 cleanup() {
     if [[ -n "$monitor_pid" ]]; then
         kill "$monitor_pid" 2>/dev/null || true
         wait "$monitor_pid" 2>/dev/null || true
     fi
 }
+trap forward_usr1 USR1
 trap cleanup EXIT
 
 "$PYTHON_BIN" -m scripts.bonafide.runner \
@@ -86,4 +110,14 @@ trap cleanup EXIT
     --execution-plan "$EXECUTION_PLAN" \
     --execution-task-index "$SLURM_ARRAY_TASK_ID" \
     --artifact-root "$ARTIFACT_ROOT" \
-    --summary-jsonl "$SUMMARY_JSONL"
+    --summary-jsonl "$SUMMARY_JSONL" &
+runner_pid=$!
+set +e
+wait "$runner_pid"
+runner_status=$?
+if [[ "$runner_status" -ge 128 ]] && kill -0 "$runner_pid" 2>/dev/null; then
+    wait "$runner_pid"
+    runner_status=$?
+fi
+set -e
+exit "$runner_status"

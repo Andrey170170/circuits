@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import torch
 
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.trace import CircuitData
@@ -338,6 +339,68 @@ def test_compound_generic_failure_records_terminal_task_event(
     ]
     assert records[-1]["stop_reason"] == "trace_error"
     assert records[-1]["remaining_item_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("failure", "config_update", "expected_status"),
+    [
+        (RuntimeError("continued error"), {"continue_on_error": True}, "error"),
+        (
+            torch.cuda.OutOfMemoryError("permissive OOM"),
+            {"wave_limits": {"stop_on_oom": False}},
+            "oom",
+        ),
+    ],
+)
+def test_compound_never_completes_with_permissive_failed_items(
+    tmp_path: Path,
+    monkeypatch,
+    failure: Exception,
+    config_update: dict,
+    expected_status: str,
+) -> None:
+    import scripts.bonafide.runner as runner_module
+
+    config, manifest, plan_path, _ = _fixture(tmp_path)
+    config.update(config_update)
+    plan = json.loads(plan_path.read_text())
+    config_path = Path(plan["sources"]["trace_run_config"]["path"])
+    _write_json(config_path, config)
+    plan["sources"]["trace_run_config"]["sha256"] = sha256_file(config_path)
+    plan["sources"]["trace_run_config"]["canonical_sha256"] = hashlib.sha256(
+        canonical_json(config)
+    ).hexdigest()
+    _rehash(plan)
+    monkeypatch.setattr(runner_module, "collect_code_revision", lambda _root: {"revision": "same"})
+    monkeypatch.setattr(runner_module, "collect_runtime_environment", lambda: {"runtime": "same"})
+    monkeypatch.setattr(
+        runner_module,
+        "_load_model_and_tokenizer",
+        lambda _config: (object(), object()),
+    )
+
+    def fail_trace(**_kwargs):
+        raise failure
+
+    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", fail_trace)
+    summary = tmp_path / "summary.jsonl"
+    with pytest.raises(RuntimeError, match="contains failed item"):
+        run_compound_shard(
+            config=config,
+            manifest=manifest,
+            execution_plan=plan,
+            task_index=0,
+            artifact_root=tmp_path / "artifacts",
+            summary_jsonl=summary,
+        )
+
+    records = [json.loads(line) for line in summary.read_text().splitlines()]
+    assert [record["status"] for record in records] == [
+        "task_started",
+        expected_status,
+        "task_stopped",
+    ]
+    assert records[-1]["stop_reason"] == "failed_item_without_stop_gate"
 
 
 def test_compound_gate_writes_task_stop_and_exits_nonzero(tmp_path: Path, monkeypatch) -> None:
