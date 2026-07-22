@@ -389,6 +389,86 @@ A100-hours, almost 900 times beyond the training edge range, and graph materiali
 scale much worse. Run the four isolated waves as explicit preflights; the routine corpus is ready
 without waiting for them.
 
-No full-trace wave is launched by this selection checkpoint. The next decision is whether to run
-the four isolated preflights first, or begin the 2,591-target routine corpus and test the extreme
-source-commitment token separately.
+## Frozen compound execution plan
+
+No full trace was launched while freezing the selection. The separate operational plan is now
+`scripts/bonafide/manifests/qwen3_4b_instruct_final_execution_plan.json` (file SHA-256
+`bbd4df3593f79ec83c2a84947cd6087f103aff340efebc73525d801594986402`; logical plan SHA-256
+`9a3788a3e8f500dd458b8e890fb287f1a7375f28fd3798bb129f62ef70b2fcc7`). It references rather
+than rewrites the 2,595 frozen scientific work items and is byte-for-byte reproducible from four
+hash-bound inputs:
+
+- the final trace manifest;
+- the exact Qwen trace run config;
+- the 72 completed Wave 2c instrumented traces used to fit the scheduling heuristic;
+- the 4,131-target refinement summary used to attach workload predictors.
+
+The ordinary least-squares scheduling model uses candidate MLP edges, planned Jacobian chunks,
+and input tokens. Its in-sample R-squared is 0.877. This is a load-balancing heuristic, not a
+runtime guarantee: the training data stop at 91,410 candidate edges and 591 chunks, so every
+isolated extreme is an extrapolation.
+
+| Array tasks | Kind | Targets per task | Estimated A100 time per task | Default launch policy |
+| --- | --- | ---: | ---: | --- |
+| 0--11 | Routine LPT shards | 215--218 | 2.640--2.641 h | One `0-11%4` array, 6 h each |
+| 12 | 850,981-edge preflight | 1 | 0.216 h | Submit and inspect separately |
+| 13 | 1,966,660-edge preflight | 1 | 0.494 h | Submit after the prior result |
+| 14 | 2,816,921-edge preflight | 1 | 0.689 h | Submit after the prior result |
+| 15 | 81,461,593-edge pathological target | 1 | 19.020 h | Manual opt-in only; do not launch under the current 12 h partition limit |
+
+Routine targets are assigned by deterministic longest-processing-time-first balancing and execute
+high-cost-first within each task. The four manifest-marked extremes cannot enter the routine
+array. Task 15 additionally requires `ALLOW_PATHOLOGICAL=1`; this guard is not evidence that the
+target will fit in memory or finish before the partition limit.
+
+The compound runner preserves the scientific artifact contract:
+
+- validate the plan, every source hash, all target references, and every existing artifact before
+  loading the model;
+- load one resident model per non-empty array task, then process independent targets at batch size
+  one without merging graphs;
+- retain each target's original wave ID, artifact identity, and output directory;
+- checkpoint at one atomic compact artifact per target and checksum-validate it on resume;
+- keep one append-only summary per task attempt, never one JSONL shared by array writers;
+- establish an atomic plan-level cohort lock over config, code revision, and runtime environment;
+- stop the whole task and return nonzero after OOM, a resource gate, an ordinary error, or the
+  five-minute Slurm `SIGUSR1` warning.
+
+Regenerate and byte-compare the plan with:
+
+```bash
+.venv/bin/python -m scripts.bonafide.execution_plan \
+  --manifest scripts/bonafide/manifests/qwen3_4b_instruct_final_traces.json \
+  --config scripts/bonafide/configs/qwen3_4b_instruct.json \
+  --historical-summary /scratch/general/vast/u1653998/circuits/results/bonafide/performance/wave2c-instrumented-summary.jsonl \
+  --refinement-summary /scratch/general/vast/u1653998/circuits/results/bonafide/probes/prompt-refinement-v1/probe-summary.jsonl \
+  --output /tmp/qwen3_4b_instruct_final_execution_plan.json
+cmp scripts/bonafide/manifests/qwen3_4b_instruct_final_execution_plan.json \
+  /tmp/qwen3_4b_instruct_final_execution_plan.json
+```
+
+Inspect any task without loading the model or writing a run summary:
+
+```bash
+PLAN="$PWD/scripts/bonafide/manifests/qwen3_4b_instruct_final_execution_plan.json"
+.venv/bin/python -m scripts.bonafide.runner \
+  --config scripts/bonafide/configs/qwen3_4b_instruct.json \
+  --manifest scripts/bonafide/manifests/qwen3_4b_instruct_final_traces.json \
+  --execution-plan "$PLAN" \
+  --execution-task-index 0 \
+  --artifact-root /scratch/general/vast/u1653998/circuits/results/bonafide/final-traces \
+  --dry-run
+```
+
+The routine launch, after inspection, is:
+
+```bash
+PLAN="$PWD/scripts/bonafide/manifests/qwen3_4b_instruct_final_execution_plan.json"
+sbatch --export=ALL,EXECUTION_PLAN="$PLAN" scripts/bonafide/final_trace_array.sbatch
+```
+
+The launcher defaults to `--array=0-11%4`, one A100 80GB, 64GB host RAM, and six hours on the
+lab-owned `marasovic-gpu-np` partition. Tasks 12--14 should be submitted one at a time for genuine
+stage-gated inspection with `ALLOW_EXTREMES=1`; an array concurrency cap of one does not itself
+guarantee index order. A Notchpeak `sbatch --test-only` check accepted the frozen routine array and
+resolved it to `notch369`; the reported test identifier was confirmed absent from the live queue.
