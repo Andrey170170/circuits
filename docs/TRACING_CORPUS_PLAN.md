@@ -472,3 +472,31 @@ lab-owned `marasovic-gpu-np` partition. Tasks 12--14 should be submitted one at 
 stage-gated inspection with `ALLOW_EXTREMES=1`; an array concurrency cap of one does not itself
 guarantee index order. A Notchpeak `sbatch --test-only` check accepted the frozen routine array and
 resolved it to `notch369`; the reported test identifier was confirmed absent from the live queue.
+
+## Completed routine and extreme tracing
+
+The routine array ran as Notchpeak job `14112800` on 2026-07-21--22. All 12 tasks exited `0:0`
+and produced 2,591 `complete` target records. A byte-level audit found exactly 2,591 compact trace
+directories and verified every payload size and SHA-256 against its manifest.
+
+Tasks 12--14 were then run one at a time on 2026-07-22, advancing only after the preceding Slurm
+record, task summary, CUDA headroom, and payload checksum passed inspection:
+
+| Task | Candidate edges | Job | Slurm elapsed | Trace time | Peak CUDA reserved | Headroom | Compact graph |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 12 | 850,981 | `14128628_12` | 4m41s | 240.1s | 12.90 GiB | 66.35 GiB | 238 nodes / 5,897 edges |
+| 13 | 1,966,660 | `14128662_13` | 16m21s | 949.3s | 31.07 GiB | 48.17 GiB | 647 nodes / 5,038 edges |
+| 14 | 2,816,921 | `14128947_14` | 12m40s | 718.0s | 20.23 GiB | 59.01 GiB | 323 nodes / 3,996 edges |
+
+All three jobs exited `0:0`, wrote `task_complete` with one completed item and zero remaining, and
+passed post-run payload checksum validation. The complete corpus therefore contains 2,594 compact
+traces. Runtime is visibly not monotonic in candidate-edge count alone; input length, retained
+features, and planned Jacobian chunks remain important workload dimensions.
+
+The execution cohort is bound to commit `32f1084`. Because `main` had subsequently advanced for a
+log-only cleanup, tasks 12--14 ran from a clean detached worktree at the original commit; its Git
+commit, dirty-status hash, and tracing source-tree hash exactly matched the existing cohort lock.
+
+Task 15 (81,461,593 candidate edges) was deliberately not submitted. It has no execution summary
+or artifact, still requires both explicit manual opt-ins, and should remain excluded until its
+memory/runtime strategy is reconsidered separately.
