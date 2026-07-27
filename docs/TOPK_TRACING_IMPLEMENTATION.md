@@ -75,6 +75,12 @@ The GPU launcher is `scripts/bonafide/topk_tracing.sbatch`. It requires an absol
 manifest and a lane-specific absolute `UV_PROJECT_ENVIRONMENT`. It is limited to an explicitly
 reviewed parity or C0 wave; it does not authorize C1, C2, or a full corpus.
 
+`scripts/bonafide/topk_rank_screen.sbatch` is a discovery-only selection-evidence launcher. It
+loads the frozen model once, measures observed-token rank for low-probability discovery targets,
+and records whether the union policy would realize width five or six. It does not construct
+graphs or save scientific trace artifacts. C0/C1 manifests should use its measured ranks rather
+than infer rank from the stored observed-token probability.
+
 ## Gate workflow
 
 1. Freeze an observed-token `k=1` manifest over a representative discovery-only set.
