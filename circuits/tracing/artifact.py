@@ -17,6 +17,11 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from circuits.tracing.candidates import (
+    CANDIDATE_POLICY_VERSION,
+    JOINT_OBJECTIVE_VERSION,
+    build_joint_objective,
+)
 from circuits.tracing.trace import CircuitData, TopKPositionTrace
 
 SCHEMA_VERSION = "adag.compact-trace.v1"
@@ -201,6 +206,15 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
         raise ValueError("top-k candidate token IDs must be unique")
     if any(candidate.full_distribution_rank < 1 for candidate in candidates):
         raise ValueError("top-k candidate ranks must be one-based positive integers")
+    if len({candidate.full_distribution_rank for candidate in candidates}) != (
+        candidate_count
+    ):
+        raise ValueError("top-k candidate ranks must be unique")
+    if (
+        trace.candidate_selection.policy_version
+        != CANDIDATE_POLICY_VERSION
+    ):
+        raise ValueError("top-k candidate policy version is unsupported")
     for candidate in candidates:
         if not math.isfinite(candidate.logit) or not math.isfinite(
             candidate.probability
@@ -217,12 +231,26 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
     if policy_id == "observed_token":
         if candidate_count != 1 or not candidates[0].is_observed:
             raise ValueError("observed_token artifacts require one observed candidate")
+    elif policy_id == "specified_token":
+        if candidate_count != 1:
+            raise ValueError("specified_token artifacts require one candidate")
     elif policy_id == "observed_plus_top4_alternatives":
         if candidate_count != 5 or not candidates[0].is_observed:
             raise ValueError(
                 "observed_plus_top4_alternatives requires observed candidate zero"
             )
         alternatives = list(candidates[1:])
+        expected_ranks = [
+            rank
+            for rank in range(1, 6)
+            if rank != trace.candidate_selection.observed_token_rank
+        ][:4]
+        if [candidate.full_distribution_rank for candidate in alternatives] != (
+            expected_ranks
+        ):
+            raise ValueError(
+                "top-k alternatives do not have the expected full-distribution ranks"
+            )
         if alternatives != sorted(
             alternatives, key=lambda candidate: (-candidate.logit, candidate.token_id)
         ):
@@ -232,16 +260,36 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
             candidates, key=lambda candidate: (-candidate.logit, candidate.token_id)
         ):
             raise ValueError("model_top5 candidates are not deterministically ordered")
+        if [candidate.full_distribution_rank for candidate in candidates] != list(
+            range(1, 6)
+        ):
+            raise ValueError("model_top5 candidates must have ranks one through five")
     else:
         raise ValueError(f"unsupported top-k candidate policy: {policy_id!r}")
 
     observed_token_id = trace.candidate_selection.observed_token_id
+    if trace.candidate_selection.observed_token_rank < 1:
+        raise ValueError("top-k observed token rank must be positive")
+    observed_candidates = [
+        candidate for candidate in candidates if candidate.is_observed
+    ]
+    if observed_candidates and (
+        observed_candidates[0].full_distribution_rank
+        != trace.candidate_selection.observed_token_rank
+    ):
+        raise ValueError("top-k observed token rank is inconsistent")
     if data.target_logits != [[observed_token_id]]:
         raise ValueError("top-k response target must remain the observed token")
     if provenance.get("token_id") != observed_token_id:
         raise ValueError("top-k observed token disagrees with target provenance")
     if len(trace.joint_objective.candidate_weights) != candidate_count:
         raise ValueError("top-k joint objective width does not match candidates")
+    if trace.joint_objective.objective_version != JOINT_OBJECTIVE_VERSION:
+        raise ValueError("top-k joint objective version is unsupported")
+    if trace.joint_objective != build_joint_objective(
+        trace.joint_objective.objective_id, candidates
+    ):
+        raise ValueError("top-k joint objective contract is inconsistent")
     if any(
         not math.isfinite(weight)
         for weight in trace.joint_objective.candidate_weights
@@ -249,6 +297,11 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
         raise ValueError("top-k joint objective weights must be finite")
     if trace.candidate_contribution_schema.get("width") != candidate_count:
         raise ValueError("top-k contribution schema width does not match candidates")
+    if (
+        trace.candidate_contribution_schema.get("schema_id")
+        != "adag.candidate-contribution.raw-logit.v1"
+    ):
+        raise ValueError("top-k contribution schema ID is unsupported")
     if data.trace_metadata.get("candidate_trace_contract") != trace.contract_dict():
         raise ValueError("top-k payload contract disagrees with trace metadata")
 

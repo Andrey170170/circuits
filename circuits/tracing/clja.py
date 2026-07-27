@@ -370,7 +370,13 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     # compute per-batch item absolute attribution thresholds
     absolute_attribution_threshold = None
     if percentage_threshold is not None:
-        absolute_attribution_threshold = goal_value * percentage_threshold
+        threshold_goal = (
+            goal_value.abs()
+            if candidate_axis is not None
+            and candidate_axis.use_absolute_goal_for_percentage_threshold
+            else goal_value
+        )
+        absolute_attribution_threshold = threshold_goal * percentage_threshold
 
     # before calculating anything, we get important neurons globally (same as original)
     with instrumentation_stage(instrumentation, "important_mask_selection"):

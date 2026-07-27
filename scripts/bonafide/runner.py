@@ -509,6 +509,16 @@ def validate_runtime_topk_trace_against_item(
         raise ValueError(
             "runtime candidate selection observed token does not match manifest"
         )
+    if trace.candidate_selection.policy_id == "specified_token":
+        expected_candidate = item.get("specified_candidate_token_id")
+        if (
+            len(trace.candidate_selection.candidates) != 1
+            or trace.candidate_selection.candidates[0].token_id
+            != expected_candidate
+        ):
+            raise ValueError(
+                "runtime specified candidate does not match frozen work item"
+            )
 
     expected_fields = {
         "trace_family_id": trace.trace_family_id,

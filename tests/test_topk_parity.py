@@ -66,6 +66,22 @@ def test_observed_token_k1_parity_reports_numerical_drift() -> None:
         report.require_pass()
 
 
+def test_observed_token_k1_parity_tolerates_provenance_score_roundoff() -> None:
+    legacy, candidate = _legacy_and_candidate()
+    candidate.circuit_data.target_logit_values[0][0] += 5e-7
+    candidate.circuit_data.target_provenance[0]["logit"] = (
+        candidate.circuit_data.target_logit_values[0][0]
+    )
+    candidate.circuit_data.target_logit_probs[0][0] += 5e-7
+    candidate.circuit_data.target_provenance[0]["probability"] = (
+        candidate.circuit_data.target_logit_probs[0][0]
+    )
+
+    report = compare_observed_token_k1(legacy, candidate)
+
+    assert report.passed is True
+
+
 def test_observed_token_k1_parity_rejects_wrong_policy() -> None:
     legacy, candidate = _legacy_and_candidate()
     object.__setattr__(candidate.candidate_selection, "policy_id", "model_top5")

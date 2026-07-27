@@ -13,15 +13,6 @@ from tests.test_teacher_forced_trace import _topk_trace
 def _manifest() -> dict:
     source_manifest = _single_item_manifest()
     item = deepcopy(source_manifest["waves"][0]["items"][0])
-    item["target_selection"]["response_token_positions"] = [
-        item["target_selection"]["response_token_positions"][0]
-    ]
-    item["target_selection"]["width"] = 1
-    item["target_selection"].pop("sampling", None)
-    item["objective"] = {
-        "name": "single_selected_logit",
-        "benchmark_only_multi_target": False,
-    }
     return {
         "schema_version": "bonafide-topk-trace-manifest/v1",
         "phase": "observed_k1_parity",
@@ -34,10 +25,11 @@ def _manifest() -> dict:
             "joint_objective_version": "1",
         },
         "source": {
+            "width1_manifest_path": "scripts/bonafide/manifests/source.json",
             "width1_manifest_sha256": "a" * 64,
-            "model_id": "Qwen/Qwen3-4B-Instruct-2507",
-            "model_revision": "revision",
-            "tokenizer_revision": "revision",
+            "model_id": "fake/model",
+            "model_revision": "exact-revision",
+            "tokenizer_revision": "exact-revision",
             "chat_template_sha256": "b" * 64,
         },
         "waves": [
@@ -67,6 +59,7 @@ def test_topk_manifest_rejects_multi_position_work_item() -> None:
     item = manifest["waves"][0]["items"][0]
     item["target_selection"]["response_token_positions"] = [0, 1]
     item["target_selection"]["width"] = 2
+    item["target_selection"].pop("sampling", None)
 
     with pytest.raises(ValueError, match="one response target"):
         validate_topk_manifest(manifest)
@@ -74,7 +67,7 @@ def test_topk_manifest_rejects_multi_position_work_item() -> None:
 
 def test_topk_discovery_phases_reject_holdout() -> None:
     manifest = _manifest()
-    manifest["waves"][0]["corpus_role"] = "confirmatory_holdout"
+    manifest["waves"][0]["corpus_role"] = "broad_confirmatory_holdout"
 
     with pytest.raises(ValueError, match="cannot include confirmatory"):
         validate_topk_manifest(manifest)
@@ -94,11 +87,27 @@ def test_model_top5_rejects_observed_contrastive_objective() -> None:
         validate_topk_manifest(manifest)
 
 
+def test_specified_token_manifest_requires_fixed_candidate_id() -> None:
+    manifest = _manifest()
+    manifest["trace_family"].update(
+        {
+            "candidate_policy_id": "specified_token",
+            "candidate_count": 1,
+        }
+    )
+
+    with pytest.raises(ValueError, match="specified_candidate_token_id"):
+        validate_topk_manifest(manifest)
+    manifest["waves"][0]["items"][0]["specified_candidate_token_id"] = 123
+    validate_topk_manifest(manifest)
+
+
 def test_runtime_topk_validation_binds_source_target_and_trace_family() -> None:
     manifest = _manifest()
     item = manifest["waves"][0]["items"][0]
     item["target_selection"]["response_token_positions"] = [0]
     item["target_selection"]["final_target_token_id"] = 40
+    item["target_selection"].pop("sampling", None)
     trace = _topk_trace()
     trace.circuit_data.trace_metadata["response_token_count"] = item[
         "response_token_count"
@@ -121,6 +130,7 @@ def test_runtime_topk_validation_rejects_policy_drift() -> None:
     item = manifest["waves"][0]["items"][0]
     item["target_selection"]["response_token_positions"] = [0]
     item["target_selection"]["final_target_token_id"] = 40
+    item["target_selection"].pop("sampling", None)
     trace = _topk_trace()
     trace.circuit_data.trace_metadata["response_token_count"] = item[
         "response_token_count"

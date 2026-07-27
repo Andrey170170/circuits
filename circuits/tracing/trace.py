@@ -1257,6 +1257,7 @@ def trace_teacher_forced_candidates(
     *,
     candidate_policy_id: CandidatePolicyId,
     candidate_count: int,
+    specified_candidate_token_id: int | None = None,
     joint_objective_id: JointObjectiveId = "raw_logit_sum",
     trace_family_id: str = TOPK_TRACE_FAMILY_ID,
     label: str = "teacher_forced_topk",
@@ -1294,6 +1295,7 @@ def trace_teacher_forced_candidates(
             policy_id=candidate_policy_id,
             candidate_count=candidate_count,
             decode_token=lambda token_id: tokenizer.decode([token_id]),
+            specified_token_id=specified_candidate_token_id,
         )
         objective = build_joint_objective(
             joint_objective_id, selection.candidates
@@ -1315,6 +1317,10 @@ def trace_teacher_forced_candidates(
             tuple(candidate.token_id for candidate in selection.candidates),
         ),
         objective_weights=objective.candidate_weights,
+        use_absolute_goal_for_percentage_threshold=(
+            objective.percentage_threshold_reference
+            == "absolute_joint_objective_magnitude"
+        ),
     )
     with instrumentation_stage(instrumentation, "clja_total"):
         nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(

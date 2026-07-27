@@ -127,6 +127,7 @@ def test_low_level_candidate_axis_is_distinct_from_target_positions(
 
     captured_attribution = {}
     captured_graph = {}
+    captured_mask = {}
     layers, tokens, neurons = 1, 4, 3
 
     def fake_attribution(
@@ -141,7 +142,7 @@ def test_low_level_candidate_axis_is_distinct_from_target_positions(
         return (
             torch.zeros((layers, 1, tokens, neurons)),
             torch.zeros((1, tokens)),
-            torch.tensor(2.0),
+            torch.tensor(-2.0),
             torch.zeros((layers, 1, tokens, neurons)),
             torch.zeros((1, tokens)),
         )
@@ -151,10 +152,12 @@ def test_low_level_candidate_axis_is_distinct_from_target_positions(
     monkeypatch.setattr(
         clja_module, "_get_grad_attributions_from_logits", fake_attribution
     )
+    def fake_mask(**kwargs):
+        captured_mask.update(kwargs)
+        return mask
+
     monkeypatch.setattr(
-        clja_module,
-        "_get_global_important_neurons_mask",
-        lambda **_kwargs: mask,
+        clja_module, "_get_global_important_neurons_mask", fake_mask
     )
 
     def fake_graph(*_args, **kwargs):
@@ -170,6 +173,7 @@ def test_low_level_candidate_axis_is_distinct_from_target_positions(
         prediction_position=2,
         token_ids_by_batch=((7, 8),),
         objective_weights=(1.0, -1.0),
+        use_absolute_goal_for_percentage_threshold=True,
     )
 
     result = get_all_pairs_cl_ja_effects_with_attributions(
@@ -180,6 +184,8 @@ def test_low_level_candidate_axis_is_distinct_from_target_positions(
             device="cpu",
             disable_stop_grad=True,
             skip_attr_contrib=True,
+            node_attribution_threshold=None,
+            percentage_threshold=0.1,
         ),
         src_tokens=[0, 1],
         tgt_tokens=[2],
@@ -192,6 +198,9 @@ def test_low_level_candidate_axis_is_distinct_from_target_positions(
     assert captured_attribution["focus_positions"] == [2, 2]
     assert captured_attribution["focus_logits"] == [[7, 8]]
     assert captured_attribution["objective_weights"] == (1.0, -1.0)
+    assert captured_mask["absolute_attribution_threshold"].item() == pytest.approx(
+        0.2
+    )
     assert captured_graph["tgt_tokens"] == [2, 2]
     assert captured_graph["candidate_objective_weights"] == (1.0, -1.0)
 

@@ -440,6 +440,7 @@ def _topk_trace(*, contribution_width=5) -> TopKPositionTrace:
             f"logit[candidate_{index}]" for index in range(5)
         ),
         candidate_weights=(1.0,) * 5,
+        percentage_threshold_reference="signed_joint_objective",
     )
     contribution_schema = {
         "schema_id": TOPK_CONTRIBUTION_SCHEMA_ID,

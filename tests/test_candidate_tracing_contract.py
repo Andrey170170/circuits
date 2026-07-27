@@ -88,6 +88,30 @@ def test_observed_token_policy_is_the_explicit_k1_compatibility_mode() -> None:
         )
 
 
+def test_specified_token_policy_supports_c0_independent_alternatives() -> None:
+    selection = select_candidate_logits(
+        torch.tensor([5.0, 4.0, 3.0, 2.0, 1.0]),
+        observed_token_id=0,
+        policy_id="specified_token",
+        candidate_count=1,
+        specified_token_id=3,
+        decode_token=_decode,
+    )
+
+    assert [candidate.token_id for candidate in selection.candidates] == [3]
+    assert selection.candidates[0].full_distribution_rank == 4
+    assert selection.candidates[0].is_observed is False
+    assert selection.observed_token_id == 0
+    with pytest.raises(ValueError, match="specified_token_id"):
+        select_candidate_logits(
+            torch.tensor([5.0, 4.0, 3.0, 2.0, 1.0]),
+            observed_token_id=0,
+            policy_id="specified_token",
+            candidate_count=1,
+            decode_token=_decode,
+        )
+
+
 def test_joint_objectives_define_explicit_candidate_weights() -> None:
     candidates = tuple(
         CandidateLogit(
@@ -106,7 +130,11 @@ def test_joint_objectives_define_explicit_candidate_weights() -> None:
     contrast = build_joint_objective("observed_vs_alternatives", candidates)
 
     assert raw.candidate_weights == (1.0, 1.0, 1.0, 1.0, 1.0)
+    assert raw.percentage_threshold_reference == "signed_joint_objective"
     assert contrast.candidate_weights == (1.0, -0.25, -0.25, -0.25, -0.25)
+    assert contrast.percentage_threshold_reference == (
+        "absolute_joint_objective_magnitude"
+    )
     assert sum(contrast.candidate_weights) == 0.0
     assert contrast.formula == (
         "logit[candidate_0] - mean(logit[alternative_candidates])"
@@ -137,12 +165,14 @@ def test_candidate_axis_rejects_duplicates_and_width_mismatch() -> None:
             prediction_position=7,
             token_ids_by_batch=((1, 1),),
             objective_weights=(1.0, 1.0),
+            use_absolute_goal_for_percentage_threshold=False,
         )
     with pytest.raises(ValueError, match="weight width"):
         CandidateLogitAxis(
             prediction_position=7,
             token_ids_by_batch=((1, 2),),
             objective_weights=(1.0,),
+            use_absolute_goal_for_percentage_threshold=False,
         )
 
 

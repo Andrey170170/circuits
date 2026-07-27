@@ -11,6 +11,7 @@ import torch
 
 CandidatePolicyId = Literal[
     "observed_token",
+    "specified_token",
     "model_top5",
     "observed_plus_top4_alternatives",
 ]
@@ -75,6 +76,10 @@ class JointLogitObjective:
     objective_version: str
     formula: str
     candidate_weights: tuple[float, ...]
+    percentage_threshold_reference: Literal[
+        "signed_joint_objective",
+        "absolute_joint_objective_magnitude",
+    ]
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -82,6 +87,7 @@ class JointLogitObjective:
             "objective_version": self.objective_version,
             "formula": self.formula,
             "candidate_weights": list(self.candidate_weights),
+            "percentage_threshold_reference": (self.percentage_threshold_reference),
         }
 
 
@@ -92,6 +98,7 @@ class CandidateLogitAxis:
     prediction_position: int
     token_ids_by_batch: tuple[tuple[int, ...], ...]
     objective_weights: tuple[float, ...]
+    use_absolute_goal_for_percentage_threshold: bool
 
     def __post_init__(self) -> None:
         if self.prediction_position < 0:
@@ -115,6 +122,8 @@ class CandidateLogitAxis:
                 raise ValueError("candidate token IDs must be non-negative integers")
         if any(not math.isfinite(weight) for weight in self.objective_weights):
             raise ValueError("candidate objective weights must be finite")
+        if not isinstance(self.use_absolute_goal_for_percentage_threshold, bool):
+            raise ValueError("candidate percentage-threshold mode must be boolean")
 
     @property
     def candidate_count(self) -> int:
@@ -128,6 +137,7 @@ def select_candidate_logits(
     policy_id: CandidatePolicyId,
     candidate_count: int,
     decode_token: Callable[[int], str],
+    specified_token_id: int | None = None,
 ) -> CandidateSelection:
     """Select and score candidates with a deterministic full-vocabulary order.
 
@@ -144,6 +154,8 @@ def select_candidate_logits(
         raise ValueError("candidate_count must be between one and vocabulary size")
     if policy_id == "observed_token" and candidate_count != 1:
         raise ValueError("observed_token policy requires candidate_count=1")
+    if policy_id == "specified_token" and candidate_count != 1:
+        raise ValueError("specified_token policy requires candidate_count=1")
     if policy_id == "observed_plus_top4_alternatives" and candidate_count != 5:
         raise ValueError(
             "observed_plus_top4_alternatives policy requires candidate_count=5"
@@ -151,19 +163,35 @@ def select_candidate_logits(
     if policy_id == "model_top5" and candidate_count != 5:
         raise ValueError("model_top5 policy requires candidate_count=5")
 
-    ordered_ids = torch.argsort(
-        position_logits, descending=True, stable=True
-    ).detach()
+    ordered_ids = torch.argsort(position_logits, descending=True, stable=True).detach()
     ordered_cpu = [int(token_id) for token_id in ordered_ids.cpu().tolist()]
     rank_by_token_id = {
         token_id: rank for rank, token_id in enumerate(ordered_cpu, start=1)
     }
 
     if policy_id == "observed_token":
+        if specified_token_id is not None:
+            raise ValueError("observed_token policy does not accept specified_token_id")
         selected_ids = [observed_token_id]
+    elif policy_id == "specified_token":
+        if (
+            isinstance(specified_token_id, bool)
+            or not isinstance(specified_token_id, int)
+            or not 0 <= specified_token_id < vocab_size
+        ):
+            raise ValueError(
+                "specified_token policy requires a valid specified_token_id"
+            )
+        selected_ids = [specified_token_id]
     elif policy_id == "model_top5":
+        if specified_token_id is not None:
+            raise ValueError("model_top5 policy does not accept specified_token_id")
         selected_ids = ordered_cpu[:candidate_count]
     elif policy_id == "observed_plus_top4_alternatives":
+        if specified_token_id is not None:
+            raise ValueError(
+                "observed_plus_top4_alternatives does not accept specified_token_id"
+            )
         alternatives = [
             token_id for token_id in ordered_cpu if token_id != observed_token_id
         ]
@@ -213,6 +241,7 @@ def build_joint_objective(
         formula = " + ".join(
             f"logit[candidate_{index}]" for index in range(len(candidates))
         )
+        percentage_threshold_reference = "signed_joint_objective"
     elif objective_id == "observed_vs_alternatives":
         observed_indices = [
             candidate.candidate_index
@@ -233,6 +262,7 @@ def build_joint_objective(
             f"logit[candidate_{observed_indices[0]}] - "
             "mean(logit[alternative_candidates])"
         )
+        percentage_threshold_reference = "absolute_joint_objective_magnitude"
     else:
         raise ValueError(f"unsupported joint objective: {objective_id!r}")
 
@@ -241,6 +271,7 @@ def build_joint_objective(
         objective_version=JOINT_OBJECTIVE_VERSION,
         formula=formula,
         candidate_weights=weights,
+        percentage_threshold_reference=percentage_threshold_reference,
     )
 
 

@@ -51,8 +51,7 @@ def _without_timing(value: Any) -> Any:
         return {
             key: _without_timing(item)
             for key, item in sorted(value.items())
-            if not key.endswith("_seconds")
-            and key not in {"stages", "candidate_count"}
+            if not key.endswith("_seconds") and key not in {"stages", "candidate_count"}
         }
     if isinstance(value, list):
         return [_without_timing(item) for item in value]
@@ -67,6 +66,21 @@ def _append_exact_mismatch(
 ) -> None:
     if legacy_value != candidate_value:
         mismatches.append(f"{field_name} mismatch")
+
+
+def _structural_target_provenance(
+    value: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Exclude floating scores already compared with numeric tolerances."""
+
+    return [
+        {
+            key: item
+            for key, item in provenance.items()
+            if key not in {"logit", "probability"}
+        }
+        for provenance in value
+    ]
 
 
 def _compare_frame(
@@ -129,8 +143,8 @@ def compare_observed_token_k1(
     _append_exact_mismatch(
         mismatches,
         "target_provenance",
-        legacy.target_provenance,
-        current.target_provenance,
+        _structural_target_provenance(legacy.target_provenance),
+        _structural_target_provenance(current.target_provenance),
     )
     _append_exact_mismatch(mismatches, "config", legacy.config, current.config)
 
