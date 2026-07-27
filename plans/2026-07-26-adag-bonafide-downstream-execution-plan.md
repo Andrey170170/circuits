@@ -2388,3 +2388,92 @@ Read with this plan:
 
 This plan extends those documents downstream. It does not modify their frozen trace selection or
 execution record.
+
+## 19. Dense clustering selection execution record
+
+This section is an append-only record of the 2026-07-27 execution. It does not revise the frozen
+selection rule in Section 8.5.2.
+
+The initial immutable sweep at code revision `039bf2c` produced 44 valid sparse cluster states.
+Label-free structural evaluation retained the hierarchical medoid states at 64, 96, and 128
+clusters. Their dense-multiplex projection and family-blocked/checkpoint evaluation ran from the
+immutable `7b3558d` worktree:
+
+```text
+run root:
+  /scratch/general/vast/u1653998/circuits/results/bonafide/clustering/
+  cluster-selection-7b3558d-v1
+
+structural report:
+  control/structural-report.json
+  report_sha256 =
+    157a8ee183f67c1e5cd6dbe7c1a5af3d478441f9769186f96f108fe8cf5f3751
+
+projection manifest:
+  projection/manifest.json
+  manifest_sha256 =
+    fdf51d35236372c0522adae0b3e3f0817798de306a95a7230ce91c0d9e46c6ee
+
+resampling report:
+  control/resample-report.json
+  report_sha256 =
+    58789bdf151d68944eb6219f5eab3ba495d6fc417356c37c1c762b4f075ac181
+```
+
+The resampling workload comprised ten leave-one-family-out evidence builds, three whole-family
+checkpoints, and 39 candidate refits at four-way concurrency. All three candidate resolutions
+passed the frozen family-jackknife gate:
+
+| Candidate | Family-jackknife median ARI | Family-jackknife p10 ARI | Checkpoint median ARI |
+| ---: | ---: | ---: | ---: |
+| 64 | 0.627 | 0.584 | 0.444 |
+| 96 | 0.634 | 0.595 | 0.442 |
+| 128 | 0.665 | 0.626 | 0.435 |
+
+The checkpoints contain 364, 1,060, and 1,476 dense targets because whole families, rather than
+individual targets, are the resampling unit. Agreement rises with corpus size but remains only
+moderate at the largest checkpoint: ARI 0.528, 0.522, and 0.538 for 64, 96, and 128 clusters,
+respectively. This is not a frozen rejection gate, but it is a material sample-size sensitivity to
+retain in downstream interpretation.
+
+The deterministic selector at code revision `d5a771f` assigned the following frozen
+within-candidate percentile-rank composites:
+
+| Candidate | Composite | Stability | Graph | Balance/labelability | Recurrence | Temporal/edges |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 | 0.699 | 0.250 | 0.667 | 1.000 | 0.800 | 1.000 |
+| 96 | 0.475 | 0.500 | 0.500 | 0.375 | 0.500 | 0.500 |
+| 128 | 0.326 | 0.750 | 0.333 | 0.125 | 0.200 | 0.000 |
+
+The frozen labeling-ready states are therefore:
+
+- primary: the 64-cluster medoid, source task 4;
+- alternative: the 96-cluster medoid, source task 6.
+
+The selected-state bundle is:
+
+```text
+/scratch/general/vast/u1653998/circuits/results/bonafide/clustering/
+cluster-selection-d5a771f-v1
+
+master manifest_sha256 =
+  e85db200868f3c611f3577f4c81300e4f9d969ba00ce6f688197312e94977d23
+```
+
+Each state persists the exact 16,022-row signed-basis assignment, five-member
+within-cluster-affinity prototypes, dense multiplex summaries, target-witnessed recurrent edges,
+and verbatim target exemplars. The shared family-grouped labeling split contains four generation,
+three selection-scoring, and three audit families. Exemplar selection is response/family-disjoint
+within each partition and deterministically prefers phase, condition, and target-token diversity.
+
+Of the primary clusters, 62 of 64 have both the frozen labelability support and exemplars in all
+three partitions; the other two are retained but marked `insufficient_partition_support`. Of the
+alternative clusters, 88 of 96 are ready, six are marked `insufficient_labeling_support`, and two
+are marked `insufficient_partition_support`. No descriptions were generated and no holdout was
+opened during fitting, evaluation, selection, or evidence packaging.
+
+The first finalizer submission, job `1664577`, failed before analysis because its launcher was
+given the wrong resampling-report path; it wrote no selected-state output. Corrected job `1664623`
+completed the bundle above. Post-run validation recomputed the master/state canonical hashes and
+every persisted file hash, checked contiguous cluster evidence and exact 16,022-row assignments,
+confirmed the shared disjoint family partitions, and passed.
