@@ -24,11 +24,16 @@ from typing import Any, Mapping
 import torch
 from circuits.tracing.artifact import (
     save_compact_trace,
+    validate_topk_trace_data,
     validate_compact_trace_integrity,
 )
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.instrumentation import TraceInstrumentation
-from circuits.tracing.trace import CircuitData, trace_teacher_forced_response
+from circuits.tracing.trace import (
+    CircuitData,
+    TopKPositionTrace,
+    trace_teacher_forced_response,
+)
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from scripts.bonafide.manifest import SCHEMA_VERSION, resolve_pretrained_source
@@ -471,6 +476,53 @@ def validate_runtime_trace_against_item(
             "runtime final target token ID does not match manifest: "
             f"{actual_final!r} != {expected_final_token_id}"
         )
+
+
+def validate_runtime_topk_trace_against_item(
+    trace: TopKPositionTrace,
+    item: Mapping[str, Any],
+    trace_family: Mapping[str, Any],
+) -> None:
+    """Ensure a live candidate-axis trace matches its frozen work item."""
+
+    validate_topk_trace_data(trace)
+    validate_target_selection(item)
+    positions = item["target_selection"]["response_token_positions"]
+    if len(positions) != 1:
+        raise ValueError("runtime top-k trace requires one response target position")
+    expected_position = int(positions[0])
+    if trace.shared_response_position != expected_position:
+        raise ValueError("runtime top-k response position does not match manifest")
+
+    data = trace.circuit_data
+    expected_response_count = int(item["response_token_count"])
+    if data.trace_metadata.get("response_token_count") != expected_response_count:
+        raise ValueError(
+            "runtime top-k response token count does not match manifest"
+        )
+    expected_observed_token_id = int(
+        item["target_selection"]["final_target_token_id"]
+    )
+    if data.target_logits != [[expected_observed_token_id]]:
+        raise ValueError("runtime top-k observed token does not match manifest")
+    if trace.candidate_selection.observed_token_id != expected_observed_token_id:
+        raise ValueError(
+            "runtime candidate selection observed token does not match manifest"
+        )
+
+    expected_fields = {
+        "trace_family_id": trace.trace_family_id,
+        "candidate_policy_id": trace.candidate_selection.policy_id,
+        "candidate_policy_version": trace.candidate_selection.policy_version,
+        "candidate_count": trace.candidate_count,
+        "joint_objective_id": trace.joint_objective.objective_id,
+        "joint_objective_version": trace.joint_objective.objective_version,
+    }
+    for field, actual in expected_fields.items():
+        if trace_family.get(field) != actual:
+            raise ValueError(
+                f"runtime top-k {field} does not match frozen trace family"
+            )
 
 
 def _directory_size(path: Path) -> int:

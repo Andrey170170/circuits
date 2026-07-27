@@ -18,6 +18,15 @@ from circuits.tracing.clja import (
     CLJAProbeSelection,
     get_all_pairs_cl_ja_effects_with_attributions,
 )
+from circuits.tracing.candidates import (
+    CandidateLogitAxis,
+    CandidatePolicyId,
+    CandidateSelection,
+    JointLogitObjective,
+    JointObjectiveId,
+    build_joint_objective,
+    select_candidate_logits,
+)
 from circuits.tracing.instrumentation import (
     TraceInstrumentation,
     instrumentation_stage,
@@ -123,6 +132,38 @@ class CircuitData:
         """Load CircuitData from a pickle file."""
         with open(path, "rb") as f:
             return pickle.load(f)
+
+
+TOPK_TRACE_FAMILY_ID = "bonafide.topk-position.v1"
+TOPK_CONTRIBUTION_SCHEMA_ID = "adag.candidate-contribution.raw-logit.v1"
+
+
+@dataclass(frozen=True)
+class TopKPositionTrace:
+    """One response target with a distinct same-position candidate-logit axis."""
+
+    circuit_data: CircuitData
+    trace_family_id: str
+    shared_response_position: int
+    shared_prediction_position: int
+    candidate_selection: CandidateSelection
+    joint_objective: JointLogitObjective
+    candidate_contribution_schema: dict[str, object]
+
+    @property
+    def candidate_count(self) -> int:
+        return len(self.candidate_selection.candidates)
+
+    def contract_dict(self) -> dict[str, object]:
+        return {
+            "trace_family_id": self.trace_family_id,
+            "shared_response_position": self.shared_response_position,
+            "shared_prediction_position": self.shared_prediction_position,
+            "candidate_count": self.candidate_count,
+            "candidate_selection": self.candidate_selection.to_dict(),
+            "joint_objective": self.joint_objective.to_dict(),
+            "candidate_contribution_schema": self.candidate_contribution_schema,
+        }
 
 
 PROBE_SCHEMA_VERSION = "adag.teacher-forced-probe.v1"
@@ -627,6 +668,22 @@ def _teacher_forced_target_scores(
         target_logits.append(float(position_logits[token_id].item()))
         target_probs.append(float(torch.softmax(position_logits, dim=-1)[token_id].item()))
     return target_logits, target_probs
+
+
+def _teacher_forced_position_logits(
+    model: PreTrainedModel,
+    prepared: TeacherForcedInput,
+) -> torch.Tensor:
+    """Return the full distribution for one prepared prediction position."""
+
+    if len(prepared.target_prediction_positions) != 1:
+        raise ValueError("candidate tracing requires exactly one response target")
+    device = next(model.parameters()).device
+    input_ids = torch.tensor([prepared.input_ids], device=device)
+    attention_mask = torch.tensor([prepared.attention_mask], device=device)
+    with torch.no_grad():
+        logits = model(input_ids=input_ids, attention_mask=attention_mask).logits[0]
+    return logits[prepared.target_prediction_positions[0]].detach()
 
 
 def _teacher_forced_target_provenance(
@@ -1187,6 +1244,168 @@ def trace_teacher_forced_response(
         k=len(prepared.target_token_ids),
         config=config,
         model_id=model.config._name_or_path,
+    )
+
+
+def trace_teacher_forced_candidates(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    prompt: str,
+    response: str,
+    target_response_position: int,
+    config: ADAGConfig,
+    *,
+    candidate_policy_id: CandidatePolicyId,
+    candidate_count: int,
+    joint_objective_id: JointObjectiveId = "raw_logit_sum",
+    trace_family_id: str = TOPK_TRACE_FAMILY_ID,
+    label: str = "teacher_forced_topk",
+    system_prompt: str | None = None,
+    ignore_bos: bool = False,
+    instrumentation: TraceInstrumentation | None = None,
+) -> TopKPositionTrace:
+    """Trace several candidate logits at one teacher-forced response position.
+
+    The response target remains singular. Candidate logits form a separate
+    output-contribution axis and share one prediction position.
+    """
+
+    if config.center_logits:
+        raise ValueError(
+            "candidate tracing requires an objective with explicit centering; "
+            "ADAGConfig.center_logits is not a named candidate objective"
+        )
+    if not isinstance(trace_family_id, str) or not trace_family_id:
+        raise ValueError("trace_family_id must be a non-empty string")
+
+    with instrumentation_stage(instrumentation, "prepare_input"):
+        prepared = prepare_teacher_forced_input(
+            tokenizer,
+            prompt,
+            response,
+            [target_response_position],
+            system_prompt=system_prompt,
+        )
+    with instrumentation_stage(instrumentation, "candidate_scoring"):
+        position_logits = _teacher_forced_position_logits(model, prepared)
+        selection = select_candidate_logits(
+            position_logits,
+            observed_token_id=prepared.target_token_ids[0],
+            policy_id=candidate_policy_id,
+            candidate_count=candidate_count,
+            decode_token=lambda token_id: tokenizer.decode([token_id]),
+        )
+        objective = build_joint_objective(
+            joint_objective_id, selection.candidates
+        )
+        observed_token_id = prepared.target_token_ids[0]
+        observed_logit = float(
+            position_logits[observed_token_id].detach().float().cpu().item()
+        )
+        observed_probability = float(
+            torch.softmax(position_logits.float(), dim=-1)[observed_token_id]
+            .detach()
+            .cpu()
+            .item()
+        )
+
+    candidate_axis = CandidateLogitAxis(
+        prediction_position=prepared.target_prediction_positions[0],
+        token_ids_by_batch=(
+            tuple(candidate.token_id for candidate in selection.candidates),
+        ),
+        objective_weights=objective.candidate_weights,
+    )
+    with instrumentation_stage(instrumentation, "clja_total"):
+        nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(
+            model=model,
+            tokenizer=tokenizer,
+            cis=[prepared.input_ids],
+            config=config,
+            attention_masks=[prepared.attention_mask],
+            candidate_axis=candidate_axis,
+            src_tokens=list(range(len(prepared.input_ids) - 1)),
+            tgt_tokens=[prepared.target_prediction_positions[0]],
+            instrumentation=instrumentation,
+        )
+    if instrumentation is not None:
+        instrumentation.set_counter("raw_node_count", len(nodes))
+        instrumentation.set_counter("raw_edge_count", len(edges))
+        instrumentation.set_counter("candidate_count", candidate_count)
+    with instrumentation_stage(instrumentation, "dataframe_conversion"):
+        df_node, df_edge = convert_circuit_to_dataframes(
+            [nodes],
+            [edges],
+            [label],
+            [[0]],
+            bs=1,
+            ignore_bos=ignore_bos,
+            percentage_threshold=config.percentage_threshold,
+        )
+    if instrumentation is not None:
+        instrumentation.set_counter("final_dataframe_node_count", len(df_node))
+        instrumentation.set_counter("final_dataframe_edge_count", len(df_edge))
+
+    target_provenance = _teacher_forced_target_provenance(
+        prepared, [observed_logit], [observed_probability]
+    )
+    contribution_schema: dict[str, object] = {
+        "schema_id": TOPK_CONTRIBUTION_SCHEMA_ID,
+        "axis": "candidate_index",
+        "width": candidate_count,
+        "semantics": "gradient_times_activation_for_each_raw_candidate_logit",
+        "scalar_graph_attribution_semantics": "named_joint_objective",
+    }
+    contract = {
+        "trace_family_id": trace_family_id,
+        "shared_response_position": target_response_position,
+        "shared_prediction_position": prepared.target_prediction_positions[0],
+        "candidate_count": candidate_count,
+        "candidate_selection": selection.to_dict(),
+        "joint_objective": objective.to_dict(),
+        "candidate_contribution_schema": contribution_schema,
+    }
+    trace_metadata: dict[str, object] = {
+        "trace_mode": "teacher_forced_topk_position",
+        "prompt": prompt,
+        "prompt_sha256": _stable_text_hash(prompt),
+        "response": response,
+        "response_sha256": _stable_text_hash(response),
+        "system_prompt": system_prompt,
+        "system_prompt_sha256": _stable_text_hash(system_prompt),
+        "assistant_prefix_token_count": prepared.assistant_prefix_token_count,
+        "response_token_count": prepared.response_token_count,
+        "included_response_token_count": prepared.included_response_token_count,
+        "input_token_count": len(prepared.input_ids),
+        "chat_template_sha256": _stable_text_hash(get_chat_template(tokenizer)),
+        "candidate_trace_contract": contract,
+    }
+    if instrumentation is not None:
+        trace_metadata["instrumentation"] = instrumentation.snapshot()
+    circuit_data = CircuitData(
+        df_node=df_node,
+        df_edge=df_edge,
+        cis=[prepared.input_ids],
+        attention_masks=[prepared.attention_mask],
+        labels=[label],
+        target_logits=[[observed_token_id]],
+        target_logit_probs=[[observed_probability]],
+        target_logit_values=[[observed_logit]],
+        target_provenance=target_provenance,
+        trace_metadata=trace_metadata,
+        benchmark_only=False,
+        k=1,
+        config=config,
+        model_id=model.config._name_or_path,
+    )
+    return TopKPositionTrace(
+        circuit_data=circuit_data,
+        trace_family_id=trace_family_id,
+        shared_response_position=target_response_position,
+        shared_prediction_position=prepared.target_prediction_positions[0],
+        candidate_selection=selection,
+        joint_objective=objective,
+        candidate_contribution_schema=contribution_schema,
     )
 
 

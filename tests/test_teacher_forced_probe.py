@@ -17,6 +17,7 @@ from circuits.tracing.clja import (
     get_all_pairs_cl_ja_effects_with_attributions,
     _selected_probe_occurrences,
 )
+from circuits.tracing.candidates import CandidateLogitAxis
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.probe_artifact import (
     METRICS_FILENAME,
@@ -117,6 +118,82 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(
     assert _predictor_without_clock(
         probe_instrumentation.snapshot()
     ) == _predictor_without_clock(full_instrumentation.snapshot())
+
+
+def test_low_level_candidate_axis_is_distinct_from_target_positions(
+    monkeypatch,
+) -> None:
+    import circuits.tracing.clja as clja_module
+
+    captured_attribution = {}
+    captured_graph = {}
+    layers, tokens, neurons = 1, 4, 3
+
+    def fake_attribution(
+        _model,
+        _input_ids,
+        _keep_tokens,
+        focus_positions,
+        **kwargs,
+    ):
+        captured_attribution["focus_positions"] = focus_positions
+        captured_attribution.update(kwargs)
+        return (
+            torch.zeros((layers, 1, tokens, neurons)),
+            torch.zeros((1, tokens)),
+            torch.tensor(2.0),
+            torch.zeros((layers, 1, tokens, neurons)),
+            torch.zeros((1, tokens)),
+        )
+
+    mask = torch.zeros((layers, tokens, neurons), dtype=torch.bool)
+    mask[0, 1, 2] = True
+    monkeypatch.setattr(
+        clja_module, "_get_grad_attributions_from_logits", fake_attribution
+    )
+    monkeypatch.setattr(
+        clja_module,
+        "_get_global_important_neurons_mask",
+        lambda **_kwargs: mask,
+    )
+
+    def fake_graph(*_args, **kwargs):
+        captured_graph.update(kwargs)
+        return [], []
+
+    monkeypatch.setattr(clja_module, "_get_cl_ja_based_edges", fake_graph)
+    model = SimpleNamespace(
+        config=SimpleNamespace(num_hidden_layers=layers, _name_or_path="fake/model"),
+        to=lambda _device: model,
+    )
+    axis = CandidateLogitAxis(
+        prediction_position=2,
+        token_ids_by_batch=((7, 8),),
+        objective_weights=(1.0, -1.0),
+    )
+
+    result = get_all_pairs_cl_ja_effects_with_attributions(
+        model=model,
+        tokenizer=FakeChatTokenizer(),
+        cis=[[1, 2, 3, 4]],
+        config=ADAGConfig(
+            device="cpu",
+            disable_stop_grad=True,
+            skip_attr_contrib=True,
+        ),
+        src_tokens=[0, 1],
+        tgt_tokens=[2],
+        keep_tokens=[0, 1, 2],
+        attention_masks=[[1, 1, 1, 1]],
+        candidate_axis=axis,
+    )
+
+    assert result == ([], [])
+    assert captured_attribution["focus_positions"] == [2, 2]
+    assert captured_attribution["focus_logits"] == [[7, 8]]
+    assert captured_attribution["objective_weights"] == (1.0, -1.0)
+    assert captured_graph["tgt_tokens"] == [2, 2]
+    assert captured_graph["candidate_objective_weights"] == (1.0, -1.0)
 
 
 def _install_stop_grad_probe_fakes(monkeypatch, *, attribution_error=None):

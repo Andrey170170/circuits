@@ -17,6 +17,10 @@ from circuits.tracing.attribution import (
     _get_neuron_attr_and_contrib_ig,
     _get_neuron_attr_and_contrib_with_stop_grad_on_mlps,
 )
+from circuits.tracing.candidates import (
+    CandidateLogitAxis,
+    reduce_candidate_contributions,
+)
 from circuits.tracing.grad import (
     layerwise_revert_stop_nonlinear_grad,
     layerwise_stop_nonlinear_grad,
@@ -174,6 +178,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     attention_masks: list[list[int]] | torch.Tensor | None = None,
     focus_positions: list[int] | None = None,
     focus_logits: list[list[int]] | list[int] | None = None,
+    candidate_axis: CandidateLogitAxis | None = None,
     instrumentation: TraceInstrumentation | None = None,
     probe_only: bool = False,
 ) -> (
@@ -234,7 +239,28 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         if any([use_relp_grad, use_stop_grad_on_mlps]):
             print("warning: stop grad is disabled but some stop grad configurations are used")
 
-    if focus_positions is None:
+    objective_weights: tuple[float, ...] | None = None
+    contribution_tgt_tokens = tgt_tokens
+    if candidate_axis is not None:
+        if focus_positions is not None or focus_logits is not None:
+            raise ValueError(
+                "candidate_axis cannot be combined with legacy focus positions/logits"
+            )
+        if len(cis) != len(candidate_axis.token_ids_by_batch):
+            raise ValueError("candidate axis batch width must match input batch width")
+        if tgt_tokens != [candidate_axis.prediction_position]:
+            raise ValueError(
+                "candidate traces require one shared scientific target position"
+            )
+        focus_positions = [
+            candidate_axis.prediction_position
+        ] * candidate_axis.candidate_count
+        focus_logits = [
+            list(token_ids) for token_ids in candidate_axis.token_ids_by_batch
+        ]
+        contribution_tgt_tokens = list(focus_positions)
+        objective_weights = candidate_axis.objective_weights
+    elif focus_positions is None:
         focus_positions = tgt_tokens
 
     if focus_logits is None and not focus_last_residual:
@@ -305,6 +331,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 ablation_mode=ablation_mode,
                 disable_stop_grad=disable_stop_grad,
                 center_logits=center_logits,
+                objective_weights=objective_weights,
                 verbose=verbose,
             )
         else:
@@ -324,6 +351,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 attention_masks=attn_mask_final,
                 disable_stop_grad=disable_stop_grad,
                 center_logits=center_logits,
+                objective_weights=objective_weights,
                 verbose=verbose,
                 ig_steps=ig_steps,
             )
@@ -418,7 +446,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 neuron_cfg,
                 input_ids,
                 src_tokens,
-                tgt_tokens,
+                contribution_tgt_tokens,
                 focus_positions,
                 focus_logits,
                 attn_mask_final,
@@ -434,7 +462,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 neuron_cfg,
                 input_ids,
                 src_tokens,
-                tgt_tokens,
+                contribution_tgt_tokens,
                 focus_positions,
                 focus_logits,
                 attn_mask_final,
@@ -488,7 +516,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             neuron_cfg,
             input_ids,
             src_tokens,
-            tgt_tokens,
+            contribution_tgt_tokens,
             focus_positions,
             focus_logits,
             attn_mask_final,
@@ -551,7 +579,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             topk=topk,
             keep_tokens=keep_tokens,
             src_tokens=src_tokens,  # the token positions to trace from
-            tgt_tokens=tgt_tokens,  # the token positions to trace to
+            tgt_tokens=contribution_tgt_tokens,
             focus_positions=focus_positions,  # the logits to include
             focus_logits=focus_logits,  # the token vocab ids to trace logits
             start_layer=start_layer,
@@ -567,6 +595,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             use_stop_grad_on_mlps=use_stop_grad_on_mlps,
             neuron_attr_map_with_stop_grad_on_mlps=neuron_attr_map_with_stop_grad_on_mlps,
             neuron_contrib_map_with_stop_grad_on_mlps=neuron_contrib_map_with_stop_grad_on_mlps,
+            candidate_objective_weights=objective_weights,
             instrumentation=instrumentation,
         )
 
@@ -585,6 +614,7 @@ def get_all_pairs_cl_ja_effects_with_attributions(
     attention_masks: list[list[int]] | torch.Tensor | None = None,
     focus_positions: list[int] | None = None,
     focus_logits: list[list[int]] | list[int] | None = None,
+    candidate_axis: CandidateLogitAxis | None = None,
     instrumentation: TraceInstrumentation | None = None,
     probe_only: bool = False,
 ) -> (
@@ -611,6 +641,7 @@ def get_all_pairs_cl_ja_effects_with_attributions(
             attention_masks=attention_masks,
             focus_positions=focus_positions,
             focus_logits=focus_logits,
+            candidate_axis=candidate_axis,
             instrumentation=instrumentation,
             probe_only=False,
         )
@@ -628,6 +659,7 @@ def get_all_pairs_cl_ja_effects_with_attributions(
             attention_masks=attention_masks,
             focus_positions=focus_positions,
             focus_logits=focus_logits,
+            candidate_axis=candidate_axis,
             instrumentation=instrumentation,
             probe_only=True,
         )
@@ -685,6 +717,7 @@ def _get_cl_ja_based_edges(
     use_stop_grad_on_mlps: bool = False,
     neuron_attr_map_with_stop_grad_on_mlps=None,
     neuron_contrib_map_with_stop_grad_on_mlps=None,
+    candidate_objective_weights: tuple[float, ...] | None = None,
     # IG params
     ig_steps: int | None = None,
     ig_mode: Literal["ig-inputs", "conductance"] = "ig-inputs",
@@ -727,6 +760,29 @@ def _get_cl_ja_based_edges(
     D = model.config.hidden_size
     B = neurons_LBTI[0].size(0)
     neurons_LBTI[0].size(1)
+    objective_weight_tensor: torch.Tensor | None = None
+    if candidate_objective_weights is not None:
+        if len(candidate_objective_weights) != len(focus_positions):
+            raise ValueError(
+                "candidate objective weight width must match candidate count"
+            )
+        objective_weight_tensor = torch.tensor(
+            candidate_objective_weights,
+            device=device,
+            dtype=neurons_LBTI[0].dtype,
+        )
+
+    def joint_target_attribution(
+        target_attribution: torch.Tensor,
+    ) -> torch.Tensor:
+        """Reduce a raw candidate contribution vector to the joint objective."""
+
+        if objective_weight_tensor is None:
+            return target_attribution
+        return reduce_candidate_contributions(
+            target_attribution,
+            objective_weight_tensor,
+        )
 
     # creating final logits nodes
     logit_nodes_before = len(nodes)
@@ -776,6 +832,10 @@ def _get_cl_ja_based_edges(
             final_attribution = torch.stack(
                 [torch.diagflat(logits_BV[b]) for b in range(logits_BV.shape[0])]
             )[:, idx, :]
+            if objective_weight_tensor is not None:
+                final_attribution = (
+                    final_attribution * objective_weight_tensor[target_idx]
+                )
             nodes.append(
                 Node(
                     layer=L,
@@ -958,6 +1018,8 @@ def _get_cl_ja_based_edges(
                 # Move target_attribution to device if needed
                 if target_attribution is not None and target_attribution.device.type == "cpu":
                     target_attribution = target_attribution.to(device)
+                if target_attribution is not None:
+                    target_attribution = joint_target_attribution(target_attribution)
 
                 # Use adaptive epsilon for numerical stability (matching CLSO approach)
                 eps = target_activation.abs().mean() * 1e-6
@@ -1132,6 +1194,8 @@ def _get_cl_ja_based_edges(
                     # Move target_attribution to device if needed
                     if target_attribution is not None and target_attribution.device.type == "cpu":
                         target_attribution = target_attribution.to(device)
+                    if target_attribution is not None:
+                        target_attribution = joint_target_attribution(target_attribution)
 
                     src_key = NeuronIdx(layer=src_layer, token=src_token, neuron=src_neuron)
                     tgt_key = NeuronIdx(layer=tgt_layer, token=tgt_token, neuron=tgt_neuron)
