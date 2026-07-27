@@ -394,28 +394,58 @@ def _balanced_exemplars(
     rows: Sequence[Mapping[str, Any]],
     *,
     family_partitions: Mapping[str, str],
+    inventory_by_trace: Mapping[str, Mapping[str, Any]],
     limit_per_partition: int = 2,
 ) -> list[Mapping[str, Any]]:
-    ordered = sorted(
-        rows,
-        key=lambda row: (
-            -float(row["absolute_attribution_mass"]),
-            str(row["trace_unit_id"]),
-        ),
-    )
     selected: list[Mapping[str, Any]] = []
-    seen_families_by_partition: dict[str, set[str]] = defaultdict(set)
-    count_by_partition: dict[str, int] = defaultdict(int)
-    for row in ordered:
-        family_id = str(row["base_question_id"])
-        partition = family_partitions[family_id]
-        if count_by_partition[partition] >= limit_per_partition:
-            continue
-        if family_id in seen_families_by_partition[partition]:
-            continue
-        selected.append(row)
-        seen_families_by_partition[partition].add(family_id)
-        count_by_partition[partition] += 1
+    for partition in ("generation", "selection_scoring", "audit"):
+        candidates = [
+            row
+            for row in rows
+            if family_partitions[str(row["base_question_id"])] == partition
+        ]
+        seen_families: set[str] = set()
+        seen_responses: set[str] = set()
+        seen_phases: set[int] = set()
+        seen_conditions: set[str] = set()
+        seen_tokens: set[str] = set()
+        while len(seen_families) < limit_per_partition:
+            eligible: list[tuple[tuple[Any, ...], Mapping[str, Any]]] = []
+            for row in candidates:
+                trace_unit_id = str(row["trace_unit_id"])
+                inventory = inventory_by_trace[trace_unit_id]
+                family_id = str(row["base_question_id"])
+                response_id = str(row["response_id"])
+                if family_id in seen_families or response_id in seen_responses:
+                    continue
+                phase = int(row["response_phase_bin"])
+                condition = canonical_sha256(inventory["condition"])
+                token = str(inventory["target_token_text"])
+                novelty = (
+                    int(phase not in seen_phases)
+                    + int(condition not in seen_conditions)
+                    + int(token not in seen_tokens)
+                )
+                eligible.append(
+                    (
+                        (
+                            -novelty,
+                            -float(row["absolute_attribution_mass"]),
+                            trace_unit_id,
+                        ),
+                        row,
+                    )
+                )
+            if not eligible:
+                break
+            _, chosen = min(eligible, key=lambda item: item[0])
+            selected.append(chosen)
+            inventory = inventory_by_trace[str(chosen["trace_unit_id"])]
+            seen_families.add(str(chosen["base_question_id"]))
+            seen_responses.add(str(chosen["response_id"]))
+            seen_phases.add(int(chosen["response_phase_bin"]))
+            seen_conditions.add(canonical_sha256(inventory["condition"]))
+            seen_tokens.add(str(inventory["target_token_text"]))
     return selected
 
 
@@ -754,6 +784,7 @@ def build_selected_states(
                 exemplar_rows = _balanced_exemplars(
                     trajectories_by_cluster[cluster_id],
                     family_partitions=family_partitions,
+                    inventory_by_trace=inventory_by_trace,
                 )
                 exemplars: list[dict[str, Any]] = []
                 for row in exemplar_rows:

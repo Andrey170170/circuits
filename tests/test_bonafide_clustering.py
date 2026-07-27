@@ -39,6 +39,7 @@ from circuits.analysis.bonafide.clustering_resampling import (
     _checkpoint_family_sets,
 )
 from circuits.analysis.bonafide.clustering_selection import (
+    _balanced_exemplars,
     _family_partitions,
     _percentile_ranks,
 )
@@ -562,3 +563,49 @@ def test_label_family_partitions_are_deterministic_and_disjoint() -> None:
         "selection_scoring",
         "audit",
     }
+
+
+def test_label_exemplars_prefer_phase_condition_and_token_diversity() -> None:
+    rows = [
+        {
+            "trace_unit_id": "trace-a",
+            "base_question_id": "family-a",
+            "response_id": "response-a",
+            "response_phase_bin": 0,
+            "absolute_attribution_mass": 10.0,
+        },
+        {
+            "trace_unit_id": "trace-b",
+            "base_question_id": "family-b",
+            "response_id": "response-b",
+            "response_phase_bin": 0,
+            "absolute_attribution_mass": 9.0,
+        },
+        {
+            "trace_unit_id": "trace-c",
+            "base_question_id": "family-c",
+            "response_id": "response-c",
+            "response_phase_bin": 4,
+            "absolute_attribution_mass": 8.0,
+        },
+    ]
+    inventory = {
+        "trace-a": {"condition": {"kind": "same"}, "target_token_text": "same"},
+        "trace-b": {"condition": {"kind": "same"}, "target_token_text": "same"},
+        "trace-c": {
+            "condition": {"kind": "different"},
+            "target_token_text": "different",
+        },
+    }
+
+    selected = _balanced_exemplars(
+        rows,
+        family_partitions={
+            "family-a": "generation",
+            "family-b": "generation",
+            "family-c": "generation",
+        },
+        inventory_by_trace=inventory,
+    )
+
+    assert [row["trace_unit_id"] for row in selected] == ["trace-a", "trace-c"]
