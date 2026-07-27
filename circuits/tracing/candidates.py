@@ -13,6 +13,7 @@ CandidatePolicyId = Literal[
     "observed_token",
     "specified_token",
     "model_top5",
+    "model_top5_plus_observed",
     "observed_plus_top4_alternatives",
 ]
 JointObjectiveId = Literal[
@@ -162,6 +163,11 @@ def select_candidate_logits(
         )
     if policy_id == "model_top5" and candidate_count != 5:
         raise ValueError("model_top5 policy requires candidate_count=5")
+    if policy_id == "model_top5_plus_observed" and candidate_count != 6:
+        raise ValueError(
+            "model_top5_plus_observed policy requires candidate_count=6 "
+            "as its maximum realized width"
+        )
 
     ordered_ids = torch.argsort(position_logits, descending=True, stable=True).detach()
     ordered_cpu = [int(token_id) for token_id in ordered_ids.cpu().tolist()]
@@ -187,6 +193,16 @@ def select_candidate_logits(
         if specified_token_id is not None:
             raise ValueError("model_top5 policy does not accept specified_token_id")
         selected_ids = ordered_cpu[:candidate_count]
+    elif policy_id == "model_top5_plus_observed":
+        if specified_token_id is not None:
+            raise ValueError(
+                "model_top5_plus_observed does not accept specified_token_id"
+            )
+        model_top5 = ordered_cpu[:5]
+        selected_ids = [
+            observed_token_id,
+            *(token_id for token_id in model_top5 if token_id != observed_token_id),
+        ]
     elif policy_id == "observed_plus_top4_alternatives":
         if specified_token_id is not None:
             raise ValueError(
@@ -215,7 +231,11 @@ def select_candidate_logits(
     return CandidateSelection(
         policy_id=policy_id,
         policy_version=CANDIDATE_POLICY_VERSION,
-        ordering_rule="descending_logit_then_ascending_token_id",
+        ordering_rule=(
+            "observed_first_then_model_top5_descending_logit_then_ascending_token_id"
+            if policy_id == "model_top5_plus_observed"
+            else "descending_logit_then_ascending_token_id"
+        ),
         observed_token_id=observed_token_id,
         observed_token_text=decode_token(observed_token_id),
         observed_token_rank=rank_by_token_id[observed_token_id],

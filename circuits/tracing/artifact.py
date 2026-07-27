@@ -89,9 +89,7 @@ def _validate_scalar_columns(
         raise ValueError(f"{frame_name} must be a pandas DataFrame")
     missing = [column for column in required_columns if column not in frame.columns]
     if missing:
-        raise ValueError(
-            f"{frame_name} is missing required numeric columns: {missing}"
-        )
+        raise ValueError(f"{frame_name} is missing required numeric columns: {missing}")
     for column in required_columns:
         if frame.empty:
             continue
@@ -187,7 +185,9 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
         raise ValueError("top-k artifacts require exactly one target provenance entry")
     provenance = data.target_provenance[0]
     if provenance.get("response_token_position") != trace.shared_response_position:
-        raise ValueError("top-k shared response position disagrees with target provenance")
+        raise ValueError(
+            "top-k shared response position disagrees with target provenance"
+        )
     if provenance.get("prediction_token_position") != trace.shared_prediction_position:
         raise ValueError(
             "top-k shared prediction position disagrees with target provenance"
@@ -210,10 +210,7 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
         candidate_count
     ):
         raise ValueError("top-k candidate ranks must be unique")
-    if (
-        trace.candidate_selection.policy_version
-        != CANDIDATE_POLICY_VERSION
-    ):
+    if trace.candidate_selection.policy_version != CANDIDATE_POLICY_VERSION:
         raise ValueError("top-k candidate policy version is unsupported")
     for candidate in candidates:
         if not math.isfinite(candidate.logit) or not math.isfinite(
@@ -264,6 +261,35 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
             range(1, 6)
         ):
             raise ValueError("model_top5 candidates must have ranks one through five")
+    elif policy_id == "model_top5_plus_observed":
+        observed_rank = trace.candidate_selection.observed_token_rank
+        expected_count = 5 if observed_rank <= 5 else 6
+        if candidate_count != expected_count or not candidates[0].is_observed:
+            raise ValueError(
+                "model_top5_plus_observed requires observed candidate zero and "
+                "realized width five or six according to observed rank"
+            )
+        expected_alternative_ranks = [
+            rank for rank in range(1, 6) if rank != observed_rank
+        ]
+        alternatives = list(candidates[1:])
+        if [
+            candidate.full_distribution_rank for candidate in alternatives
+        ] != expected_alternative_ranks:
+            raise ValueError(
+                "model_top5_plus_observed candidates do not preserve the model top five"
+            )
+        if alternatives != sorted(
+            alternatives, key=lambda candidate: (-candidate.logit, candidate.token_id)
+        ):
+            raise ValueError(
+                "model_top5_plus_observed alternatives are not deterministically ordered"
+            )
+        if (
+            trace.candidate_selection.ordering_rule
+            != "observed_first_then_model_top5_descending_logit_then_ascending_token_id"
+        ):
+            raise ValueError("model_top5_plus_observed ordering rule is inconsistent")
     else:
         raise ValueError(f"unsupported top-k candidate policy: {policy_id!r}")
 
@@ -291,8 +317,7 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
     ):
         raise ValueError("top-k joint objective contract is inconsistent")
     if any(
-        not math.isfinite(weight)
-        for weight in trace.joint_objective.candidate_weights
+        not math.isfinite(weight) for weight in trace.joint_objective.candidate_weights
     ):
         raise ValueError("top-k joint objective weights must be finite")
     if trace.candidate_contribution_schema.get("width") != candidate_count:
@@ -315,9 +340,7 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
         frame_name="df_edge",
         required_columns=("attribution", "weight"),
     )
-    _validate_candidate_contribution_maps(
-        data.df_node, candidate_count=candidate_count
-    )
+    _validate_candidate_contribution_maps(data.df_node, candidate_count=candidate_count)
     _validate_nested_finite(
         data.target_logit_probs,
         field_name="target_logit_probs",
@@ -333,9 +356,7 @@ def validate_topk_trace_data(trace: TopKPositionTrace) -> int:
 
 def _validate_reuse_scope(data: CircuitData) -> int:
     if data.trace_metadata.get("candidate_trace_contract") is not None:
-        raise ValueError(
-            "candidate-axis traces require save_topk_compact_trace"
-        )
+        raise ValueError("candidate-axis traces require save_topk_compact_trace")
     target_count = _target_count(data)
     if target_count < 1:
         raise ValueError("compact trace units require at least one target")
@@ -479,7 +500,9 @@ def validate_compact_trace_integrity(
         with metrics_path.open(encoding="utf-8") as handle:
             metrics = json.load(handle)
     except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"compact trace metadata is unreadable: {artifact_path}") from error
+        raise ValueError(
+            f"compact trace metadata is unreadable: {artifact_path}"
+        ) from error
     if not isinstance(manifest, dict) or not isinstance(metrics, dict):
         raise ValueError("compact trace manifest and metrics must be JSON objects")
     if manifest.get("schema_version") != SCHEMA_VERSION:
@@ -525,7 +548,9 @@ def validate_topk_compact_trace_integrity(
         with metrics_path.open(encoding="utf-8") as handle:
             metrics = json.load(handle)
     except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"compact trace metadata is unreadable: {artifact_path}") from error
+        raise ValueError(
+            f"compact trace metadata is unreadable: {artifact_path}"
+        ) from error
     if not isinstance(manifest, dict) or not isinstance(metrics, dict):
         raise ValueError("compact trace manifest and metrics must be JSON objects")
     if manifest.get("schema_version") != TOPK_SCHEMA_VERSION:

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.bonafide.topk_manifest import (
+    MODEL_TOP5_PLUS_OBSERVED_COUNT_RULE,
     SCHEMA_VERSION,
     validate_topk_manifest,
 )
@@ -84,23 +85,37 @@ def build_topk_manifest(
     if len(corpus_roles) != 1:
         raise ValueError("one top-k wave cannot mix source corpus roles")
 
-    try:
-        candidate_count = POLICY_COUNTS[candidate_policy_id]
-    except KeyError as error:
-        raise ValueError(
-            f"unsupported top-k candidate policy: {candidate_policy_id!r}"
-        ) from error
+    variable_candidate_count = candidate_policy_id == "model_top5_plus_observed"
+    if not variable_candidate_count:
+        try:
+            candidate_count = POLICY_COUNTS[candidate_policy_id]
+        except KeyError as error:
+            raise ValueError(
+                f"unsupported top-k candidate policy: {candidate_policy_id!r}"
+            ) from error
+    else:
+        candidate_count = None
+    trace_family = {
+        "trace_family_id": trace_family_id,
+        "candidate_policy_id": candidate_policy_id,
+        "candidate_policy_version": "1",
+        "joint_objective_id": joint_objective_id,
+        "joint_objective_version": "1",
+    }
+    if variable_candidate_count:
+        trace_family.update(
+            {
+                "candidate_count_min": 5,
+                "candidate_count_max": 6,
+                "candidate_count_rule": MODEL_TOP5_PLUS_OBSERVED_COUNT_RULE,
+            }
+        )
+    else:
+        trace_family["candidate_count"] = candidate_count
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "phase": phase,
-        "trace_family": {
-            "trace_family_id": trace_family_id,
-            "candidate_policy_id": candidate_policy_id,
-            "candidate_policy_version": "1",
-            "candidate_count": candidate_count,
-            "joint_objective_id": joint_objective_id,
-            "joint_objective_version": "1",
-        },
+        "trace_family": trace_family,
         "source": {
             "width1_manifest_path": str(source_manifest_path.resolve()),
             "width1_manifest_sha256": source_manifest_sha256,

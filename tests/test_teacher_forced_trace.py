@@ -163,9 +163,9 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
     assert data.target_provenance[0]["prediction_token_position"] == 5
     assert data.benchmark_only is False
     snapshot = data.trace_metadata["instrumentation"]
-    assert set(("prepare_input", "target_scoring", "clja_total", "dataframe_conversion")) <= set(
-        snapshot["stages"]
-    )
+    assert set(
+        ("prepare_input", "target_scoring", "clja_total", "dataframe_conversion")
+    ) <= set(snapshot["stages"])
     assert snapshot["counters"]["raw_node_count"] == 1
     assert snapshot["counters"]["raw_edge_count"] == 1
     assert snapshot["counters"]["final_dataframe_node_count"] == 1
@@ -245,6 +245,69 @@ def test_trace_teacher_forced_candidates_uses_distinct_candidate_axis(monkeypatc
     contract = result.circuit_data.trace_metadata["candidate_trace_contract"]
     assert contract == result.contract_dict()
     assert contract["candidate_count"] == 5
+
+
+def test_trace_teacher_forced_top5_plus_observed_records_realized_width(monkeypatch):
+    import circuits.tracing.trace as trace_module
+
+    captured = {}
+
+    def fake_clja(**kwargs):
+        captured.update(kwargs)
+        return [object()], [object()]
+
+    monkeypatch.setattr(
+        trace_module,
+        "get_all_pairs_cl_ja_effects_with_attributions",
+        fake_clja,
+    )
+    monkeypatch.setattr(
+        trace_module,
+        "convert_circuit_to_dataframes",
+        lambda *_args, **_kwargs: (
+            pd.DataFrame(
+                {
+                    "layer": [0],
+                    "token": [0],
+                    "neuron": [0],
+                    "attribution": [0.5],
+                    "activation": [1.0],
+                    "contrib_map": [[0.1] * 6],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "layer": ["0->1"],
+                    "token": ["0->0"],
+                    "neuron": ["0->0"],
+                    "attribution": [0.25],
+                    "weight": [0.5],
+                }
+            ),
+        ),
+    )
+    instrumentation = TraceInstrumentation(device="cpu")
+
+    result = trace_teacher_forced_candidates(
+        FakeModel(),
+        FakeChatTokenizer(),
+        "question",
+        "abcd",
+        2,
+        ADAGConfig(device="cpu"),
+        candidate_policy_id="model_top5_plus_observed",
+        candidate_count=6,
+        instrumentation=instrumentation,
+    )
+
+    assert captured["candidate_axis"].token_ids_by_batch == (
+        (79, 127, 126, 125, 124, 123),
+    )
+    assert result.candidate_count == 6
+    assert result.candidate_contribution_schema["width"] == 6
+    assert result.contract_dict()["candidate_count"] == 6
+    assert instrumentation.snapshot()["counters"]["candidate_count"] == 6
+    assert validate_topk_trace_data(result) == 6
 
 
 def test_observed_candidate_k1_wires_same_logit_as_width_one(monkeypatch):
@@ -436,9 +499,7 @@ def _topk_trace(*, contribution_width=5) -> TopKPositionTrace:
     objective = JointLogitObjective(
         objective_id="raw_logit_sum",
         objective_version="1",
-        formula=" + ".join(
-            f"logit[candidate_{index}]" for index in range(5)
-        ),
+        formula=" + ".join(f"logit[candidate_{index}]" for index in range(5)),
         candidate_weights=(1.0,) * 5,
         percentage_threshold_reference="signed_joint_objective",
     )
@@ -449,9 +510,7 @@ def _topk_trace(*, contribution_width=5) -> TopKPositionTrace:
         "semantics": "gradient_times_activation_for_each_raw_candidate_logit",
         "scalar_graph_attribution_semantics": "named_joint_objective",
     }
-    data.df_node["contrib_map"] = [
-        [0.1 * index for index in range(contribution_width)]
-    ]
+    data.df_node["contrib_map"] = [[0.1 * index for index in range(contribution_width)]]
     trace = TopKPositionTrace(
         circuit_data=data,
         trace_family_id=TOPK_TRACE_FAMILY_ID,
@@ -502,9 +561,7 @@ def test_topk_compact_trace_uses_separate_schema_and_loader(tmp_path):
 
     loaded = load_topk_compact_trace(destination)
     assert loaded.metrics == {"elapsed_seconds": 4.5}
-    assert loaded.manifest["schema_version"] == (
-        "adag.compact-trace.topk-position.v1"
-    )
+    assert loaded.manifest["schema_version"] == ("adag.compact-trace.topk-position.v1")
     assert loaded.manifest["target_count"] == 1
     assert loaded.manifest["candidate_count"] == 5
     assert loaded.manifest["scientifically_reusable"] is True

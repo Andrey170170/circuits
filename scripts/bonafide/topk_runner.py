@@ -39,7 +39,11 @@ from scripts.bonafide.runner import (
     validate_runtime_topk_trace_against_item,
     wave_stop_reason,
 )
-from scripts.bonafide.topk_manifest import validate_topk_manifest
+from scripts.bonafide.topk_manifest import (
+    candidate_count_bounds,
+    candidate_selection_limit,
+    validate_topk_manifest,
+)
 
 
 def select_topk_wave(manifest: Mapping[str, Any], wave_id: str) -> dict[str, Any]:
@@ -234,6 +238,8 @@ def run_topk_wave(
         raise ValueError("top-k source tokenizer revision disagrees with run config")
     topk_manifest_sha256 = _sha256(manifest)
     family_root = artifact_root / trace_family["trace_family_id"]
+    candidate_count_min, candidate_count_max = candidate_count_bounds(trace_family)
+    selection_limit = candidate_selection_limit(trace_family)
 
     items = list(wave["items"])
     if only_artifact_id is not None:
@@ -269,10 +275,13 @@ def run_topk_wave(
             ][0],
             "candidate_policy_id": trace_family["candidate_policy_id"],
             "joint_objective_id": trace_family["joint_objective_id"],
-            "candidate_count": trace_family["candidate_count"],
+            "candidate_count_min": candidate_count_min,
+            "candidate_count_max": candidate_count_max,
             "code_revision": code_revision,
             "runtime_environment": runtime_environment,
         }
+        if candidate_count_min == candidate_count_max:
+            base["candidate_count"] = candidate_count_min
         if path.exists():
             if not _completed_artifact_matches(path, identity):
                 raise FileExistsError(
@@ -321,7 +330,7 @@ def run_topk_wave(
             warmup_position,
             adag_config,
             candidate_policy_id=trace_family["candidate_policy_id"],
-            candidate_count=trace_family["candidate_count"],
+            candidate_count=selection_limit,
             specified_candidate_token_id=warmup_item.get(
                 "specified_candidate_token_id"
             ),
@@ -386,7 +395,7 @@ def run_topk_wave(
                     position,
                     adag_config,
                     candidate_policy_id=trace_family["candidate_policy_id"],
-                    candidate_count=trace_family["candidate_count"],
+                    candidate_count=selection_limit,
                     specified_candidate_token_id=item.get(
                         "specified_candidate_token_id"
                     ),

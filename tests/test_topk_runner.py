@@ -112,6 +112,48 @@ def test_topk_wave_dry_run_does_not_load_model_or_write(monkeypatch, tmp_path) -
     assert not (tmp_path / "summary.jsonl").exists()
 
 
+def test_topk_wave_dry_run_records_variable_candidate_bounds(
+    monkeypatch, tmp_path
+) -> None:
+    import scripts.bonafide.topk_runner as runner_module
+
+    monkeypatch.setattr(
+        runner_module,
+        "_load_model_and_tokenizer",
+        lambda _config: (_ for _ in ()).throw(
+            AssertionError("dry-run loaded the model")
+        ),
+    )
+    manifest = _runner_manifest()
+    manifest["phase"] = "c1_policy_resource"
+    manifest["trace_family"] = {
+        "trace_family_id": "bonafide.model-top5-plus-observed.c1-smoke.v1",
+        "candidate_policy_id": "model_top5_plus_observed",
+        "candidate_policy_version": "1",
+        "candidate_count_min": 5,
+        "candidate_count_max": 6,
+        "candidate_count_rule": "5_if_observed_in_model_top5_else_6",
+        "joint_objective_id": "raw_logit_sum",
+        "joint_objective_version": "1",
+    }
+
+    records = run_topk_wave(
+        config=_cpu_config(),
+        manifest=manifest,
+        wave_id="parity-01",
+        artifact_root=tmp_path / "artifacts",
+        summary_jsonl=tmp_path / "summary.jsonl",
+        dry_run=True,
+        verify_source=False,
+        _code_revision=_code_revision(),
+        _runtime_environment=_runtime_environment(),
+    )
+
+    assert records[0]["candidate_count_min"] == 5
+    assert records[0]["candidate_count_max"] == 6
+    assert "candidate_count" not in records[0]
+
+
 def test_topk_wave_rejects_implicit_logit_centering(tmp_path) -> None:
     config = _cpu_config()
     config["adag_config"]["center_logits"] = True

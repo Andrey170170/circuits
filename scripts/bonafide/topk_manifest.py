@@ -21,6 +21,27 @@ DISCOVERY_ONLY_PHASES = {
     "c1_policy_resource",
     "c2_scientific_utility",
 }
+MODEL_TOP5_PLUS_OBSERVED_COUNT_RULE = "5_if_observed_in_model_top5_else_6"
+
+
+def candidate_count_bounds(
+    trace_family: Mapping[str, Any],
+) -> tuple[int, int]:
+    """Return the valid realized candidate-count range for a trace family."""
+
+    if trace_family.get("candidate_policy_id") == "model_top5_plus_observed":
+        return (
+            int(trace_family["candidate_count_min"]),
+            int(trace_family["candidate_count_max"]),
+        )
+    count = int(trace_family["candidate_count"])
+    return count, count
+
+
+def candidate_selection_limit(trace_family: Mapping[str, Any]) -> int:
+    """Return the requested selection width, including a variable policy ceiling."""
+
+    return candidate_count_bounds(trace_family)[1]
 
 
 def validate_trace_family(value: object) -> dict[str, Any]:
@@ -31,9 +52,6 @@ def validate_trace_family(value: object) -> dict[str, Any]:
     if not isinstance(trace_family_id, str) or not SAFE_ID.fullmatch(trace_family_id):
         raise ValueError("top-k trace_family_id must be a filesystem-safe identifier")
     policy_id = result.get("candidate_policy_id")
-    candidate_count = result.get("candidate_count")
-    if isinstance(candidate_count, bool) or not isinstance(candidate_count, int):
-        raise ValueError("top-k candidate_count must be an integer")
     if result.get("candidate_policy_version") != CANDIDATE_POLICY_VERSION:
         raise ValueError("top-k candidate policy version is unsupported")
     if result.get("joint_objective_version") != JOINT_OBJECTIVE_VERSION:
@@ -46,10 +64,40 @@ def validate_trace_family(value: object) -> dict[str, Any]:
         "model_top5": 5,
         "observed_plus_top4_alternatives": 5,
     }
-    if policy_id not in expected_counts:
+    if policy_id == "model_top5_plus_observed":
+        if result.get("candidate_count") is not None:
+            raise ValueError(
+                "model_top5_plus_observed uses candidate_count_min/max, not "
+                "a fixed candidate_count"
+            )
+        if (
+            result.get("candidate_count_min") != 5
+            or result.get("candidate_count_max") != 6
+            or result.get("candidate_count_rule") != MODEL_TOP5_PLUS_OBSERVED_COUNT_RULE
+        ):
+            raise ValueError(
+                "model_top5_plus_observed requires the frozen 5-or-6 "
+                "candidate-count contract"
+            )
+    elif policy_id not in expected_counts:
         raise ValueError(f"unsupported top-k candidate policy: {policy_id!r}")
-    if candidate_count != expected_counts[policy_id]:
-        raise ValueError("top-k candidate count disagrees with candidate policy")
+    else:
+        candidate_count = result.get("candidate_count")
+        if isinstance(candidate_count, bool) or not isinstance(candidate_count, int):
+            raise ValueError("top-k candidate_count must be an integer")
+        if candidate_count != expected_counts[policy_id]:
+            raise ValueError("top-k candidate count disagrees with candidate policy")
+        if any(
+            field in result
+            for field in (
+                "candidate_count_min",
+                "candidate_count_max",
+                "candidate_count_rule",
+            )
+        ):
+            raise ValueError(
+                "fixed-width policies cannot declare variable candidate counts"
+            )
     if objective_id not in {"raw_logit_sum", "observed_vs_alternatives"}:
         raise ValueError(f"unsupported top-k joint objective: {objective_id!r}")
     if (

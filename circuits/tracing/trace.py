@@ -50,7 +50,9 @@ class CircuitData:
     k: int
     config: ADAGConfig
     model_id: str = ""
-    traced_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    traced_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     target_logit_values: list[list[float]] = field(default_factory=list)
     target_provenance: list[dict[str, object]] = field(default_factory=list)
     trace_metadata: dict[str, object] = field(default_factory=dict)
@@ -84,8 +86,12 @@ class CircuitData:
                     return f"{parts[0]}___{int(parts[1]) + offset}"
                 return label
 
-            df_node["label"] = df_node["label"].apply(lambda l: reindex_label(l, global_offset))
-            df_edge["label"] = df_edge["label"].apply(lambda l: reindex_label(l, global_offset))
+            df_node["label"] = df_node["label"].apply(
+                lambda l: reindex_label(l, global_offset)
+            )
+            df_edge["label"] = df_edge["label"].apply(
+                lambda l: reindex_label(l, global_offset)
+            )
 
             all_df_node.append(df_node)
             all_df_edge.append(df_edge)
@@ -98,7 +104,9 @@ class CircuitData:
             attention_masks=[am for shard in shards for am in shard.attention_masks],
             labels=[l for shard in shards for l in shard.labels],
             target_logits=[tl for shard in shards for tl in shard.target_logits],
-            target_logit_probs=[tp for shard in shards for tp in shard.target_logit_probs],
+            target_logit_probs=[
+                tp for shard in shards for tp in shard.target_logit_probs
+            ],
             k=shards[0].k,
             config=shards[0].config,
             model_id=shards[0].model_id,
@@ -193,9 +201,7 @@ def _model_config_for_hash(model: PreTrainedModel) -> dict[str, object]:
         "_name_or_path": getattr(model.config, "_name_or_path", None),
         "_commit_hash": getattr(model.config, "_commit_hash", None),
         "model_type": getattr(model.config, "model_type", None),
-        "_attn_implementation": getattr(
-            model.config, "_attn_implementation", None
-        ),
+        "_attn_implementation": getattr(model.config, "_attn_implementation", None),
     }
 
 
@@ -236,7 +242,9 @@ def validate_teacher_forced_probe_result(
 ) -> dict[str, object]:
     """Fail closed on malformed or scientifically ambiguous probe output."""
 
-    value = probe.to_dict() if isinstance(probe, TeacherForcedProbeResult) else dict(probe)
+    value = (
+        probe.to_dict() if isinstance(probe, TeacherForcedProbeResult) else dict(probe)
+    )
     if value.get("schema_version") != PROBE_SCHEMA_VERSION:
         raise ValueError(f"unsupported probe schema: {value.get('schema_version')!r}")
     provenance = value.get("target_provenance")
@@ -261,7 +269,9 @@ def validate_teacher_forced_probe_result(
     ):
         numeric = provenance[field_name]
         if isinstance(numeric, bool) or not isinstance(numeric, int) or numeric < 0:
-            raise ValueError(f"probe target {field_name} must be a non-negative integer")
+            raise ValueError(
+                f"probe target {field_name} must be a non-negative integer"
+            )
     if not isinstance(provenance["token_text"], str):
         raise ValueError("probe target token_text must be a string")
     for field_name in ("logit", "probability"):
@@ -353,7 +363,9 @@ def validate_teacher_forced_probe_result(
         raise ValueError("probe instrumentation stages must be an object")
     leaked = forbidden_stages.intersection(stages)
     if leaked:
-        raise ValueError(f"probe contains forbidden post-selection stages: {sorted(leaked)}")
+        raise ValueError(
+            f"probe contains forbidden post-selection stages: {sorted(leaked)}"
+        )
 
     adag_config = value.get("adag_config")
     if not isinstance(adag_config, Mapping) or not isinstance(
@@ -404,9 +416,10 @@ def validate_teacher_forced_probe_result(
         raise ValueError("probe input-token metadata is inconsistent")
     if provenance["absolute_token_position"] != prefix_count + response_position:
         raise ValueError("probe absolute target position is inconsistent")
-    if provenance["prediction_token_position"] != provenance[
-        "absolute_token_position"
-    ] - 1:
+    if (
+        provenance["prediction_token_position"]
+        != provenance["absolute_token_position"] - 1
+    ):
         raise ValueError("probe prediction target position is inconsistent")
     if metadata["effective_end_layer"] < max(metadata["effective_start_layer"], 0):
         raise ValueError("probe effective layer bounds are inconsistent")
@@ -415,9 +428,10 @@ def validate_teacher_forced_probe_result(
     if not isinstance(model_identity, Mapping):
         raise ValueError("probe model_identity must be an object")
     for field_name in ("model_id", "revision", "hash_semantics"):
-        if not isinstance(model_identity.get(field_name), str) or not model_identity[
-            field_name
-        ]:
+        if (
+            not isinstance(model_identity.get(field_name), str)
+            or not model_identity[field_name]
+        ):
             raise ValueError(f"probe model_identity.{field_name} is required")
     _validate_sha256(
         model_identity.get("model_config_sha256"),
@@ -573,7 +587,9 @@ def tokenize_teacher_forced_response(
         )
     if assistant_suffix:
         if full_ids[-len(assistant_suffix) :] != assistant_suffix:
-            raise ValueError("chat template assistant suffix changed for non-empty content")
+            raise ValueError(
+                "chat template assistant suffix changed for non-empty content"
+            )
         response_ids = full_ids[len(prefix_ids) : -len(assistant_suffix)]
     else:
         response_ids = full_ids[len(prefix_ids) :]
@@ -632,7 +648,9 @@ def prepare_teacher_forced_input(
 
     included_response_count = target_response_positions[-1] + 1
     input_ids = prefix_ids + response_ids[:included_response_count]
-    target_token_ids = [response_ids[position] for position in target_response_positions]
+    target_token_ids = [
+        response_ids[position] for position in target_response_positions
+    ]
     target_prediction_positions = [
         len(prefix_ids) + position - 1 for position in target_response_positions
     ]
@@ -645,7 +663,9 @@ def prepare_teacher_forced_input(
         selected_response_positions=list(target_response_positions),
         target_prediction_positions=target_prediction_positions,
         target_token_ids=target_token_ids,
-        target_token_texts=[tokenizer.decode([token_id]) for token_id in target_token_ids],
+        target_token_texts=[
+            tokenizer.decode([token_id]) for token_id in target_token_ids
+        ],
     )
 
 
@@ -666,7 +686,9 @@ def _teacher_forced_target_scores(
     ):
         position_logits = logits[prediction_position]
         target_logits.append(float(position_logits[token_id].item()))
-        target_probs.append(float(torch.softmax(position_logits, dim=-1)[token_id].item()))
+        target_probs.append(
+            float(torch.softmax(position_logits, dim=-1)[token_id].item())
+        )
     return target_logits, target_probs
 
 
@@ -758,7 +780,9 @@ def probe_teacher_forced_response(
             system_prompt=system_prompt,
         )
     with instrumentation_stage(recorder, "target_scoring"):
-        target_logit_values, target_probs = _teacher_forced_target_scores(model, prepared)
+        target_logit_values, target_probs = _teacher_forced_target_scores(
+            model, prepared
+        )
     declared_model_config = _model_config_for_hash(model)
     pre_probe_model_config_sha256 = _stable_json_hash(declared_model_config)
     clja_error: BaseException | None = None
@@ -789,9 +813,7 @@ def probe_teacher_forced_response(
         )
         if post_probe_model_config_sha256 != pre_probe_model_config_sha256:
             if clja_error is not None:
-                recorder.set_counter(
-                    "probe_model_config_leak_during_failed_clja", True
-                )
+                recorder.set_counter("probe_model_config_leak_during_failed_clja", True)
                 clja_error.add_note(
                     "ADAG probe also leaked model.config state while failing; "
                     "the resident model must not be reused"
@@ -971,7 +993,9 @@ def prepare_cis(
     if true_answers is None:
         true_answers = [None] * len(questions)
     res = [
-        prepare_ci(model, tokenizer, q, sr, k, system_prompt, ta, use_chat_format, verbose)
+        prepare_ci(
+            model, tokenizer, q, sr, k, system_prompt, ta, use_chat_format, verbose
+        )
         for q, sr, ta in zip(questions, seed_responses, true_answers)
     ]
     cis = [r[0] for r in res]
@@ -1037,7 +1061,9 @@ def prepare_ci_with_rollout(
     # generate additional tokens
     input_ids = torch.tensor([token_ids], device=next(model.parameters()).device)
     with torch.no_grad():
-        output_ids = model.generate(input_ids, max_new_tokens=max_new_tokens, do_sample=False)
+        output_ids = model.generate(
+            input_ids, max_new_tokens=max_new_tokens, do_sample=False
+        )
     rollout_token_ids = output_ids[0].tolist()[len(token_ids) :]
 
     if len(rollout_token_ids) != max_new_tokens:
@@ -1065,7 +1091,9 @@ def prepare_cis_with_rollout(
     if seed_responses is None:
         seed_responses = [None] * len(questions)
     cis = [
-        prepare_ci_with_rollout(model, tokenizer, q, seed_response, max_new_tokens, verbose)
+        prepare_ci_with_rollout(
+            model, tokenizer, q, seed_response, max_new_tokens, verbose
+        )
         for q, seed_response in zip(questions, seed_responses)
     ]
     max_length = max(len(ci) for ci in cis)
@@ -1123,7 +1151,9 @@ def prepare_cis_with_rollout(
         logits = model(input_ids, attention_mask=attn_mask).logits
     for batch_i in range(len(new_cis)):
         probs_for_ci: list[float] = []
-        for tgt_pos, focus_tok in zip(all_tgt_tokens[batch_i], all_focus_tokens[batch_i]):
+        for tgt_pos, focus_tok in zip(
+            all_tgt_tokens[batch_i], all_focus_tokens[batch_i]
+        ):
             token_probs = torch.softmax(logits[batch_i, tgt_pos], dim=-1)
             probs_for_ci.append(token_probs[focus_tok].item())
         all_focus_probs.append(probs_for_ci)
@@ -1297,9 +1327,8 @@ def trace_teacher_forced_candidates(
             decode_token=lambda token_id: tokenizer.decode([token_id]),
             specified_token_id=specified_candidate_token_id,
         )
-        objective = build_joint_objective(
-            joint_objective_id, selection.candidates
-        )
+        objective = build_joint_objective(joint_objective_id, selection.candidates)
+        realized_candidate_count = len(selection.candidates)
         observed_token_id = prepared.target_token_ids[0]
         observed_logit = float(
             position_logits[observed_token_id].detach().float().cpu().item()
@@ -1337,7 +1366,7 @@ def trace_teacher_forced_candidates(
     if instrumentation is not None:
         instrumentation.set_counter("raw_node_count", len(nodes))
         instrumentation.set_counter("raw_edge_count", len(edges))
-        instrumentation.set_counter("candidate_count", candidate_count)
+        instrumentation.set_counter("candidate_count", realized_candidate_count)
     with instrumentation_stage(instrumentation, "dataframe_conversion"):
         df_node, df_edge = convert_circuit_to_dataframes(
             [nodes],
@@ -1358,7 +1387,7 @@ def trace_teacher_forced_candidates(
     contribution_schema: dict[str, object] = {
         "schema_id": TOPK_CONTRIBUTION_SCHEMA_ID,
         "axis": "candidate_index",
-        "width": candidate_count,
+        "width": realized_candidate_count,
         "semantics": "gradient_times_activation_for_each_raw_candidate_logit",
         "scalar_graph_attribution_semantics": "named_joint_objective",
     }
@@ -1366,7 +1395,7 @@ def trace_teacher_forced_candidates(
         "trace_family_id": trace_family_id,
         "shared_response_position": target_response_position,
         "shared_prediction_position": prepared.target_prediction_positions[0],
-        "candidate_count": candidate_count,
+        "candidate_count": realized_candidate_count,
         "candidate_selection": selection.to_dict(),
         "joint_objective": objective.to_dict(),
         "candidate_contribution_schema": contribution_schema,
@@ -1435,7 +1464,9 @@ def compute_circuits(
     prompts = prompts if isinstance(prompts, list) else [prompts]
     if seed_responses is None:
         seed_responses = [None] * len(prompts)
-    seed_responses = seed_responses if isinstance(seed_responses, list) else [seed_responses]
+    seed_responses = (
+        seed_responses if isinstance(seed_responses, list) else [seed_responses]
+    )
 
     # storage
     all_nodes, all_edges, all_labels, all_focus, all_starts = [], [], [], [], []
@@ -1445,26 +1476,34 @@ def compute_circuits(
 
     for i in tqdm(range(0, len(prompts), bs), desc="Processing batches"):
         if use_rollout:
-            cis, attention_masks, focus_tokens, focus_probs, tgt_tokens, keep_pos, starts = (
-                prepare_cis_with_rollout(
-                    model,
-                    tokenizer,
-                    prompts[i : i + bs],
-                    seed_responses[i : i + bs],
-                    max_new_tokens=max_new_tokens,
-                    verbose=config.verbose,
-                )
-            )
-        else:
-            cis, attention_masks, focus_tokens, focus_probs, keep_pos, starts = prepare_cis(
+            (
+                cis,
+                attention_masks,
+                focus_tokens,
+                focus_probs,
+                tgt_tokens,
+                keep_pos,
+                starts,
+            ) = prepare_cis_with_rollout(
                 model,
                 tokenizer,
                 prompts[i : i + bs],
                 seed_responses[i : i + bs],
-                k=k,
-                system_prompt=system_prompt,
-                true_answers=true_answers,
+                max_new_tokens=max_new_tokens,
                 verbose=config.verbose,
+            )
+        else:
+            cis, attention_masks, focus_tokens, focus_probs, keep_pos, starts = (
+                prepare_cis(
+                    model,
+                    tokenizer,
+                    prompts[i : i + bs],
+                    seed_responses[i : i + bs],
+                    k=k,
+                    system_prompt=system_prompt,
+                    true_answers=true_answers,
+                    verbose=config.verbose,
+                )
             )
         nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(
             model=model,
@@ -1474,7 +1513,9 @@ def compute_circuits(
             attention_masks=attention_masks,
             focus_logits=focus_tokens,
             src_tokens=keep_pos,
-            tgt_tokens=[max(keep_pos) for _ in range(k)] if not use_rollout else tgt_tokens,
+            tgt_tokens=(
+                [max(keep_pos) for _ in range(k)] if not use_rollout else tgt_tokens
+            ),
         )
         all_nodes.append(nodes)
         all_edges.append(edges)
@@ -1510,7 +1551,10 @@ def compute_cohens_d_loo(vals_x: list[float], all_vals: list[float]) -> float:
     std_x = np.std(vals_x, ddof=1) if len(vals_x) > 1 else 0
     std_y = np.std(vals_y, ddof=1) if len(vals_y) > 1 else 0
     s = (
-        np.sqrt(((len(vals_x) - 1) * std_x + (len(vals_y) - 1) * std_y) / (len(all_vals) - 2))
+        np.sqrt(
+            ((len(vals_x) - 1) * std_x + (len(vals_y) - 1) * std_y)
+            / (len(all_vals) - 2)
+        )
         if len(all_vals) > 2
         else 0
     )
@@ -1610,7 +1654,9 @@ def convert_circuit_to_dataframes(
         # Only apply threshold to MLP neurons, not embedding (layer -1) or final layer nodes
         max_layer = df_node["layer"].max()
         is_exempt = (df_node["layer"] < 0) | (df_node["layer"] == max_layer)
-        df_node = df_node[is_exempt | (df_node.attribution.abs() >= percentage_threshold)]
+        df_node = df_node[
+            is_exempt | (df_node.attribution.abs() >= percentage_threshold)
+        ]
     else:
         df_node = df_node[df_node.attribution != 0]
     df_edge = df_edge[df_edge.attribution != 0].dropna(subset=["attribution"])

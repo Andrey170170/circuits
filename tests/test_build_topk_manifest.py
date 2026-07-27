@@ -58,6 +58,29 @@ def test_builder_rejects_mixed_corpus_roles(tmp_path: Path) -> None:
         )
 
 
+def test_builder_records_top5_plus_observed_variable_width(tmp_path: Path) -> None:
+    source = _source_manifest()
+    item = source["waves"][0]["items"][0]
+
+    manifest = build_topk_manifest(
+        source,
+        source_manifest_path=tmp_path / "source.json",
+        source_manifest_sha256="a" * 64,
+        source_artifact_ids=[item["artifact_id"]],
+        phase="c1_policy_resource",
+        trace_family_id="bonafide.model-top5-plus-observed.c1-smoke.v1",
+        candidate_policy_id="model_top5_plus_observed",
+        joint_objective_id="raw_logit_sum",
+        wave_id="c1-smoke",
+    )
+
+    family = manifest["trace_family"]
+    assert "candidate_count" not in family
+    assert family["candidate_count_min"] == 5
+    assert family["candidate_count_max"] == 6
+    assert family["candidate_count_rule"] == ("5_if_observed_in_model_top5_else_6")
+
+
 def test_save_manifest_is_atomic_and_does_not_overwrite(tmp_path: Path) -> None:
     output = tmp_path / "manifests" / "topk.json"
     value = {"hello": "world"}

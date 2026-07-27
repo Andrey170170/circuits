@@ -1416,21 +1416,21 @@ joint topology objective
 
 If C0–C2 pass and a full matched corpus is explicitly authorized, it should cover the same 2,594
 completed target positions as the width-one corpus. The pathological missing position 663 remains
-excluded. Under the provisional observed-plus-alternatives policy, candidate zero supplies paired
-actual-token evidence without changing prompt or target-position selection.
+excluded. Under the frozen model-top-five-plus-observed policy, candidate zero supplies paired
+actual-token evidence without changing prompt or target-position selection. The realized
+candidate width is five when the observed token is already in the model top five and six
+otherwise.
 
 ### 10.2 Candidate-policy decision
 
-Compare two candidate rules on the probe set:
+The primary candidate rule is:
 
-1. `model_top5`:
-   - the five highest-logit tokens at the shared prediction position;
-   - best match to the ordinary meaning of top-five logits;
-2. `observed_plus_top4_alternatives`:
+1. `model_top5_plus_observed`:
+   - preserve all five highest-logit tokens at the shared prediction position;
    - always include the stored teacher-forced response token;
-   - fill remaining slots with the four highest-logit distinct alternatives.
+   - realize width five when those sets overlap and width six otherwise.
 
-For both policies record:
+For this policy record:
 
 ```text
 candidate rank under full model distribution
@@ -1444,41 +1444,40 @@ observed token's full-distribution rank
 tie-breaking rule
 ```
 
-For `model_top5`, use stable descending-logit order with token ID as the deterministic tie-breaker.
-For `observed_plus_top4_alternatives`, place the observed token at index zero and order the four
-alternatives by the same descending-logit/token-ID rule. The probe report must state how frequently
-the observed token falls outside the model top five and how candidate policy changes contribution
-profiles and graph topology. Freeze exactly one policy for the first full corpus; do not mix
-policies under one trace-family ID.
-
-The provisional default for this BonaFide study is `observed_plus_top4_alternatives`, because the
-scientific target is the computation associated with the recorded response token and candidate
-index zero can remain paired with the completed width-one trace:
+Place the observed token at index zero and order the remaining model-top-five tokens by stable
+descending logit with token ID as the deterministic tie-breaker:
 
 ```text
 candidate[0] = observed teacher-forced token
-candidate[1:5] = four highest-logit distinct alternatives in deterministic order
+candidate[1:] = model top-five tokens excluding the observed token
+candidate_count = 5 if observed rank <= 5 else 6
 ```
 
-When the observed token is already in the model top five, the selected set is the model top five.
-Pure `model_top5` remains a required discovery-only sensitivity probe. If selected for a future
-full run, that run is named an alternative-logit trace family and is not described as a matched
-actual-token extension when the observed token is absent.
+The manifest freezes `candidate_count_min=5`, `candidate_count_max=6`, and the explicit rule
+`5_if_observed_in_model_top5_else_6`; every artifact records its realized count. The C1 report
+must state how frequently the observed token falls outside the model top five and stratify
+resources and topology results by realized width.
+
+Pure `model_top5` remains a discovery-only sensitivity rule. The earlier
+`observed_plus_top4_alternatives` rule remains readable for C0 smoke compatibility but is not the
+C1 production policy because it drops the fifth-ranked model candidate when the observed token
+falls outside the top five. Do not mix policies under one trace-family ID.
 
 ### 10.3 Joint objective and contribution semantics
 
 For ADAG compatibility, the first implementation should:
 
 - select/prune graph topology with an explicitly versioned joint scalar objective over the five
-  selected logits;
-- preserve a named five-element per-candidate contribution vector for each relevant neuron;
+  or six selected logits;
+- preserve a named five- or six-element per-candidate contribution vector for each relevant
+  neuron;
 - retain the scalar graph attribution values separately from the candidate contribution vector;
 - never describe the joint graph as five exact independent graphs.
 
 The initial implementation candidate is an unweighted sum of the selected logits:
 
 ```text
-J_top5 = logit[candidate_0] + ... + logit[candidate_4]
+J_candidates = sum(logit[candidate_i] for each realized candidate i)
 ```
 
 Record this formula and its candidate order in the artifact. This rule is chosen to remain close
@@ -1543,9 +1542,10 @@ new interfaces address the same logit.
 ### 10.5 Top-five schema
 
 The implementation must add a candidate axis that is distinct from the response-target-position
-axis. It is invalid to represent five candidates by repeating the same prediction position five
-times through the current multi-position interface. The compact artifact still has one scientific
-response target position, while `candidate_count=5` describes the output-profile width.
+axis. It is invalid to represent several candidates by repeating the same prediction position
+through the current multi-position interface. The compact artifact still has one scientific
+response target position, while realized `candidate_count` describes the five- or six-column
+output-profile width.
 
 Every artifact adds:
 
@@ -1617,7 +1617,10 @@ Use three gates:
    - compare raw-sum, centered/contrastive, and candidate-specific-union topology semantics;
 2. C1 policy/resource probe:
    - 24–48 family/response-balanced discovery targets;
-   - compare `observed_plus_top4_alternatives` with pure `model_top5`;
+   - use the frozen `model_top5_plus_observed` policy;
+   - deliberately include both realized-width-five and realized-width-six cases;
+   - retain a small pure-`model_top5` sensitivity subset rather than a competing production
+     policy;
    - establish runtime, HBM, RSS, graph-size, serialization, and numerical bounds;
 3. C2 scientific-utility pilot:
    - approximately 200–300 family/response-balanced discovery targets, with the exact count and

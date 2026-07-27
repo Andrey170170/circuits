@@ -29,12 +29,17 @@ Implemented policies are:
 
 - `observed_token`: the explicit observed-token `k=1` parity mode;
 - `specified_token`: one frozen token ID for C0 independent-candidate references;
+- `model_top5_plus_observed`: the frozen C1 policy; observed token at candidate index zero plus
+  every distinct model-top-five token, realizing width five or six;
 - `observed_plus_top4_alternatives`: observed token at candidate index zero plus four
-  deterministic alternatives;
+  deterministic alternatives, retained for C0 smoke compatibility;
 - `model_top5`: five deterministic highest-logit candidates.
 
 Full-distribution rank is one-based. Candidate-vector index is zero-based. Descending logit is
-ordered with ascending token ID as the exact-tie rule.
+ordered with ascending token ID as the exact-tie rule. The variable-width policy freezes
+`candidate_count_min=5`, `candidate_count_max=6`, and
+`candidate_count_rule=5_if_observed_in_model_top5_else_6`; each artifact records its realized
+width and never duplicates the observed token.
 
 Implemented objectives are:
 

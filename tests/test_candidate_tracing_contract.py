@@ -67,6 +67,39 @@ def test_observed_plus_alternatives_keeps_observed_at_index_zero() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("observed_token_id", "expected_ids", "expected_count"),
+    [
+        (1, [1, 0, 2, 3, 4], 5),
+        (6, [6, 0, 1, 2, 3, 4], 6),
+    ],
+)
+def test_model_top5_plus_observed_realizes_width_five_or_six(
+    observed_token_id: int,
+    expected_ids: list[int],
+    expected_count: int,
+) -> None:
+    logits = torch.tensor([9.0, 8.0, 7.0, 6.0, 5.0, 4.0, -4.0])
+
+    selection = select_candidate_logits(
+        logits,
+        observed_token_id=observed_token_id,
+        policy_id="model_top5_plus_observed",
+        candidate_count=6,
+        decode_token=_decode,
+    )
+
+    assert [candidate.token_id for candidate in selection.candidates] == expected_ids
+    assert len(selection.candidates) == expected_count
+    assert selection.candidates[0].is_observed is True
+    assert [
+        candidate.full_distribution_rank for candidate in selection.candidates[1:]
+    ] == [rank for rank in range(1, 6) if rank != selection.observed_token_rank]
+    assert selection.ordering_rule == (
+        "observed_first_then_model_top5_descending_logit_then_ascending_token_id"
+    )
+
+
 def test_observed_token_policy_is_the_explicit_k1_compatibility_mode() -> None:
     selection = select_candidate_logits(
         torch.tensor([3.0, 1.0, 2.0]),
