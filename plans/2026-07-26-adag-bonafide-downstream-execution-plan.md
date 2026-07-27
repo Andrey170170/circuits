@@ -2477,3 +2477,36 @@ given the wrong resampling-report path; it wrote no selected-state output. Corre
 completed the bundle above. Post-run validation recomputed the master/state canonical hashes and
 every persisted file hash, checked contiguous cluster evidence and exact 16,022-row assignments,
 confirmed the shared disjoint family partitions, and passed.
+
+### 19.1 Labeling comparison runtime implementation
+
+On 2026-07-27, commits beginning at `10c9bb5` implemented the provider-neutral comparison runtime
+without launching a production labeling run. The implementation adds:
+
+- config-driven OpenAI, Anthropic, OpenAI-compatible, and deterministic fake adapters;
+- live request execution and hosted-provider native batch prepare/submit/status/collect stages;
+- atomic per-request results and telemetry with a dated, explicit price snapshot;
+- the three frozen recipes: Qwen-only, Luna/Terra, and Haiku/Opus 5;
+- exact selected-bundle validation and a deterministic bridge from frozen trace witnesses plus
+  signed-basis assignments to polarity-aligned cluster attribution profiles;
+- character-overlap retokenization diagnostics for the fixed Transluce simulator;
+- selection scoring on `selection_scoring`, summary generation from ranked candidates, and final
+  label audit on `audit`;
+- a GPU scoring launcher that loads the simulator once per recipe/phase rather than once per
+  cluster.
+
+The primary and alternative prompts share the same renderer and partition semantics across
+providers. Hosted transport batching does not combine multiple clusters into one semantic model
+request. API monetary cost and local GPU-hours remain separate accounting quantities.
+
+Minimal live checks confirmed `gpt-5.6-luna` through the Responses API and
+`claude-haiku-4-5-20251001` through the Messages API with normalized usage records. The first
+deliberately 64-token Haiku response ended at the token cap and was correctly classified as
+invalid JSON; a 128-token retry completed and parsed. No Terra, Opus, provider batch, Qwen
+endpoint, or production simulator call was made.
+
+The remaining execution dependency is staging `Transluce/llama_8b_simulator` in a frozen circuits
+labeling environment. It was not present in the configured Hugging Face cache at implementation
+time. Qwen endpoint variables were also not present in this thread's environment; that endpoint is
+owned by the separate serving track. The operating procedure and output layout are recorded in
+`docs/LABELING_COMPARISON_PIPELINE.md`.

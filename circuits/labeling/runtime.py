@@ -55,6 +55,7 @@ def collect_code_revision() -> dict[str, Any]:
     scoped = (
         "circuits/labeling",
         "scripts/bonafide/labeling_pipeline.py",
+        "scripts/bonafide/labeling_score.sbatch",
         "scripts/bonafide/configs/labeling",
         "pyproject.toml",
         "uv.lock",

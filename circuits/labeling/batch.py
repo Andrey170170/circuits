@@ -20,7 +20,7 @@ def openai_batch_line(request: GenerationRequest) -> dict[str, Any]:
         "max_output_tokens": request.max_output_tokens,
         **request.provider_parameters,
     }
-    if request.temperature is not None:
+    if request.temperature is not None and not request.reasoning:
         body["temperature"] = request.temperature
     if request.reasoning:
         body["reasoning"] = request.reasoning
