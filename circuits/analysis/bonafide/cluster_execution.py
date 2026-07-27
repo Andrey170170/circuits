@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from numpy.typing import NDArray
 
 from circuits.analysis.bonafide.canonical import (
     canonical_sha256,
@@ -25,12 +26,15 @@ from circuits.analysis.bonafide.canonical import (
 )
 from circuits.analysis.bonafide.clustering import (
     SPARSE_CLUSTER_SCHEMA,
+    SparseSpectralResult,
     knn_affinity,
     mean_similarity_matrix,
     sparse_spectral_cluster,
 )
 from circuits.analysis.bonafide.clustering_store import (
+    BasisSupport,
     FeatureStoreReader,
+    PairEvidence,
     load_pair_evidence,
 )
 
@@ -72,8 +76,16 @@ def collect_clustering_code_revision(repo_root: Path) -> dict[str, Any]:
         "circuits/analysis/bonafide",
         "scripts/bonafide/clustering_build_evidence.py",
         "scripts/bonafide/clustering_build_plan.py",
+        "scripts/bonafide/clustering_evaluate.py",
         "scripts/bonafide/clustering_fit.py",
+        "scripts/bonafide/clustering_project.py",
+        "scripts/bonafide/clustering_resample_build_plan.py",
+        "scripts/bonafide/clustering_resample_evidence.py",
+        "scripts/bonafide/clustering_resample_fit.py",
+        "scripts/bonafide/clustering_resample_report.py",
         "scripts/bonafide/clustering_evidence.sbatch",
+        "scripts/bonafide/clustering_resample_evidence.sbatch",
+        "scripts/bonafide/clustering_resample_fit.sbatch",
         "scripts/bonafide/clustering_sweep.sbatch",
         "pyproject.toml",
         "uv.lock",
@@ -317,6 +329,44 @@ def _validate_existing_cluster_state(output_path: Path) -> dict[str, Any]:
     return manifest
 
 
+def fit_sparse_cluster_config(
+    *,
+    evidence: PairEvidence,
+    support: BasisSupport,
+    config: Mapping[str, Any],
+) -> tuple[SparseSpectralResult, NDArray[np.bool_]]:
+    eligible = (
+        (support.target_counts >= int(config["basis_min_target_count"]))
+        & (support.response_counts >= int(config["basis_min_response_count"]))
+        & (support.family_counts >= int(config["basis_min_family_count"]))
+    )
+    if bool(config["exclude_boundary_layers"]):
+        eligible &= ~support.boundary_mask
+    similarity = mean_similarity_matrix(
+        evidence,
+        min_pair_target_overlap=int(config["pair_min_target_overlap"]),
+        min_pair_response_overlap=int(config["pair_min_response_overlap"]),
+        min_pair_family_overlap=int(config["pair_min_family_overlap"]),
+        eligible_mask=eligible,
+    )
+    affinity = knn_affinity(
+        similarity,
+        neighbors=int(config["neighbors"]),
+        symmetrization=str(config["knn_symmetrization"]),  # type: ignore[arg-type]
+        minimum_affinity=float(config["minimum_affinity"]),
+    )
+    return (
+        sparse_spectral_cluster(
+            affinity,
+            n_clusters=int(config["n_clusters"]),
+            random_seed=int(config["random_seed"]),
+            self_loop_weight=float(config["self_loop_weight"]),
+            eigen_tolerance=float(config["eigen_tolerance"]),
+        ),
+        eligible,
+    )
+
+
 def fit_clustering_task(
     plan: Mapping[str, Any],
     *,
@@ -344,32 +394,10 @@ def fit_clustering_task(
         Path(str(validated["output_root"])) / "pair-evidence" / str(config["weighting"])
     )
     evidence, support = load_pair_evidence(evidence_path)
-    eligible = (
-        (support.target_counts >= int(config["basis_min_target_count"]))
-        & (support.response_counts >= int(config["basis_min_response_count"]))
-        & (support.family_counts >= int(config["basis_min_family_count"]))
-    )
-    if bool(config["exclude_boundary_layers"]):
-        eligible &= ~support.boundary_mask
-    similarity = mean_similarity_matrix(
-        evidence,
-        min_pair_target_overlap=int(config["pair_min_target_overlap"]),
-        min_pair_response_overlap=int(config["pair_min_response_overlap"]),
-        min_pair_family_overlap=int(config["pair_min_family_overlap"]),
-        eligible_mask=eligible,
-    )
-    affinity = knn_affinity(
-        similarity,
-        neighbors=int(config["neighbors"]),
-        symmetrization=str(config["knn_symmetrization"]),  # type: ignore[arg-type]
-        minimum_affinity=float(config["minimum_affinity"]),
-    )
-    result = sparse_spectral_cluster(
-        affinity,
-        n_clusters=int(config["n_clusters"]),
-        random_seed=int(config["random_seed"]),
-        self_loop_weight=float(config["self_loop_weight"]),
-        eigen_tolerance=float(config["eigen_tolerance"]),
+    result, eligible = fit_sparse_cluster_config(
+        evidence=evidence,
+        support=support,
+        config=config,
     )
     reader = FeatureStoreReader(Path(str(validated["feature_store"]["path"])))
     assignment_rows: list[dict[str, Any]] = []

@@ -8,7 +8,7 @@ import math
 import os
 import shutil
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Mapping, cast
 
@@ -52,6 +52,7 @@ class PairEvidenceBuild:
     feature_manifest: Mapping[str, Any]
     feature_store_root: Path
     basis_rows: tuple[Mapping[str, Any], ...]
+    target_selection: Mapping[str, Any] = field(default_factory=lambda: {"mode": "all"})
 
 
 BASIS_SUPPORT_SCHEMA = pa.schema(
@@ -166,6 +167,15 @@ class FeatureStoreReader:
     @property
     def target_count(self) -> int:
         return len(self._target_by_trace)
+
+    @property
+    def target_rows(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(
+            sorted(
+                self._target_by_trace.values(),
+                key=lambda row: int(row["atlas_trace_index"]),
+            )
+        )
 
     def iter_blocks(
         self,
@@ -289,9 +299,17 @@ def build_pair_evidence_from_feature_store(
     *,
     weighting: WeightingMode = "hierarchical",
     epsilon: float = DEFAULT_EPSILON,
+    included_family_ids: frozenset[str] | None = None,
+    excluded_family_ids: frozenset[str] | None = None,
 ) -> PairEvidenceBuild:
     """Build exact pair evidence and recurrence support from a feature store."""
 
+    if included_family_ids is not None and excluded_family_ids is not None:
+        raise ValueError("family inclusion and exclusion are mutually exclusive")
+    if included_family_ids is not None and not included_family_ids:
+        raise ValueError("included_family_ids cannot be empty")
+    if excluded_family_ids is not None and not excluded_family_ids:
+        raise ValueError("excluded_family_ids cannot be empty")
     reader = FeatureStoreReader(compacted_root)
     accumulator = PairEvidenceAccumulator(
         basis_count=reader.basis_count,
@@ -301,11 +319,21 @@ def build_pair_evidence_from_feature_store(
     target_counts = np.zeros(reader.basis_count, dtype=np.int64)
     response_sets: list[set[str]] = [set() for _ in range(reader.basis_count)]
     family_sets: list[set[str]] = [set() for _ in range(reader.basis_count)]
+    selected_trace_ids: list[str] = []
+    selected_response_ids: set[str] = set()
+    selected_family_ids: set[str] = set()
     for block, target in reader.iter_blocks():
+        family_id = str(target["base_question_id"])
+        if included_family_ids is not None and family_id not in included_family_ids:
+            continue
+        if excluded_family_ids is not None and family_id in excluded_family_ids:
+            continue
         accumulator.add(block)
+        selected_trace_ids.append(block.trace_unit_id)
         target_counts[block.basis_indices] += 1
         response_id = str(target["response_id"])
-        family_id = str(target["base_question_id"])
+        selected_response_ids.add(response_id)
+        selected_family_ids.add(family_id)
         for basis_index in block.basis_indices:
             response_sets[int(basis_index)].add(response_id)
             family_sets[int(basis_index)].add(family_id)
@@ -316,6 +344,25 @@ def build_pair_evidence_from_feature_store(
     )
     maximum_layer = int(layers.max())
     boundary_mask = (layers < 0) | (layers == maximum_layer)
+    if included_family_ids is not None:
+        selection = {
+            "mode": "include_families",
+            "included_family_ids": sorted(included_family_ids),
+        }
+    elif excluded_family_ids is not None:
+        selection = {
+            "mode": "exclude_families",
+            "excluded_family_ids": sorted(excluded_family_ids),
+        }
+    else:
+        selection = {"mode": "all"}
+    selection = {
+        **selection,
+        "selected_target_count": len(selected_trace_ids),
+        "selected_response_count": len(selected_response_ids),
+        "selected_family_count": len(selected_family_ids),
+        "selected_trace_unit_ids_sha256": canonical_sha256(sorted(selected_trace_ids)),
+    }
     return PairEvidenceBuild(
         evidence=accumulator.finalize(),
         basis_support=BasisSupport(
@@ -333,6 +380,7 @@ def build_pair_evidence_from_feature_store(
         feature_manifest=reader.manifest,
         feature_store_root=reader.compacted_root,
         basis_rows=reader.basis_rows,
+        target_selection=selection,
     )
 
 
@@ -427,6 +475,7 @@ def write_pair_evidence_build(
             },
             "basis_count": build.evidence.basis_count,
             "target_count": build.evidence.target_count,
+            "target_selection": dict(build.target_selection),
             "weighting": build.evidence.weighting,
             "epsilon": build.evidence.epsilon,
             "matrix_records": matrix_records,

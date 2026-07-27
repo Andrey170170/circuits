@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
@@ -17,8 +19,24 @@ from circuits.analysis.bonafide.clustering import (
 from circuits.analysis.bonafide.clustering_store import (
     BasisSupport,
     PairEvidenceBuild,
+    build_pair_evidence_from_feature_store,
     load_pair_evidence,
     write_pair_evidence_build,
+)
+from circuits.analysis.bonafide.clustering_evaluation import (
+    LoadedClusterState,
+    assignment_ari,
+    cluster_size_metrics,
+    seed_stability,
+    sparse_graph_partition_metrics,
+)
+from circuits.analysis.bonafide.clustering_projection import (
+    _cluster_summaries,
+    _decode_trace_mask,
+    _phase_bin,
+)
+from circuits.analysis.bonafide.clustering_resampling import (
+    _checkpoint_family_sets,
 )
 
 
@@ -309,3 +327,206 @@ def test_pair_evidence_persistence_round_trip(
     ]
     assert support.target_counts.tolist() == [1, 1]
     assert support.boundary_mask.tolist() == [False, True]
+
+
+def test_sparse_graph_partition_metrics_recovers_two_disconnected_cliques() -> None:
+    affinity = csr_matrix(
+        np.asarray(
+            [
+                [0.0, 1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ]
+        )
+    )
+    labels = np.asarray([0, 0, 1, 1], dtype=np.int64)
+
+    graph = sparse_graph_partition_metrics(labels, affinity)
+    sizes = cluster_size_metrics(labels)
+
+    assert graph["observed_internal_affinity_fraction"] == pytest.approx(1.0)
+    assert graph["degree_volume_null_internal_fraction"] == pytest.approx(0.5)
+    assert graph["internal_affinity_enrichment"] == pytest.approx(2.0)
+    assert graph["modularity"] == pytest.approx(0.5)
+    assert graph["maximum_conductance"] == pytest.approx(0.0)
+    assert sizes["cluster_sizes"] == [2, 2]
+    assert sizes["normalized_size_entropy"] == pytest.approx(1.0)
+    assert sizes["size_gini"] == pytest.approx(0.0)
+
+
+def test_seed_stability_selects_assignment_medoid_and_ignores_unassigned() -> None:
+    state_path = Path("/tmp/state")
+    states = [
+        LoadedClusterState(
+            task_index=0,
+            path=state_path,
+            manifest={"config": {}},
+            labels=np.asarray([0, 0, 1, 1, -1], dtype=np.int64),
+        ),
+        LoadedClusterState(
+            task_index=1,
+            path=state_path,
+            manifest={"config": {}},
+            labels=np.asarray([0, 0, 1, 1, 0], dtype=np.int64),
+        ),
+        LoadedClusterState(
+            task_index=2,
+            path=state_path,
+            manifest={"config": {}},
+            labels=np.asarray([0, 1, 0, 1, 1], dtype=np.int64),
+        ),
+    ]
+
+    stability = seed_stability(states)
+
+    assert assignment_ari(states[0].labels, states[1].labels) == pytest.approx(1.0)
+    assert stability["medoid_task_index"] in {0, 1}
+    assert stability["maximum_ari"] == pytest.approx(1.0)
+
+
+def test_projection_summary_enforces_labelability_and_temporal_contract() -> None:
+    rows = []
+    for response_index in range(3):
+        for ordinal in range(7):
+            rows.append(
+                {
+                    "cluster_id": 0,
+                    "response_id": f"response-{response_index}",
+                    "base_question_id": f"family-{response_index}",
+                    "response_target_ordinal": ordinal,
+                    "response_phase_bin": _phase_bin(ordinal, 10),
+                    "absolute_attribution_mass": float(ordinal + 1),
+                }
+            )
+    rows.append(
+        {
+            "cluster_id": 1,
+            "response_id": "response-0",
+            "base_question_id": "family-0",
+            "response_target_ordinal": 0,
+            "response_phase_bin": 0,
+            "absolute_attribution_mass": 1.0,
+        }
+    )
+    summaries = _cluster_summaries(
+        labels=np.asarray([0] * 8 + [1] * 2, dtype=np.int64),
+        target_cluster_rows=rows,
+        response_target_counts={
+            "response-0": 10,
+            "response-1": 10,
+            "response-2": 10,
+        },
+    )
+
+    assert summaries[0]["labelable"] is True
+    assert summaries[0]["support_target_count"] == 21
+    assert summaries[0]["support_family_count"] == 3
+    assert summaries[0]["median_persistence_density"] == pytest.approx(1.0)
+    assert summaries[1]["labelable"] is False
+    assert summaries[1]["labeling_status"] == "insufficient_labeling_support"
+    witnesses, witness_hash = _decode_trace_mask(
+        (1 << 0) | (1 << 2),
+        ["trace-a", "trace-b", "trace-c"],
+    )
+    assert witnesses == ["trace-a", "trace-c"]
+    assert len(witness_hash) == 64
+
+
+def test_feature_store_evidence_family_selection_is_explicit(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blocks = [
+        (
+            _block(
+                "trace-a",
+                [0, 1],
+                [[1.0], [1.0]],
+                [[True], [True]],
+                response_id="response-a",
+                base_question_id="family-a",
+            ),
+            {
+                "response_id": "response-a",
+                "base_question_id": "family-a",
+            },
+        ),
+        (
+            _block(
+                "trace-b",
+                [0],
+                [[1.0]],
+                [[True]],
+                response_id="response-b",
+                base_question_id="family-b",
+            ),
+            {
+                "response_id": "response-b",
+                "base_question_id": "family-b",
+            },
+        ),
+    ]
+
+    class FakeFeatureStoreReader:
+        basis_count = 2
+        compacted_root = tmp_path
+        manifest = {
+            "manifest_sha256": "feature",
+            "plan_sha256": "plan",
+            "schema_version": "feature",
+        }
+        basis_rows = (
+            {"layer": 0},
+            {"layer": 1},
+        )
+
+        def __init__(self, _path) -> None:
+            pass
+
+        def iter_blocks(self):
+            yield from blocks
+
+    monkeypatch.setattr(
+        "circuits.analysis.bonafide.clustering_store.FeatureStoreReader",
+        FakeFeatureStoreReader,
+    )
+    build = build_pair_evidence_from_feature_store(
+        tmp_path,
+        included_family_ids=frozenset({"family-a"}),
+    )
+
+    assert build.evidence.target_count == 1
+    assert build.basis_support.target_counts.tolist() == [1, 1]
+    assert build.target_selection["mode"] == "include_families"
+    assert build.target_selection["selected_family_count"] == 1
+    assert build.target_selection["selected_target_count"] == 1
+
+
+def test_checkpoint_family_sets_use_deterministic_whole_family_prefixes() -> None:
+    rows = [
+        {
+            "base_question_id": f"family-{family}",
+            "trace_unit_id": f"trace-{family}-{target}",
+        }
+        for family, target_count in enumerate(
+            [100, 150, 200, 250, 300, 350, 400, 450]
+        )
+        for target in range(target_count)
+    ]
+
+    checkpoints = _checkpoint_family_sets(rows)
+
+    assert [item["requested_target_count"] for item in checkpoints] == [
+        500,
+        1000,
+        1500,
+    ]
+    assert [item["selected_target_count"] for item in checkpoints] == [
+        450,
+        1000,
+        1350,
+    ]
+    for item in checkpoints:
+        assert item["included_family_ids"] == sorted(
+            item["included_family_ids"]
+        )
