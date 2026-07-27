@@ -73,10 +73,12 @@ Use a new output root for every recipe. For the two-cluster live smoke:
   --transport-override live
 ```
 
-Use `--cluster-limit 12` for the comparison pilot. Omit the limit only for the full 150-ready-
-cluster comparison. The deterministic selector spreads a limited pilot across sorted ready
-cluster IDs in each state. A scientific pilot should record and, if needed, replace this automatic
-sample with an explicitly reviewed stratified cluster list before submission.
+Use `--cluster-limit 12` for the comparison pilot. The limit is the total across requested states:
+12 becomes six primary and six alternative clusters, while the two-cluster smoke becomes one from
+each. Omit the limit only for the full 150-ready-cluster comparison. The deterministic selector
+spreads each state's allocation across its sorted ready cluster IDs. A scientific pilot should
+record and, if needed, replace this automatic sample with an explicitly reviewed stratified
+cluster list before submission.
 
 Preparation:
 

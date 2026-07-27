@@ -6,7 +6,11 @@ from pathlib import Path
 
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.labeling.io import atomic_write_json, atomic_write_jsonl
-from circuits.labeling.runtime import execute_live, resolve_local_snapshot
+from circuits.labeling.runtime import (
+    allocate_cluster_limit,
+    execute_live,
+    resolve_local_snapshot,
+)
 from circuits.labeling.schema import ChatMessage, GenerationRequest
 
 
@@ -22,6 +26,17 @@ def test_resolve_local_snapshot_uses_exact_revision(
     snapshot.mkdir(parents=True)
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
     assert resolve_local_snapshot("Qwen/Example", "012345") == snapshot
+
+
+def test_cluster_limit_is_total_across_states() -> None:
+    assert allocate_cluster_limit(["primary", "alternative"], 12) == {
+        "primary": 6,
+        "alternative": 6,
+    }
+    assert allocate_cluster_limit(["primary", "alternative"], 3) == {
+        "primary": 2,
+        "alternative": 1,
+    }
 
 
 def test_fake_live_execution_writes_atomic_result_and_telemetry(

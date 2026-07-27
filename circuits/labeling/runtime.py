@@ -137,6 +137,20 @@ def _profile_payload(profile: Any) -> dict[str, Any]:
     }
 
 
+def allocate_cluster_limit(
+    states: list[str], total_limit: int | None
+) -> dict[str, int | None]:
+    if total_limit is None:
+        return {state: None for state in states}
+    if total_limit < 1:
+        raise ValueError("cluster limit must be positive")
+    base, remainder = divmod(total_limit, len(states))
+    return {
+        state: base + (1 if index < remainder else 0)
+        for index, state in enumerate(states)
+    }
+
+
 def prepare_candidate_run(
     *,
     frozen_root: Path,
@@ -159,14 +173,20 @@ def prepare_candidate_run(
     chosen_states = list(dict.fromkeys(states))
     if not chosen_states:
         raise ValueError("at least one state is required")
+    limits = allocate_cluster_limit(chosen_states, cluster_limit)
     selected: dict[str, list[int]] = {}
     for name in chosen_states:
         state = bundle.states[name]
-        selected[name] = select_cluster_ids(
-            state,
-            explicit=(explicit_clusters or {}).get(name),
-            limit=cluster_limit,
-        )
+        explicit = (explicit_clusters or {}).get(name)
+        state_limit = limits[name]
+        if explicit is None and state_limit == 0:
+            selected[name] = []
+        else:
+            selected[name] = select_cluster_ids(
+                state,
+                explicit=explicit,
+                limit=state_limit,
+            )
     identity = {
         "recipe_id": recipe.recipe_id,
         "recipe_sha256": file_sha256(recipe_path),
