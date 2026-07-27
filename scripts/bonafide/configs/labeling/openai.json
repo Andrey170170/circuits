@@ -1,0 +1,40 @@
+{
+  "schema_version": "adag.labeling.recipe.v1",
+  "recipe_id": "openai-5.6-v1",
+  "description": "GPT-5.6 Luna candidate generation, fixed Transluce scoring, and GPT-5.6 Terra summarization.",
+  "candidate_samples": 5,
+  "candidate_generator": {
+    "provider": "openai",
+    "model": "gpt-5.6-luna",
+    "transport": "native_batch",
+    "api_key_env": "OPENAI_API_KEY",
+    "max_output_tokens": 500,
+    "temperature": 0.8,
+    "reasoning": {"effort": "low"},
+    "concurrency": 32,
+    "timeout_seconds": 120,
+    "retry": {"max_attempts": 4, "initial_backoff_seconds": 1, "max_backoff_seconds": 30}
+  },
+  "scorer": {
+    "backend": "transluce_finetuned",
+    "model": "Transluce/llama_8b_simulator",
+    "gpu_index": 0,
+    "source_tokenizer": "Qwen/Qwen3-4B-Instruct-2507",
+    "source_tokenizer_revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+    "aggregate": "polarity_aligned_mean",
+    "alignment": "character_overlap"
+  },
+  "cluster_summarizer": {
+    "provider": "openai",
+    "model": "gpt-5.6-terra",
+    "transport": "native_batch",
+    "api_key_env": "OPENAI_API_KEY",
+    "max_output_tokens": 300,
+    "temperature": 0,
+    "reasoning": {"effort": "low"},
+    "concurrency": 32,
+    "timeout_seconds": 120,
+    "retry": {"max_attempts": 4, "initial_backoff_seconds": 1, "max_backoff_seconds": 30}
+  },
+  "price_snapshot": "prices-2026-07-27.json"
+}
