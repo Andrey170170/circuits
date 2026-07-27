@@ -1,8 +1,8 @@
 # Contribution-aware same-position candidate tracing
 
-Status: engineering implementation checkpoint. CPU fixtures and compatibility tests pass. No
-Qwen GPU trace, observed-token parity cohort, C0 candidate-reference cohort, C1/C2 probe, or
-matched corpus is authorized or recorded by this document.
+Status: engineering and GPU smoke checkpoint. CPU fixtures and compatibility tests pass.
+Observed-token parity and raw joint-objective smoke checks have passed on Qwen. The complete C0
+candidate-reference cohort, C1/C2 probes, and matched corpus remain unexecuted and unauthorized.
 
 The scientific and launch contract remains Section 10 of
 `plans/2026-07-26-adag-bonafide-downstream-execution-plan.md`.
@@ -80,6 +80,26 @@ loads the frozen model once, measures observed-token rank for low-probability di
 and records whether the union policy would realize width five or six. It does not construct
 graphs or save scientific trace artifacts. C0/C1 manifests should use its measured ranks rather
 than infer rank from the stored observed-token probability.
+
+## GPU policy smoke evidence
+
+The frozen `model_top5_plus_observed` policy was checked on an A100 80 GB:
+
+- job `14314883` completed two raw-sum traces at realized width five (observed ranks one and two);
+- rank-screen job `14314916` measured 32 low-probability discovery targets and found 17
+  width-five and 15 width-six cases;
+- job `14314944` completed the deliberately selected width-six target
+  `trace-source-c6a2b2d04df3ec93a97b764d` at observed rank eight.
+
+The width-six artifact is `topk-trace-8b79cc86b8b9fd8975793954`, bound to code revision
+`0bf7f71f678051b89daf9e625b2da9ef3ce93fbb`. It contains 409 candidate-profile rows with matrix
+rank six, 409 graph nodes, 5,902 graph edges, 33.05 seconds trace wall time, 16.26 GiB peak
+reserved HBM, and 62.99 GiB headroom. Its compact payload SHA-256 is
+`8b06a1ab8ba9093384e175f1fd0219e7a2bfee12ae04b5e4f73ba6787ab5321b`.
+
+These checks establish executable width-five/width-six policy behavior and resource feasibility.
+They do not answer C0 topology recovery and therefore do not authorize the 24--48 target C1
+resource cohort.
 
 ## Gate workflow
 
