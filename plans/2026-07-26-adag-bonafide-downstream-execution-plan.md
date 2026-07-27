@@ -959,6 +959,70 @@ seeds only if the reference result changes the structural decision band. These a
 sweep states, not the frozen scientific cluster state. Selection still requires the stability,
 coherence, recurrence, checkpoint, and family-blocked resampling report specified above.
 
+#### 8.5.2 Frozen label-free state-selection rule
+
+Select states without cluster descriptions, token-text inspection, broad-discovery feedback, or
+holdout feedback. The primary candidate pool is limited to the hierarchical, input-profile-only,
+support-3, pair-overlap-2, 32-neighbor configurations from Section 8.5.1. For each cluster count,
+use the seed whose assignment has the highest mean adjusted Rand index (ARI) to the other two seeds
+as that resolution's medoid state. Unweighted and one-factor configurations are sensitivities,
+not primary candidates.
+
+A medoid state must pass all of these structural gates:
+
+- at least 95% of eligible bases are assigned;
+- no cluster contains more than 15% of assigned bases;
+- no more than 2% of clusters are singletons;
+- mean seed-pair ARI is at least 0.72 and the minimum seed-pair ARI is at least 0.70;
+- sparse-affinity modularity is at least 0.20 and observed within-cluster affinity is at least
+  1.25 times its degree-volume null expectation;
+- at least 90% of assigned bases and 80% of clusters are labelable, where a labelable cluster has
+  at least eight signed bases, twenty dense targets, three responses, and three base-question
+  families;
+- median agreement with the matching unweighted and one-factor sensitivity states is at least
+  ARI 0.50 on shared assigned bases;
+- under leave-one-family-out refits, median ARI to the full state is at least 0.60 and the
+  10th-percentile ARI is at least 0.45 on shared assigned bases.
+
+The last two gates may be reported as `pending` during structural narrowing, but they must pass
+before a state becomes labeling-ready. Failure of every resolution triggers a separately
+versioned clustering-method refinement; it does not authorize semantic inspection to choose a
+state.
+
+Project every gate-passing medoid onto the dense response-time multiplex. Projection attaches the
+frozen signed-basis assignment to target-local occurrences and edges without creating cross-target
+causal edges. Report:
+
+- per-cluster target, response, and family recurrence and maximum response concentration;
+- response-normalized emergence, persistence density, and five-bin temporal-profile coherence;
+- target-witnessed cluster-edge support and the fraction of cluster-edge mass recurring across at
+  least two responses and two families;
+- cluster size, graph conductance, input-profile coherence, and temporal/edge evidence coverage;
+- the fraction of clusters and assigned mass that remain labelable after projection.
+
+Among states passing all gates, compute within-candidate percentile ranks and use this predeclared
+weighted score:
+
+```text
+25% seed and family-blocked stability
+25% sparse-graph modularity, affinity enrichment, and conductance
+20% size balance and labelable assigned mass
+15% target/response/family recurrence and response-concentration control
+15% temporal coherence and recurrent target-witnessed edge support
+```
+
+The highest-scoring state is primary. The highest-scoring gate-passing state at a different cluster
+count is the alternative. If only one cluster count passes, the alternative is the best
+gate-passing unweighted state with the same count; otherwise the run is not labeling-ready. Ties
+within numerical tolerance use, in order, higher family-jackknife median ARI, fewer singleton/tiny
+clusters, and lower cluster count.
+
+The selected state persists assignments, medoid/prototype members, balanced target exemplars,
+projection summaries, all metric inputs, and exact source hashes. A cluster below the labelability
+rule remains part of the frozen state but is marked `insufficient_labeling_support` and receives no
+generated description. Both selected states remain exploratory ADAG objects rather than validated
+faithfulness detectors.
+
 ### 8.6 Position-aware follow-up
 
 The repository exposes `sum_over_tokens=False`, but the current cluster-map expansion was designed
