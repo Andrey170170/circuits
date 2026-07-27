@@ -26,6 +26,15 @@ if [[ "$CLUSTER_ENV" != /* ]] || [[ ! -x "${CLUSTER_ENV}/bin/python" ]]; then
     echo "CLUSTER_ENV must be an existing absolute Python environment." >&2
     exit 2
 fi
+EXPECTED_TASK_COUNT="$("$CLUSTER_ENV/bin/python" -c \
+    'import json,sys; print(len(json.load(open(sys.argv[1]))["evidence_tasks"]))' \
+    "$RESAMPLE_PLAN")"
+if [[ "${SLURM_ARRAY_TASK_COUNT:-}" != "$EXPECTED_TASK_COUNT" ]] || \
+   [[ "${SLURM_ARRAY_TASK_MIN:-}" != "0" ]] || \
+   [[ "${SLURM_ARRAY_TASK_MAX:-}" != "$((EXPECTED_TASK_COUNT - 1))" ]]; then
+    echo "Resample evidence array shape disagrees with the frozen plan." >&2
+    exit 2
+fi
 export UV_PROJECT_ENVIRONMENT="$CLUSTER_ENV"
 export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 export OPENBLAS_NUM_THREADS="$SLURM_CPUS_PER_TASK"
