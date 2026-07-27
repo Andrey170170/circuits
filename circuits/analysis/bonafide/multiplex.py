@@ -120,6 +120,10 @@ class BasisTargetSummary:
     mean_activation: float
     attribution_map: tuple[float | None, ...]
     attribution_support: tuple[bool, ...]
+    contribution_map: tuple[float | None, ...]
+    contribution_support: tuple[bool, ...]
+    in_degree: int
+    out_degree: int
 
 
 @dataclass(frozen=True)
@@ -160,12 +164,18 @@ class TargetSlice:
 
 def _aggregate_basis_nodes(
     nodes: Sequence[OccurrenceNode],
+    edges: Sequence[OccurrenceEdge],
 ) -> tuple[BasisTargetSummary, ...]:
     grouped: dict[SignedBasisKey, list[OccurrenceNode]] = defaultdict(list)
     for node in nodes:
         grouped[node.basis].append(node)
 
     summaries: list[BasisTargetSummary] = []
+    in_degree_by_occurrence: dict[OccurrenceKey, int] = defaultdict(int)
+    out_degree_by_occurrence: dict[OccurrenceKey, int] = defaultdict(int)
+    for edge in edges:
+        out_degree_by_occurrence[edge.source] += 1
+        in_degree_by_occurrence[edge.target] += 1
     for basis, members in sorted(grouped.items()):
         widths = {len(member.attribution_map) for member in members}
         if len(widths) != 1:
@@ -182,6 +192,23 @@ def _aggregate_basis_nodes(
         summed_map = tuple(
             sum(values) if values else None for values in supported_values
         )
+        contribution_widths = {len(member.contribution_map) for member in members}
+        if len(contribution_widths) != 1:
+            raise ValueError(
+                "one target/basis has inconsistent contribution-map widths"
+            )
+        contribution_width = contribution_widths.pop()
+        supported_contributions = tuple(
+            tuple(
+                value
+                for member in members
+                if (value := member.contribution_map[index]) is not None
+            )
+            for index in range(contribution_width)
+        )
+        summed_contribution = tuple(
+            sum(values) if values else None for values in supported_contributions
+        )
         summaries.append(
             BasisTargetSummary(
                 basis=basis,
@@ -195,6 +222,16 @@ def _aggregate_basis_nodes(
                 / len(members),
                 attribution_map=summed_map,
                 attribution_support=tuple(bool(values) for values in supported_values),
+                contribution_map=summed_contribution,
+                contribution_support=tuple(
+                    bool(values) for values in supported_contributions
+                ),
+                in_degree=sum(
+                    in_degree_by_occurrence[member.occurrence] for member in members
+                ),
+                out_degree=sum(
+                    out_degree_by_occurrence[member.occurrence] for member in members
+                ),
             )
         )
     return tuple(summaries)
@@ -308,7 +345,7 @@ def build_target_slice(
         model_revision=model_revision,
         nodes=ordered_nodes,
         edges=ordered_edges,
-        basis_summaries=_aggregate_basis_nodes(ordered_nodes),
+        basis_summaries=_aggregate_basis_nodes(ordered_nodes, ordered_edges),
     )
 
 
