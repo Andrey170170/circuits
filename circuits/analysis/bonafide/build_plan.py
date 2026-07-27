@@ -46,9 +46,11 @@ def collect_downstream_code_revision(repo_root: Path) -> dict[str, Any]:
     scoped_paths = (
         "circuits/analysis/bonafide",
         "scripts/bonafide/downstream_build.py",
+        "scripts/bonafide/downstream_build_joint.py",
         "scripts/bonafide/downstream_build_plan.py",
         "scripts/bonafide/downstream_compact.py",
         "scripts/bonafide/downstream_dense_array.sbatch",
+        "scripts/bonafide/downstream_dense_joint_array.sbatch",
         "scripts/bonafide/downstream_dense_compact.sbatch",
         "pyproject.toml",
         "uv.lock",

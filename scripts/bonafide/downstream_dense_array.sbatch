@@ -10,7 +10,7 @@
 #SBATCH --partition=coe-class-grn
 #SBATCH --qos=coe-students-grn
 #SBATCH --account=marasovic
-#SBATCH --array=0-10%2
+#SBATCH --array=0-10%4
 
 # Submit from the clean immutable lane worktree. Example:
 #

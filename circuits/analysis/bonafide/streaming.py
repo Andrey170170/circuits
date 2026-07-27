@@ -9,10 +9,12 @@ import resource
 import shutil
 import uuid
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from time import perf_counter
+from typing import Any, Iterator, Mapping, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -38,6 +40,8 @@ from circuits.tracing.artifact import load_compact_trace
 
 FEATURE_SHARD_SCHEMA = "adag.bonafide.dense-feature-shard.v1"
 MULTIPLEX_SHARD_SCHEMA = "adag.bonafide.response-multiplex-shard.v1"
+DEFAULT_PARQUET_BUFFER_ROWS = 25_000
+DEFAULT_PARQUET_BUFFER_BATCHES = 16
 
 
 def _basis_columns(prefix: str = "") -> list[pa.Field]:
@@ -230,16 +234,53 @@ BASIS_NODE_SCHEMA = pa.schema(
 
 
 class ParquetSink:
-    def __init__(self, path: Path, schema: pa.Schema) -> None:
+    def __init__(
+        self,
+        path: Path,
+        schema: pa.Schema,
+        *,
+        max_buffer_rows: int = DEFAULT_PARQUET_BUFFER_ROWS,
+        max_buffer_batches: int = DEFAULT_PARQUET_BUFFER_BATCHES,
+    ) -> None:
+        if max_buffer_rows < 1 or max_buffer_batches < 1:
+            raise ValueError("Parquet buffer limits must be positive")
         self.path = path
         self.schema = schema
+        self.max_buffer_rows = max_buffer_rows
+        self.max_buffer_batches = max_buffer_batches
         self.writer: pq.ParquetWriter | None = None
         self.row_count = 0
+        self.flush_count = 0
+        self.write_seconds = 0.0
+        self._buffer: list[Mapping[str, Any]] = []
+        self._buffer_batches = 0
+        self.closed = False
 
     def write(self, rows: Sequence[Mapping[str, Any]]) -> None:
+        if self.closed:
+            raise ValueError(f"cannot write to closed Parquet sink: {self.path}")
         if not rows:
             return
-        table = pa.Table.from_pylist(list(rows), schema=self.schema)
+        self.row_count += len(rows)
+        offset = 0
+        while offset < len(rows):
+            available = self.max_buffer_rows - len(self._buffer)
+            take = min(available, len(rows) - offset)
+            self._buffer.extend(rows[offset : offset + take])
+            offset += take
+            self._buffer_batches += 1
+            if (
+                len(self._buffer) >= self.max_buffer_rows
+                or self._buffer_batches >= self.max_buffer_batches
+            ):
+                self.flush()
+
+    def flush(self) -> None:
+        if not self._buffer:
+            self._buffer_batches = 0
+            return
+        started = perf_counter()
+        table = pa.Table.from_pylist(self._buffer, schema=self.schema)
         if self.writer is None:
             self.writer = pq.ParquetWriter(
                 self.path,
@@ -249,10 +290,17 @@ class ParquetSink:
                 write_statistics=True,
             )
         self.writer.write_table(table)
-        self.row_count += len(rows)
+        self.flush_count += 1
+        self._buffer.clear()
+        self._buffer_batches = 0
+        self.write_seconds += perf_counter() - started
 
     def close(self) -> None:
+        if self.closed:
+            return
+        self.flush()
         if self.writer is None:
+            started = perf_counter()
             pq.write_table(
                 pa.Table.from_pylist([], schema=self.schema),
                 self.path,
@@ -260,8 +308,54 @@ class ParquetSink:
                 use_dictionary=True,
                 write_statistics=True,
             )
+            self.flush_count += 1
+            self.write_seconds += perf_counter() - started
         else:
+            started = perf_counter()
             self.writer.close()
+            self.write_seconds += perf_counter() - started
+        self.closed = True
+
+    def performance_record(self) -> dict[str, Any]:
+        return {
+            "row_count": self.row_count,
+            "flush_count": self.flush_count,
+            "write_seconds": self.write_seconds,
+            "max_buffer_rows": self.max_buffer_rows,
+            "max_buffer_batches": self.max_buffer_batches,
+        }
+
+
+@dataclass
+class StageTimings:
+    seconds: dict[str, float]
+    calls: dict[str, int]
+
+    @classmethod
+    def empty(cls) -> StageTimings:
+        return cls(seconds=defaultdict(float), calls=defaultdict(int))
+
+    @contextmanager
+    def measure(self, name: str) -> Iterator[None]:
+        started = perf_counter()
+        try:
+            yield
+        finally:
+            self.seconds[name] += perf_counter() - started
+            self.calls[name] += 1
+
+    def record(self, name: str, seconds: float, *, calls: int = 1) -> None:
+        self.seconds[name] += seconds
+        self.calls[name] += calls
+
+    def to_record(self) -> dict[str, dict[str, float | int]]:
+        return {
+            name: {
+                "wall_seconds": self.seconds[name],
+                "call_count": self.calls[name],
+            }
+            for name in sorted(self.seconds)
+        }
 
 
 def _basis_record(basis: SignedBasisKey, prefix: str = "") -> dict[str, Any]:
@@ -455,399 +549,561 @@ def _validate_existing_shard(
     return manifest
 
 
+def _validate_compatible_build_plans(
+    plans: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    if not plans:
+        raise ValueError("at least one downstream build plan is required")
+    validated = [
+        validate_downstream_plan(
+            plan,
+            verify_inputs=True,
+            verify_code=True,
+        )
+        for plan in plans
+    ]
+    lanes = [str(plan["lane"]) for plan in validated]
+    if len(set(lanes)) != len(lanes):
+        raise ValueError("joint downstream build plans contain a duplicate lane")
+    reference = validated[0]
+    compatibility_fields = (
+        "development",
+        "development_targets_per_response",
+        "source_inventory",
+        "repo_root",
+        "code_revision",
+        "runtime_environment",
+        "uv_lock_sha256",
+        "dense_summary",
+        "tasks",
+    )
+    for candidate in validated[1:]:
+        for field in compatibility_fields:
+            if candidate.get(field) != reference.get(field):
+                raise ValueError(f"joint downstream build plans disagree on {field}")
+        if candidate["output_root"] == reference["output_root"]:
+            raise ValueError("joint downstream lanes require distinct output roots")
+    return validated
+
+
 def build_response_shard(
     *,
     plan: Mapping[str, Any],
     task_index: int,
 ) -> dict[str, Any]:
-    validated = validate_downstream_plan(
-        plan,
-        verify_inputs=True,
-        verify_code=True,
-    )
-    task, records = task_records(validated, task_index=task_index)
-    lane = str(validated["lane"])
-    output_root = Path(str(validated["output_root"]))
-    shard_name = f"task-{task_index:03d}-{str(task['response_id'])}"
-    shard_path = output_root / "shards" / shard_name
-    if shard_path.exists():
-        manifest = _validate_existing_shard(
-            shard_path,
-            plan_sha256=str(validated["plan_sha256"]),
-            task_index=task_index,
-        )
-        return {"status": "skipped_complete", "manifest": manifest}
+    """Build one lane while retaining the joint builder's output contract."""
 
-    shard_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = shard_path.parent / f".{shard_name}.tmp-{uuid.uuid4().hex}"
-    temporary.mkdir()
-    sinks: dict[str, ParquetSink] = {
-        "targets.parquet": ParquetSink(temporary / "targets.parquet", TARGET_SCHEMA),
-        "target-stats.parquet": ParquetSink(
-            temporary / "target-stats.parquet",
-            TARGET_STATS_SCHEMA,
+    lane = str(plan.get("lane"))
+    return _build_response_shards(plans=[plan], task_index=task_index)[lane]
+
+
+def build_joint_response_shards(
+    *,
+    feature_plan: Mapping[str, Any],
+    multiplex_plan: Mapping[str, Any],
+    task_index: int,
+) -> dict[str, Any]:
+    """Build feature and multiplex shards from one validated artifact pass."""
+
+    results = _build_response_shards(
+        plans=[feature_plan, multiplex_plan],
+        task_index=task_index,
+    )
+    expected_lanes = {"dense_features", "dense_multiplex"}
+    if set(results) != expected_lanes:
+        raise ValueError("joint builder requires feature and multiplex plans")
+    return {
+        "status": (
+            "skipped_complete"
+            if all(
+                result["status"] == "skipped_complete" for result in results.values()
+            )
+            else "complete"
         ),
+        "lanes": results,
     }
-    if lane == "dense_features":
-        sinks["basis-observations.parquet"] = ParquetSink(
-            temporary / "basis-observations.parquet",
-            FEATURE_OBSERVATION_SCHEMA,
-        )
-        shard_schema = FEATURE_SHARD_SCHEMA
-    elif lane == "dense_multiplex":
-        sinks.update(
-            {
-                "node-occurrences.parquet": ParquetSink(
-                    temporary / "node-occurrences.parquet",
-                    NODE_OCCURRENCE_SCHEMA,
+
+
+def _build_response_shards(
+    *,
+    plans: Sequence[Mapping[str, Any]],
+    task_index: int,
+) -> dict[str, dict[str, Any]]:
+    validated_plans = _validate_compatible_build_plans(plans)
+    reference = validated_plans[0]
+    task, records = task_records(reference, task_index=task_index)
+    fit_weights = dense_fit_weights(reference)
+    start = datetime.now(timezone.utc)
+    wall_started = perf_counter()
+    timings = StageTimings.empty()
+    results: dict[str, dict[str, Any]] = {}
+    contexts: dict[str, dict[str, Any]] = {}
+
+    try:
+        for validated in validated_plans:
+            lane = str(validated["lane"])
+            output_root = Path(str(validated["output_root"]))
+            shard_name = f"task-{task_index:03d}-{str(task['response_id'])}"
+            shard_path = output_root / "shards" / shard_name
+            if shard_path.exists():
+                manifest = _validate_existing_shard(
+                    shard_path,
+                    plan_sha256=str(validated["plan_sha256"]),
+                    task_index=task_index,
+                )
+                results[lane] = {
+                    "status": "skipped_complete",
+                    "manifest": manifest,
+                }
+                continue
+
+            shard_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = shard_path.parent / f".{shard_name}.tmp-{uuid.uuid4().hex}"
+            temporary.mkdir()
+            sinks: dict[str, ParquetSink] = {
+                "targets.parquet": ParquetSink(
+                    temporary / "targets.parquet",
+                    TARGET_SCHEMA,
                 ),
-                "edge-occurrences.parquet": ParquetSink(
-                    temporary / "edge-occurrences.parquet",
-                    EDGE_OCCURRENCE_SCHEMA,
-                ),
-                "trajectory-measurements.parquet": ParquetSink(
-                    temporary / "trajectory-measurements.parquet",
-                    TRAJECTORY_SCHEMA,
+                "target-stats.parquet": ParquetSink(
+                    temporary / "target-stats.parquet",
+                    TARGET_STATS_SCHEMA,
                 ),
             }
-        )
-        shard_schema = MULTIPLEX_SHARD_SCHEMA
-    else:
-        raise ValueError(f"unsupported downstream lane: {lane}")
+            if lane == "dense_features":
+                sinks["basis-observations.parquet"] = ParquetSink(
+                    temporary / "basis-observations.parquet",
+                    FEATURE_OBSERVATION_SCHEMA,
+                )
+                shard_schema = FEATURE_SHARD_SCHEMA
+            elif lane == "dense_multiplex":
+                sinks.update(
+                    {
+                        "node-occurrences.parquet": ParquetSink(
+                            temporary / "node-occurrences.parquet",
+                            NODE_OCCURRENCE_SCHEMA,
+                        ),
+                        "edge-occurrences.parquet": ParquetSink(
+                            temporary / "edge-occurrences.parquet",
+                            EDGE_OCCURRENCE_SCHEMA,
+                        ),
+                        "trajectory-measurements.parquet": ParquetSink(
+                            temporary / "trajectory-measurements.parquet",
+                            TRAJECTORY_SCHEMA,
+                        ),
+                    }
+                )
+                shard_schema = MULTIPLEX_SHARD_SCHEMA
+            else:
+                raise ValueError(f"unsupported downstream lane: {lane}")
+            contexts[lane] = {
+                "plan": validated,
+                "shard_path": shard_path,
+                "temporary": temporary,
+                "sinks": sinks,
+                "shard_schema": shard_schema,
+            }
 
-    fit_weights = dense_fit_weights(validated)
-    basis_nodes: set[SignedBasisKey] = set()
-    node_support: dict[SignedBasisKey, NodeSupport] = {}
-    edge_support: dict[tuple[SignedBasisKey, SignedBasisKey], EdgeSupport] = {}
-    longitudinal_rows: list[dict[str, Any]] = []
-    prior_summaries: dict[SignedBasisKey, BasisTargetSummary] | None = None
-    prior_position: int | None = None
-    prior_trace_id: str | None = None
-    totals: dict[str, int] = defaultdict(int)
-    start = datetime.now(timezone.utc)
-    try:
+        if not contexts:
+            return results
+
+        multiplex_active = "dense_multiplex" in contexts
+        feature_active = "dense_features" in contexts
+        basis_nodes: set[SignedBasisKey] = set()
+        node_support: dict[SignedBasisKey, NodeSupport] = {}
+        edge_support: dict[tuple[SignedBasisKey, SignedBasisKey], EdgeSupport] = {}
+        longitudinal_rows: list[dict[str, Any]] = []
+        prior_summaries: dict[SignedBasisKey, BasisTargetSummary] | None = None
+        prior_position: int | None = None
+        prior_trace_id: str | None = None
+        totals: dict[str, int] = defaultdict(int)
+
         for record in records:
             source_id = str(record["source_artifact_id"])
             trace_id = str(record["trace_unit_id"])
             fit_weight = fit_weights[source_id]
-            loaded = load_compact_trace(str(record["artifact_path"]))
+            with timings.measure("artifact_load_validate"):
+                loaded = load_compact_trace(str(record["artifact_path"]))
             if loaded.manifest.get("artifact_id") != trace_id:
                 raise ValueError("inventory/artifact runtime identity mismatch")
-            node_rows = loaded.circuit_data.df_node.to_dict(orient="records")
-            edge_rows = loaded.circuit_data.df_edge.to_dict(orient="records")
-            target_slice = build_target_slice(
-                response_id=str(record["response_id"]),
-                target_response_position=int(record["response_position"]),
-                trace_unit_id=trace_id,
-                model_id=str(record["model_id"]),
-                model_revision=str(record["model_revision"]),
-                node_rows=node_rows,
-                edge_rows=edge_rows,
-            )
-            validate_target_slice_round_trip(
-                target_slice,
-                source_node_rows=node_rows,
-                source_edge_rows=edge_rows,
-            )
-            sinks["targets.parquet"].write(
-                [
-                    _target_row(
-                        record,
-                        fit_weight,
-                        local_labels=loaded.circuit_data.labels,
+            with timings.measure("dataframe_to_records"):
+                node_rows = loaded.circuit_data.df_node.to_dict(orient="records")
+                edge_rows = loaded.circuit_data.df_edge.to_dict(orient="records")
+            with timings.measure("target_slice_build"):
+                target_slice = build_target_slice(
+                    response_id=str(record["response_id"]),
+                    target_response_position=int(record["response_position"]),
+                    trace_unit_id=trace_id,
+                    model_id=str(record["model_id"]),
+                    model_revision=str(record["model_revision"]),
+                    node_rows=node_rows,
+                    edge_rows=edge_rows,
+                )
+            with timings.measure("target_slice_round_trip"):
+                validate_target_slice_round_trip(
+                    target_slice,
+                    source_node_rows=node_rows,
+                    source_edge_rows=edge_rows,
+                )
+            with timings.measure("target_metadata_stats"):
+                target_row = _target_row(
+                    record,
+                    fit_weight,
+                    local_labels=loaded.circuit_data.labels,
+                )
+                stats = _target_stats(
+                    target_slice,
+                    record,
+                    payload_size_bytes=int(loaded.manifest["data_size_bytes"]),
+                )
+                for context in contexts.values():
+                    sinks = context["sinks"]
+                    sinks["targets.parquet"].write([target_row])
+                    sinks["target-stats.parquet"].write([stats])
+                for field in (
+                    "node_count",
+                    "edge_count",
+                    "signed_basis_count",
+                    "occurrence_count",
+                    "attribution_profile_cell_count",
+                    "attribution_profile_column_count",
+                    "attribution_supported_cell_count",
+                    "attribution_nonzero_count",
+                    "contribution_profile_cell_count",
+                    "contribution_profile_column_count",
+                    "contribution_supported_cell_count",
+                    "contribution_nonzero_count",
+                    "source_payload_size_bytes",
+                ):
+                    totals[field] += int(stats[field])
+
+            if feature_active:
+                with timings.measure("feature_rows"):
+                    contexts["dense_features"]["sinks"][
+                        "basis-observations.parquet"
+                    ].write(
+                        [
+                            _feature_row(summary, record, fit_weight)
+                            for summary in target_slice.basis_summaries
+                        ]
                     )
-                ]
-            )
-            stats = _target_stats(
-                target_slice,
-                record,
-                payload_size_bytes=int(loaded.manifest["data_size_bytes"]),
-            )
-            sinks["target-stats.parquet"].write([stats])
-            for field in (
-                "node_count",
-                "edge_count",
-                "signed_basis_count",
-                "occurrence_count",
-                "attribution_profile_cell_count",
-                "attribution_profile_column_count",
-                "attribution_supported_cell_count",
-                "attribution_nonzero_count",
-                "contribution_profile_cell_count",
-                "contribution_profile_column_count",
-                "contribution_supported_cell_count",
-                "contribution_nonzero_count",
-                "source_payload_size_bytes",
-            ):
-                totals[field] += int(stats[field])
 
-            if lane == "dense_features":
-                sinks["basis-observations.parquet"].write(
-                    [
-                        _feature_row(summary, record, fit_weight)
-                        for summary in target_slice.basis_summaries
-                    ]
-                )
-            else:
-                sinks["node-occurrences.parquet"].write(
-                    [
-                        {
-                            "trace_unit_id": trace_id,
-                            "response_id": target_slice.response_id,
-                            "response_position": target_slice.target_response_position,
-                            "token_position": node.occurrence.token_position,
-                            **_basis_record(node.basis),
-                            "attribution": node.attribution,
-                            "activation": node.activation,
-                            "local_label": node.local_label,
-                        }
-                        for node in target_slice.nodes
-                    ]
-                )
-                sinks["edge-occurrences.parquet"].write(
-                    [
-                        {
-                            "trace_unit_id": trace_id,
-                            "response_id": target_slice.response_id,
-                            "response_position": target_slice.target_response_position,
-                            "source_token_position": edge.source.token_position,
-                            **_basis_record(
-                                _basis_from_occurrence(edge.source, target_slice),
-                                "source_",
-                            ),
-                            "target_token_position": edge.target.token_position,
-                            **_basis_record(
-                                _basis_from_occurrence(edge.target, target_slice),
-                                "target_",
-                            ),
-                            "attribution": edge.attribution,
-                            "weight": edge.weight,
-                            "local_label": edge.local_label,
-                        }
-                        for edge in target_slice.edges
-                    ]
-                )
-                sinks["trajectory-measurements.parquet"].write(
-                    [
-                        {
-                            "trace_unit_id": trace_id,
-                            "response_id": target_slice.response_id,
-                            "response_position": target_slice.target_response_position,
-                            **_basis_record(summary.basis),
-                            "supported": True,
-                            "signed_attribution": summary.signed_attribution,
-                            "absolute_attribution_mass": (
-                                summary.absolute_attribution_mass
-                            ),
-                            "occurrence_count": summary.occurrence_count,
-                            "mean_activation": summary.mean_activation,
-                            "in_degree": summary.in_degree,
-                            "out_degree": summary.out_degree,
-                        }
-                        for summary in target_slice.basis_summaries
-                    ]
-                )
-
-                current_summaries = {
-                    summary.basis: summary for summary in target_slice.basis_summaries
-                }
-                if prior_summaries is not None:
-                    for basis in sorted(
-                        prior_summaries.keys() & current_summaries.keys()
-                    ):
-                        longitudinal_rows.append(
+            if multiplex_active:
+                with timings.measure("multiplex_occurrence_rows"):
+                    multiplex_sinks = contexts["dense_multiplex"]["sinks"]
+                    multiplex_sinks["node-occurrences.parquet"].write(
+                        [
                             {
+                                "trace_unit_id": trace_id,
                                 "response_id": target_slice.response_id,
-                                "left_response_position": prior_position,
-                                "right_response_position": (
+                                "response_position": (
                                     target_slice.target_response_position
                                 ),
-                                "left_trace_unit_id": prior_trace_id,
-                                "right_trace_unit_id": trace_id,
-                                **_basis_record(basis),
-                                "left_token_positions": [
-                                    occurrence.token_position
-                                    for occurrence in prior_summaries[basis].occurrences
-                                ],
-                                "right_token_positions": [
-                                    occurrence.token_position
-                                    for occurrence in current_summaries[
-                                        basis
-                                    ].occurrences
-                                ],
-                                "correspondence_kind": "same_basis_at_next_target",
-                                "explicitly_noncausal": True,
+                                "token_position": node.occurrence.token_position,
+                                **_basis_record(node.basis),
+                                "attribution": node.attribution,
+                                "activation": node.activation,
+                                "local_label": node.local_label,
                             }
+                            for node in target_slice.nodes
+                        ]
+                    )
+                    multiplex_sinks["edge-occurrences.parquet"].write(
+                        [
+                            {
+                                "trace_unit_id": trace_id,
+                                "response_id": target_slice.response_id,
+                                "response_position": (
+                                    target_slice.target_response_position
+                                ),
+                                "source_token_position": edge.source.token_position,
+                                **_basis_record(
+                                    _basis_from_occurrence(edge.source, target_slice),
+                                    "source_",
+                                ),
+                                "target_token_position": edge.target.token_position,
+                                **_basis_record(
+                                    _basis_from_occurrence(edge.target, target_slice),
+                                    "target_",
+                                ),
+                                "attribution": edge.attribution,
+                                "weight": edge.weight,
+                                "local_label": edge.local_label,
+                            }
+                            for edge in target_slice.edges
+                        ]
+                    )
+                    multiplex_sinks["trajectory-measurements.parquet"].write(
+                        [
+                            {
+                                "trace_unit_id": trace_id,
+                                "response_id": target_slice.response_id,
+                                "response_position": (
+                                    target_slice.target_response_position
+                                ),
+                                **_basis_record(summary.basis),
+                                "supported": True,
+                                "signed_attribution": summary.signed_attribution,
+                                "absolute_attribution_mass": (
+                                    summary.absolute_attribution_mass
+                                ),
+                                "occurrence_count": summary.occurrence_count,
+                                "mean_activation": summary.mean_activation,
+                                "in_degree": summary.in_degree,
+                                "out_degree": summary.out_degree,
+                            }
+                            for summary in target_slice.basis_summaries
+                        ]
+                    )
+
+                with timings.measure("multiplex_support_aggregation"):
+                    current_summaries = {
+                        summary.basis: summary
+                        for summary in target_slice.basis_summaries
+                    }
+                    if prior_summaries is not None:
+                        for basis in sorted(
+                            prior_summaries.keys() & current_summaries.keys()
+                        ):
+                            longitudinal_rows.append(
+                                {
+                                    "response_id": target_slice.response_id,
+                                    "left_response_position": prior_position,
+                                    "right_response_position": (
+                                        target_slice.target_response_position
+                                    ),
+                                    "left_trace_unit_id": prior_trace_id,
+                                    "right_trace_unit_id": trace_id,
+                                    **_basis_record(basis),
+                                    "left_token_positions": [
+                                        occurrence.token_position
+                                        for occurrence in prior_summaries[
+                                            basis
+                                        ].occurrences
+                                    ],
+                                    "right_token_positions": [
+                                        occurrence.token_position
+                                        for occurrence in current_summaries[
+                                            basis
+                                        ].occurrences
+                                    ],
+                                    "correspondence_kind": (
+                                        "same_basis_at_next_target"
+                                    ),
+                                    "explicitly_noncausal": True,
+                                }
+                            )
+                    prior_summaries = current_summaries
+                    prior_position = target_slice.target_response_position
+                    prior_trace_id = trace_id
+
+                    per_target_edges: dict[
+                        tuple[SignedBasisKey, SignedBasisKey],
+                        tuple[int, float, float, float],
+                    ] = {}
+                    for edge in target_slice.edges:
+                        source_basis = _basis_from_occurrence(
+                            edge.source,
+                            target_slice,
                         )
-                prior_summaries = current_summaries
-                prior_position = target_slice.target_response_position
-                prior_trace_id = trace_id
+                        target_basis = _basis_from_occurrence(
+                            edge.target,
+                            target_slice,
+                        )
+                        count, attr_sum, abs_sum, weight_sum = per_target_edges.get(
+                            (source_basis, target_basis),
+                            (0, 0.0, 0.0, 0.0),
+                        )
+                        per_target_edges[(source_basis, target_basis)] = (
+                            count + 1,
+                            attr_sum + edge.attribution,
+                            abs_sum + abs(edge.attribution),
+                            weight_sum + edge.weight,
+                        )
+                    for pair, values in per_target_edges.items():
+                        support = edge_support.get(pair)
+                        if support is None:
+                            support = EdgeSupport([], [])
+                            edge_support[pair] = support
+                        support.positions.append(target_slice.target_response_position)
+                        support.trace_ids.append(trace_id)
+                        support.edge_count += values[0]
+                        support.attribution_sum += values[1]
+                        support.abs_attribution_sum += values[2]
+                        support.weight_sum += values[3]
 
-                per_target_edges: dict[
-                    tuple[SignedBasisKey, SignedBasisKey],
-                    tuple[int, float, float, float],
-                ] = {}
-                for edge in target_slice.edges:
-                    source_basis = _basis_from_occurrence(edge.source, target_slice)
-                    target_basis = _basis_from_occurrence(edge.target, target_slice)
-                    count, attr_sum, abs_sum, weight_sum = per_target_edges.get(
-                        (source_basis, target_basis),
-                        (0, 0.0, 0.0, 0.0),
-                    )
-                    per_target_edges[(source_basis, target_basis)] = (
-                        count + 1,
-                        attr_sum + edge.attribution,
-                        abs_sum + abs(edge.attribution),
-                        weight_sum + edge.weight,
-                    )
-                for pair, values in per_target_edges.items():
-                    support = edge_support.get(pair)
-                    if support is None:
-                        support = EdgeSupport([], [])
-                        edge_support[pair] = support
-                    support.positions.append(target_slice.target_response_position)
-                    support.trace_ids.append(trace_id)
-                    support.edge_count += values[0]
-                    support.attribution_sum += values[1]
-                    support.abs_attribution_sum += values[2]
-                    support.weight_sum += values[3]
-
-                for summary in target_slice.basis_summaries:
-                    basis_nodes.add(summary.basis)
-                    support = node_support.get(summary.basis)
-                    if support is None:
-                        support = NodeSupport([], [])
-                        node_support[summary.basis] = support
-                    support.positions.append(target_slice.target_response_position)
-                    support.trace_ids.append(trace_id)
-                    support.abs_attribution_sum += summary.absolute_attribution_mass
-                    support.signed_attribution_sum += summary.signed_attribution
-                    support.occurrence_count += summary.occurrence_count
+                    for summary in target_slice.basis_summaries:
+                        basis_nodes.add(summary.basis)
+                        support = node_support.get(summary.basis)
+                        if support is None:
+                            support = NodeSupport([], [])
+                            node_support[summary.basis] = support
+                        support.positions.append(target_slice.target_response_position)
+                        support.trace_ids.append(trace_id)
+                        support.abs_attribution_sum += summary.absolute_attribution_mass
+                        support.signed_attribution_sum += summary.signed_attribution
+                        support.occurrence_count += summary.occurrence_count
 
             del target_slice, node_rows, edge_rows, loaded
 
-        if lane == "dense_multiplex":
-            additional_sinks = {
-                "basis-nodes.parquet": ParquetSink(
-                    temporary / "basis-nodes.parquet",
-                    BASIS_NODE_SCHEMA,
-                ),
-                "longitudinal-correspondence.parquet": ParquetSink(
-                    temporary / "longitudinal-correspondence.parquet",
-                    LONGITUDINAL_SCHEMA,
-                ),
-                "aggregated-node-support.parquet": ParquetSink(
-                    temporary / "aggregated-node-support.parquet",
-                    AGGREGATED_NODE_SUPPORT_SCHEMA,
-                ),
-                "aggregated-edge-support.parquet": ParquetSink(
-                    temporary / "aggregated-edge-support.parquet",
-                    AGGREGATED_EDGE_SUPPORT_SCHEMA,
-                ),
-            }
-            sinks.update(additional_sinks)
-            sinks["basis-nodes.parquet"].write(
-                [
+        if multiplex_active:
+            with timings.measure("multiplex_final_aggregation"):
+                multiplex_context = contexts["dense_multiplex"]
+                temporary = multiplex_context["temporary"]
+                multiplex_sinks = multiplex_context["sinks"]
+                multiplex_sinks.update(
                     {
-                        **_basis_record(basis),
-                        "response_id": task["response_id"],
-                    }
-                    for basis in sorted(basis_nodes)
-                ]
-            )
-            sinks["longitudinal-correspondence.parquet"].write(longitudinal_rows)
-            sinks["aggregated-node-support.parquet"].write(
-                [
-                    {
-                        "response_id": task["response_id"],
-                        **_basis_record(basis),
-                        "support_target_count": len(support.positions),
-                        "support_response_positions": support.positions,
-                        "support_trace_unit_ids": support.trace_ids,
-                        "mean_abs_attribution_over_supported_targets": (
-                            support.abs_attribution_sum / len(support.positions)
+                        "basis-nodes.parquet": ParquetSink(
+                            temporary / "basis-nodes.parquet",
+                            BASIS_NODE_SCHEMA,
                         ),
-                        "mean_signed_attribution_over_supported_targets": (
-                            support.signed_attribution_sum / len(support.positions)
+                        "longitudinal-correspondence.parquet": ParquetSink(
+                            temporary / "longitudinal-correspondence.parquet",
+                            LONGITUDINAL_SCHEMA,
                         ),
-                        "occurrence_count_sum": support.occurrence_count,
-                    }
-                    for basis, support in sorted(node_support.items())
-                ]
-            )
-            sinks["aggregated-edge-support.parquet"].write(
-                [
-                    {
-                        "response_id": task["response_id"],
-                        **_basis_record(pair[0], "source_"),
-                        **_basis_record(pair[1], "target_"),
-                        "support_target_count": len(support.positions),
-                        "support_response_positions": support.positions,
-                        "support_trace_unit_ids": support.trace_ids,
-                        "edge_occurrence_count": support.edge_count,
-                        "mean_signed_attribution_over_edge_occurrences": (
-                            support.attribution_sum / support.edge_count
+                        "aggregated-node-support.parquet": ParquetSink(
+                            temporary / "aggregated-node-support.parquet",
+                            AGGREGATED_NODE_SUPPORT_SCHEMA,
                         ),
-                        "mean_abs_attribution_over_edge_occurrences": (
-                            support.abs_attribution_sum / support.edge_count
-                        ),
-                        "mean_weight_over_edge_occurrences": (
-                            support.weight_sum / support.edge_count
+                        "aggregated-edge-support.parquet": ParquetSink(
+                            temporary / "aggregated-edge-support.parquet",
+                            AGGREGATED_EDGE_SUPPORT_SCHEMA,
                         ),
                     }
-                    for pair, support in sorted(edge_support.items())
-                ]
+                )
+                multiplex_sinks["basis-nodes.parquet"].write(
+                    [
+                        {
+                            **_basis_record(basis),
+                            "response_id": task["response_id"],
+                        }
+                        for basis in sorted(basis_nodes)
+                    ]
+                )
+                multiplex_sinks["longitudinal-correspondence.parquet"].write(
+                    longitudinal_rows
+                )
+                multiplex_sinks["aggregated-node-support.parquet"].write(
+                    [
+                        {
+                            "response_id": task["response_id"],
+                            **_basis_record(basis),
+                            "support_target_count": len(support.positions),
+                            "support_response_positions": support.positions,
+                            "support_trace_unit_ids": support.trace_ids,
+                            "mean_abs_attribution_over_supported_targets": (
+                                support.abs_attribution_sum / len(support.positions)
+                            ),
+                            "mean_signed_attribution_over_supported_targets": (
+                                support.signed_attribution_sum / len(support.positions)
+                            ),
+                            "occurrence_count_sum": support.occurrence_count,
+                        }
+                        for basis, support in sorted(node_support.items())
+                    ]
+                )
+                multiplex_sinks["aggregated-edge-support.parquet"].write(
+                    [
+                        {
+                            "response_id": task["response_id"],
+                            **_basis_record(pair[0], "source_"),
+                            **_basis_record(pair[1], "target_"),
+                            "support_target_count": len(support.positions),
+                            "support_response_positions": support.positions,
+                            "support_trace_unit_ids": support.trace_ids,
+                            "edge_occurrence_count": support.edge_count,
+                            "mean_signed_attribution_over_edge_occurrences": (
+                                support.attribution_sum / support.edge_count
+                            ),
+                            "mean_abs_attribution_over_edge_occurrences": (
+                                support.abs_attribution_sum / support.edge_count
+                            ),
+                            "mean_weight_over_edge_occurrences": (
+                                support.weight_sum / support.edge_count
+                            ),
+                        }
+                        for pair, support in sorted(edge_support.items())
+                    ]
+                )
+
+        for lane, context in contexts.items():
+            with timings.measure(f"{lane}_parquet_finalize"):
+                for sink in context["sinks"].values():
+                    sink.close()
+            timings.record(
+                f"{lane}_parquet_encode_write",
+                sum(sink.write_seconds for sink in context["sinks"].values()),
+                calls=sum(sink.flush_count for sink in context["sinks"].values()),
             )
 
-        for sink in sinks.values():
-            sink.close()
-        file_records = [
-            {
-                "path": path.name,
-                "size_bytes": path.stat().st_size,
-                "sha256": file_sha256(path),
-                "row_count": sinks[path.name].row_count,
+        plan_hashes = {
+            str(plan["lane"]): str(plan["plan_sha256"]) for plan in validated_plans
+        }
+        for lane, context in contexts.items():
+            validated = context["plan"]
+            sinks = context["sinks"]
+            temporary = context["temporary"]
+            with timings.measure(f"{lane}_output_checksum"):
+                file_records = [
+                    {
+                        "path": path.name,
+                        "size_bytes": path.stat().st_size,
+                        "sha256": file_sha256(path),
+                        "row_count": sinks[path.name].row_count,
+                    }
+                    for path in sorted(temporary.glob("*.parquet"))
+                ]
+            identity = {
+                "schema_version": context["shard_schema"],
+                "plan_sha256": validated["plan_sha256"],
+                "lane": lane,
+                "task_index": task_index,
+                "response_id": task["response_id"],
+                "base_question_id": task["base_question_id"],
+                "target_count": task["target_count"],
+                "target_identity_sha256": task["target_identity_sha256"],
             }
-            for path in sorted(temporary.glob("*.parquet"))
-        ]
-        identity = {
-            "schema_version": shard_schema,
-            "plan_sha256": validated["plan_sha256"],
-            "lane": lane,
-            "task_index": task_index,
-            "response_id": task["response_id"],
-            "base_question_id": task["base_question_id"],
-            "target_count": task["target_count"],
-            "target_identity_sha256": task["target_identity_sha256"],
-        }
-        manifest: dict[str, Any] = {
-            **identity,
-            "shard_identity_sha256": canonical_sha256(identity),
-            "created_at": start.isoformat(),
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-            "code_revision": validated["code_revision"],
-            "runtime_environment": validated["runtime_environment"],
-            "slurm": {
-                "job_id": os.environ.get("SLURM_JOB_ID"),
-                "array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
-                "array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
-                "restart_count": os.environ.get("SLURM_RESTART_COUNT", "0"),
-                "node": os.environ.get("SLURMD_NODENAME"),
-            },
-            "peak_rss_bytes": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-            * 1024,
-            "totals": dict(sorted(totals.items())),
-            "files": file_records,
-        }
-        manifest["manifest_sha256"] = canonical_sha256(manifest)
-        with (temporary / "manifest.json").open("x", encoding="utf-8") as handle:
-            json.dump(manifest, handle, indent=2, sort_keys=True, allow_nan=False)
-            handle.write("\n")
-        os.replace(temporary, shard_path)
-        return {"status": "complete", "manifest": manifest}
+            manifest: dict[str, Any] = {
+                **identity,
+                "shard_identity_sha256": canonical_sha256(identity),
+                "created_at": start.isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "build_mode": (
+                    "joint_one_pass" if len(validated_plans) > 1 else "single_lane"
+                ),
+                "joint_plan_sha256s": plan_hashes,
+                "code_revision": validated["code_revision"],
+                "runtime_environment": validated["runtime_environment"],
+                "slurm": {
+                    "job_id": os.environ.get("SLURM_JOB_ID"),
+                    "array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
+                    "array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
+                    "restart_count": os.environ.get("SLURM_RESTART_COUNT", "0"),
+                    "node": os.environ.get("SLURMD_NODENAME"),
+                },
+                "wall_seconds": perf_counter() - wall_started,
+                "stage_timings": timings.to_record(),
+                "parquet_sinks": {
+                    name: sink.performance_record()
+                    for name, sink in sorted(sinks.items())
+                },
+                "peak_rss_bytes": (
+                    int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+                ),
+                "totals": dict(sorted(totals.items())),
+                "files": file_records,
+            }
+            manifest["manifest_sha256"] = canonical_sha256(manifest)
+            with (temporary / "manifest.json").open("x", encoding="utf-8") as handle:
+                json.dump(manifest, handle, indent=2, sort_keys=True, allow_nan=False)
+                handle.write("\n")
+            os.replace(temporary, context["shard_path"])
+            results[lane] = {"status": "complete", "manifest": manifest}
+        return results
     except BaseException:
-        for sink in sinks.values():
-            if sink.writer is not None:
-                sink.writer.close()
-        shutil.rmtree(temporary, ignore_errors=True)
+        for context in contexts.values():
+            for sink in context["sinks"].values():
+                if not sink.closed and sink.writer is not None:
+                    sink.writer.close()
+            shutil.rmtree(context["temporary"], ignore_errors=True)
         raise

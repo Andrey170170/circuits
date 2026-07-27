@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 
+from circuits.analysis.bonafide import streaming as streaming_module
 from circuits.analysis.bonafide.build_plan import (
     build_downstream_plan,
     collect_downstream_code_revision,
@@ -18,7 +19,10 @@ from circuits.analysis.bonafide.canonical import (
     file_sha256,
 )
 from circuits.analysis.bonafide.compaction import compact_downstream_lane
-from circuits.analysis.bonafide.streaming import build_response_shard
+from circuits.analysis.bonafide.streaming import (
+    build_joint_response_shards,
+    build_response_shard,
+)
 from circuits.tracing.artifact import save_compact_trace
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.trace import CircuitData
@@ -210,8 +214,11 @@ def _inventory_fixture(tmp_path: Path) -> Path:
     return path
 
 
-def _plan(tmp_path: Path, lane: str) -> dict:
-    inventory_path = _inventory_fixture(tmp_path / lane)
+def _plan_from_inventory(
+    tmp_path: Path,
+    lane: str,
+    inventory_path: Path,
+) -> dict:
     return build_downstream_plan(
         inventory_path=inventory_path,
         output_root=tmp_path / f"{lane}-output",
@@ -221,6 +228,62 @@ def _plan(tmp_path: Path, lane: str) -> dict:
         code_revision=collect_downstream_code_revision(REPO_ROOT),
         runtime_environment=collect_downstream_environment(),
     )
+
+
+def _plan(tmp_path: Path, lane: str) -> dict:
+    inventory_path = _inventory_fixture(tmp_path / lane)
+    return _plan_from_inventory(tmp_path, lane, inventory_path)
+
+
+def test_joint_builder_loads_each_trace_once_and_buffers_parquet(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inventory_path = _inventory_fixture(tmp_path / "joint")
+    feature_plan = _plan_from_inventory(
+        tmp_path,
+        "dense_features",
+        inventory_path,
+    )
+    multiplex_plan = _plan_from_inventory(
+        tmp_path,
+        "dense_multiplex",
+        inventory_path,
+    )
+    original_load = streaming_module.load_compact_trace
+    loaded_paths: list[str] = []
+
+    def counted_load(path: str):
+        loaded_paths.append(path)
+        return original_load(path)
+
+    monkeypatch.setattr(streaming_module, "load_compact_trace", counted_load)
+    for task_index in range(2):
+        result = build_joint_response_shards(
+            feature_plan=feature_plan,
+            multiplex_plan=multiplex_plan,
+            task_index=task_index,
+        )
+        assert result["status"] == "complete"
+        for lane_result in result["lanes"].values():
+            manifest = lane_result["manifest"]
+            assert manifest["build_mode"] == "joint_one_pass"
+            assert (
+                manifest["stage_timings"]["artifact_load_validate"]["call_count"] == 2
+            )
+            assert manifest["parquet_sinks"]["targets.parquet"]["row_count"] == 2
+            assert manifest["parquet_sinks"]["targets.parquet"]["flush_count"] == 1
+    assert len(loaded_paths) == 4
+    assert compact_downstream_lane(feature_plan)["manifest"]["target_count"] == 4
+    assert compact_downstream_lane(multiplex_plan)["manifest"]["occurrence_count"] == 12
+
+    resumed = build_joint_response_shards(
+        feature_plan=feature_plan,
+        multiplex_plan=multiplex_plan,
+        task_index=0,
+    )
+    assert resumed["status"] == "skipped_complete"
+    assert len(loaded_paths) == 4
 
 
 def test_feature_shards_resume_and_compact_without_dense_materialization(

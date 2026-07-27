@@ -754,6 +754,15 @@ Do not begin by unpickling and concatenating every graph into one unconstrained 
    - combine blocks into a read-only sparse feature store;
    - verify that reconstructing a sampled trace matches the compact source rows.
 
+For the frozen dense run, feature and response-time multiplex construction share the expensive
+artifact-load prefix. One response-array task checksum-validates, decompresses, unpickles,
+normalizes, and round-trip-validates each compact trace once, then emits two separately identified
+and atomically resumable response shards under the feature and multiplex output roots. Their plan
+hashes, manifests, schemas, compactors, and downstream scientific roles remain separate. Buffer
+Parquet rows across targets before flushing, and record per-stage wall time, call counts, sink
+flush counts, and peak RSS in each response-shard manifest. The frozen joint array is `0-10%4`;
+retain the single-lane launcher as a checksum-aware recovery path.
+
 Before allocating any dense pairwise similarity matrix, report:
 
 ```text
@@ -1868,11 +1877,14 @@ Create clean immutable worktrees only after each track reaches code-complete sta
 logical identities:
 
 ```text
-dense-atlas-width1-v1
+dense-downstream-width1-v1
 top5-trace-v1
-response-time-multiplex-v1
 qwen-labeling-v1
 ```
+
+The joint dense worktree carries two independent production build plans and output roots:
+`dense-atlas-width1-v1` and `response-time-multiplex-v1`. Sharing an executable snapshot and
+artifact-read pass does not merge their derived scientific identities.
 
 The actual directories and commits are recorded in run manifests. A worktree is frozen when:
 
@@ -1891,9 +1903,8 @@ could therefore mutate the executable environment of an otherwise frozen worktre
 sourcing the helper for a frozen lane, set a unique absolute `UV_PROJECT_ENVIRONMENT`, for example:
 
 ```text
-/scratch/general/vast/$USER/circuits/envs/dense-atlas-width1-v1-<lock-hash>
+/scratch/general/vast/$USER/circuits/envs/dense-downstream-width1-v1-<lock-hash>
 /scratch/general/vast/$USER/circuits/envs/top5-trace-v1-<lock-hash>
-/scratch/general/vast/$USER/circuits/envs/response-time-multiplex-v1-<lock-hash>
 ```
 
 Build it with the lane's frozen `uv.lock`, record the lock hash and installed-package inventory,
@@ -2166,9 +2177,9 @@ The following are optional parallel extension tranches and do not block the dens
    - fake backend;
    - usage/cost ledger;
 
-Once items 1–5 pass, freeze independent dense-atlas and response-time-multiplex worktrees and begin
-their Milestone 2 preflights. Items 6–7 may proceed in independent worktrees subject to scientific
-priority and live resource availability.
+Once items 1–5 pass, freeze the shared dense-downstream worktree, its two independent plans, and
+begin their joint Milestone 2 preflight. Items 6–7 may proceed in independent worktrees subject to
+scientific priority and live resource availability.
 
 ### 16.1 Agreed development and parallel-execution order
 
@@ -2184,13 +2195,14 @@ Use this concrete working order:
    - pass focused provenance, polarity, missing-support, false-cross-target-path, and
      false-cross-time-path tests;
 2. freeze independent executable lanes:
-   - `dense-atlas-width1-v1`;
-   - `response-time-multiplex-v1`;
+   - one `dense-downstream-width1-v1` executable snapshot with separate
+     `dense-atlas-width1-v1` and `response-time-multiplex-v1` plans and output roots;
    - `top5-trace-v1`;
    - `qwen-labeling-v1`;
 3. first parallel job wave:
-   - dense feature construction by response, followed by deterministic compaction;
-   - dense response-time multiplex assembly by response, followed by compaction/query validation;
+   - one-pass dense feature and response-time multiplex construction by response in an
+     `0-10%4` joint array, followed by separate deterministic compactors and multiplex query
+     validation;
    - top-five observed-token `k=1` parity and C0 independent-candidate probes only;
    - optional Qwen3.6-35B serving-environment/load smoke;
 4. second parallel job wave after first-wave gates:
