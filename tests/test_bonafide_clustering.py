@@ -38,6 +38,10 @@ from circuits.analysis.bonafide.clustering_projection import (
 from circuits.analysis.bonafide.clustering_resampling import (
     _checkpoint_family_sets,
 )
+from circuits.analysis.bonafide.clustering_selection import (
+    _family_partitions,
+    _percentile_ranks,
+)
 
 
 def _block(
@@ -530,3 +534,31 @@ def test_checkpoint_family_sets_use_deterministic_whole_family_prefixes() -> Non
         assert item["included_family_ids"] == sorted(
             item["included_family_ids"]
         )
+
+
+def test_selection_percentile_ranks_handle_ties_and_direction() -> None:
+    values = {4: 1.0, 6: 2.0, 9: 2.0}
+
+    higher = _percentile_ranks(values, higher_is_better=True)
+    lower = _percentile_ranks(values, higher_is_better=False)
+
+    assert higher == pytest.approx({4: 0.0, 6: 0.75, 9: 0.75})
+    assert lower == pytest.approx({4: 1.0, 6: 0.25, 9: 0.25})
+
+
+def test_label_family_partitions_are_deterministic_and_disjoint() -> None:
+    family_ids = [f"family-{index}" for index in range(10)]
+
+    first = _family_partitions(family_ids, state_identity="selection-source")
+    second = _family_partitions(
+        list(reversed(family_ids)),
+        state_identity="selection-source",
+    )
+
+    assert first == second
+    assert set(first) == set(family_ids)
+    assert set(first.values()) == {
+        "generation",
+        "selection_scoring",
+        "audit",
+    }
