@@ -18,14 +18,17 @@ def _saved_pair(tmp_path):
     save_compact_trace(
         width1_path,
         legacy,
-        manifest={"artifact_id": "width1-artifact"},
+        manifest={
+            "artifact_id": "width1-runtime-artifact",
+            "source_artifact_id": "width1-source-selection",
+        },
     )
     save_topk_compact_trace(
         topk_path,
         candidate,
         manifest={
             "artifact_id": "topk-artifact",
-            "source_width1_artifact_id": "width1-artifact",
+            "source_width1_artifact_id": "width1-source-selection",
         },
     )
     return {
@@ -45,6 +48,9 @@ def test_saved_k1_parity_plan_passes_and_records_payload_hashes(tmp_path) -> Non
 
     assert report["all_passed"] is True
     assert report["pair_count"] == 1
+    assert (
+        report["results"][0]["width1_runtime_artifact_id"] == "width1-runtime-artifact"
+    )
     assert len(report["results"][0]["width1_payload_sha256"]) == 64
     assert len(report["results"][0]["topk_payload_sha256"]) == 64
 

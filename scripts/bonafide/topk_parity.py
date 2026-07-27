@@ -55,7 +55,8 @@ def run_parity_plan(
         topk_path = Path(os.path.expandvars(pair["topk_artifact_path"]))
         width1 = load_compact_trace(width1_path)
         topk = load_topk_compact_trace(topk_path)
-        source_id = width1.manifest.get("artifact_id")
+        width1_artifact_id = width1.manifest.get("artifact_id")
+        source_id = width1.manifest.get("source_artifact_id")
         paired_source_id = topk.manifest.get("source_width1_artifact_id")
         if (
             not isinstance(source_id, str)
@@ -79,6 +80,7 @@ def run_parity_plan(
                 "node_count": report.node_count,
                 "edge_count": report.edge_count,
                 "source_width1_artifact_id": source_id,
+                "width1_runtime_artifact_id": width1_artifact_id,
                 "topk_artifact_id": topk.manifest.get("artifact_id"),
                 "width1_payload_sha256": width1.manifest["data_sha256"],
                 "topk_payload_sha256": topk.manifest["data_sha256"],
