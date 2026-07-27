@@ -910,6 +910,55 @@ Because this is an exploratory feasibility study, thresholds may be calibrated o
 structural preflights. Once frozen, they cannot be revised using semantic labels, broad recurrence
 results, or holdout outcomes.
 
+#### 8.5.1 Dense structural preflight and initial sweep freeze
+
+The completed `dense-features/compacted` store contains 2,083 target traces, 16,022 signed basis
+features, 461,534 summed target-local profile columns, and 89,226,743 supported cells. A global
+dense profile matrix would require 29.58 GB in float32 before working memory, so the production
+path uses exact target-block computation followed by sparse global reduction:
+
+```text
+for target t:
+    X_t = signed input-attribution profiles, with unsupported cells masked
+    S_t(i,j) = cosine over support(i,t) intersect support(j,t)
+global pair evidence = weighted sums plus distinct target/response/family overlap counts
+affinity = positive recurring similarity -> deterministic sparse k-nearest-neighbor graph
+clusters = normalized sparse spectral embedding -> deterministic KMeans
+```
+
+The exact build was measured on the completed store at 102--109 seconds on four CPU cores with
+3.35 GB peak RSS. It produced 4,645,518 upper-triangular pair-evidence entries. Unsupported
+coordinates and zero-norm intersections contribute no pair evidence; the stored numerical zero is
+never interpreted as scientific absence.
+
+Freeze these label-free structural defaults before semantic inspection:
+
+- exclude embedding/unembedding boundary layers from fitting while retaining them as explicitly
+  unassigned atlas features;
+- require a basis to recur in at least three targets, two responses, and two base-question
+  families for the primary fit;
+- require a pair to coexist with valid directional profiles in at least two targets, two
+  responses, and two base-question families;
+- use hierarchical equal-family/equal-response/equal-target weights;
+- retain signed similarities in pair evidence, but use only positive similarity as spectral
+  affinity;
+- construct a deterministic `union_max` 32-nearest-neighbor graph;
+- use cluster counts 32, 64, 96, and 128 and seeds 17, 29, and 43;
+- keep descriptions disabled for every fit and sweep state.
+
+This primary rule leaves 4,308 eligible non-boundary bases; all 4,308 have a recurring positive
+neighbor, and the 32-nearest-neighbor graph is one connected component. Predeclared one-factor
+sensitivities use basis target-support thresholds 2 and 5, neighbor counts 16 and 64, target-pair
+overlap 3, and unweighted target similarities. The attribution-plus-temporal view is a second
+evidence family after the input-only sweep and does not replace the input-profile primary
+comparator.
+
+Run the fully crossed cluster-count/seed grid for both hierarchical and unweighted evidence.
+Evaluate the other one-factor sensitivities at the frozen reference seed first; expand them across
+seeds only if the reference result changes the structural decision band. These are provisional
+sweep states, not the frozen scientific cluster state. Selection still requires the stability,
+coherence, recurrence, checkpoint, and family-blocked resampling report specified above.
+
 ### 8.6 Position-aware follow-up
 
 The repository exposes `sum_over_tokens=False`, but the current cluster-map expansion was designed
