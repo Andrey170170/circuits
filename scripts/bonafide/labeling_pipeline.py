@@ -8,7 +8,11 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from circuits.labeling.runtime import execute_live, prepare_candidate_run
+from circuits.labeling.runtime import (
+    execute_live,
+    prepare_candidate_run,
+    prepare_summary_stage,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +38,31 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--run-root", type=Path, required=True)
     live.add_argument("--stage", default="candidate_generation")
     live.add_argument("--request-id", action="append", dest="request_ids")
+
+    scoring = subparsers.add_parser("score-local")
+    scoring.add_argument("--run-root", type=Path, required=True)
+    scoring.add_argument(
+        "--phase",
+        required=True,
+        choices=("candidate_selection", "summary_audit"),
+    )
+    scoring.add_argument(
+        "--states", nargs="+", choices=("primary", "alternative")
+    )
+    scoring.add_argument("--cluster-id", action="append", type=int, dest="cluster_ids")
+
+    summary = subparsers.add_parser("prepare-summaries")
+    summary.add_argument("--run-root", type=Path, required=True)
+    summary.add_argument("--transport-override", choices=("live", "native_batch"))
+
+    for command in ("prepare-batch", "submit-batch", "batch-status", "collect-batch"):
+        batch = subparsers.add_parser(command)
+        batch.add_argument("--run-root", type=Path, required=True)
+        batch.add_argument(
+            "--stage",
+            choices=("candidate_generation", "cluster_summary"),
+            required=True,
+        )
     return parser
 
 
@@ -63,15 +92,61 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
-    counts = asyncio.run(
-        execute_live(
+    if args.command == "execute-live":
+        counts = asyncio.run(
+            execute_live(
+                run_root=args.run_root,
+                stage=args.stage,
+                request_ids=set(args.request_ids) if args.request_ids else None,
+            )
+        )
+        print(json.dumps(counts, sort_keys=True))
+        return 0 if counts["failed"] == 0 else 1
+    if args.command == "score-local":
+        from circuits.labeling.scoring import score_run
+
+        counts = score_run(
             run_root=args.run_root,
-            stage=args.stage,
-            request_ids=set(args.request_ids) if args.request_ids else None,
+            phase=args.phase,
+            states=set(args.states) if args.states else None,
+            cluster_ids=set(args.cluster_ids) if args.cluster_ids else None,
+        )
+        print(json.dumps(counts, sort_keys=True))
+        return 0
+    if args.command in ("prepare-batch", "submit-batch", "batch-status", "collect-batch"):
+        from circuits.labeling.batch_runtime import (
+            collect_native_batch,
+            native_batch_status,
+            prepare_native_batch,
+            submit_native_batch,
+        )
+
+        if args.command == "prepare-batch":
+            value = prepare_native_batch(args.run_root, args.stage)
+        elif args.command == "submit-batch":
+            value = submit_native_batch(args.run_root, args.stage)
+        elif args.command == "batch-status":
+            value = native_batch_status(args.run_root, args.stage)
+        else:
+            value = collect_native_batch(args.run_root, args.stage)
+        print(json.dumps(value, sort_keys=True))
+        return 0
+    stage_manifest = prepare_summary_stage(
+        run_root=args.run_root,
+        transport_override=args.transport_override,
+    )
+    print(
+        json.dumps(
+            {
+                "status": "planned",
+                "stage": stage_manifest["stage"],
+                "request_count": stage_manifest["request_file"]["request_count"],
+                "manifest_sha256": stage_manifest["manifest_sha256"],
+            },
+            sort_keys=True,
         )
     )
-    print(json.dumps(counts, sort_keys=True))
-    return 0 if counts["failed"] == 0 else 1
+    return 0
 
 
 if __name__ == "__main__":

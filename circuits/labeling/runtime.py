@@ -21,10 +21,12 @@ from circuits.labeling.api import create_backend
 from circuits.labeling.config import LabelingRecipe, ModelRoleConfig, load_recipe
 from circuits.labeling.evidence import (
     CANDIDATE_PROMPT_VERSION,
+    SUMMARY_PROMPT_VERSION,
     evidence_identity,
     candidate_messages,
     load_frozen_bundle,
     select_cluster_ids,
+    summary_messages,
 )
 from circuits.labeling.io import atomic_write_json, atomic_write_jsonl, read_jsonl
 from circuits.labeling.pricing import estimate_cost, load_price_snapshot
@@ -33,7 +35,7 @@ from circuits.labeling.profiles import (
     load_cluster_members,
     render_highlighted_profile,
 )
-from circuits.labeling.schema import GenerationRequest, TelemetryRecord
+from circuits.labeling.schema import GenerationRequest, GenerationResult, TelemetryRecord
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_SCHEMA = "adag.labeling.run.v1"
@@ -324,6 +326,114 @@ def load_run_manifest(run_root: Path) -> dict[str, Any]:
     return value
 
 
+def load_stage_requests(run_root: Path, stage: str) -> list[GenerationRequest]:
+    manifest = load_run_manifest(run_root)
+    if stage == "candidate_generation":
+        request_entry = next(
+            item for item in manifest["request_files"] if item["stage"] == stage
+        )
+    else:
+        stage_manifest_path = run_root / "stages" / stage / "manifest.json"
+        stage_manifest = json.loads(stage_manifest_path.read_text(encoding="utf-8"))
+        expected = stage_manifest.pop("manifest_sha256", None)
+        if expected != canonical_sha256(stage_manifest):
+            raise ValueError(f"{stage} stage manifest hash mismatch")
+        if stage_manifest.get("source_run_manifest_sha256") != manifest["manifest_sha256"]:
+            raise ValueError(f"{stage} stage refers to a different run manifest")
+        request_entry = stage_manifest["request_file"]
+    request_path = run_root / request_entry["path"]
+    if file_sha256(request_path) != request_entry["sha256"]:
+        raise ValueError(f"{stage} request file hash mismatch")
+    return [
+        GenerationRequest.model_validate(value) for value in read_jsonl(request_path)
+    ]
+
+
+def prepare_summary_stage(
+    *,
+    run_root: Path,
+    transport_override: Literal["live", "native_batch"] | None = None,
+) -> dict[str, Any]:
+    manifest = load_run_manifest(run_root)
+    recipe = LabelingRecipe.model_validate(manifest["recipe"])
+    bundle = load_frozen_bundle(Path(manifest["source_bundle_path"]))
+    role = recipe.cluster_summarizer
+    requests: list[GenerationRequest] = []
+    for state, cluster_ids in manifest["selected_clusters"].items():
+        for raw_cluster_id in cluster_ids:
+            cluster_id = int(raw_cluster_id)
+            score_path = (
+                run_root
+                / "scores"
+                / "candidate_selection"
+                / state
+                / f"cluster-{cluster_id:04d}.json"
+            )
+            if not score_path.is_file():
+                raise ValueError(f"candidate score is missing: {score_path}")
+            score_value = json.loads(score_path.read_text(encoding="utf-8"))
+            scored_candidates = score_value["scores"]
+            row = bundle.states[state].evidence[cluster_id]
+            messages, prompt_sha256 = summary_messages(
+                row, scored_candidates=scored_candidates
+            )
+            request_identity = {
+                "run_id": manifest["run_id"],
+                "recipe_id": recipe.recipe_id,
+                "stage": "cluster_summary",
+                "state": state,
+                "cluster_id": cluster_id,
+                "prompt_sha256": prompt_sha256,
+            }
+            requests.append(
+                GenerationRequest(
+                    request_id=f"req-{canonical_sha256(request_identity)[:24]}",
+                    run_id=manifest["run_id"],
+                    recipe_id=recipe.recipe_id,
+                    stage="cluster_summary",
+                    state=state,
+                    cluster_id=cluster_id,
+                    evidence_partition_id="generation+selection_scoring",
+                    provider=role.provider,
+                    model=role.model,
+                    transport=transport_override or role.transport,
+                    messages=messages,
+                    max_output_tokens=role.max_output_tokens,
+                    temperature=role.temperature,
+                    reasoning=role.reasoning,
+                    provider_parameters=role.provider_parameters,
+                    prompt_template_version=SUMMARY_PROMPT_VERSION,
+                    prompt_sha256=prompt_sha256,
+                    evidence_sha256=evidence_identity(row),
+                    source_manifest_sha256=manifest["source_manifest_sha256"],
+                )
+            )
+    request_relative = Path("requests") / "cluster_summary.jsonl"
+    request_path = run_root / request_relative
+    atomic_write_jsonl(
+        request_path, (request.model_dump(mode="json") for request in requests)
+    )
+    stage_manifest = {
+        "schema_version": "adag.labeling.stage.v1",
+        "stage": "cluster_summary",
+        "source_run_manifest_sha256": manifest["manifest_sha256"],
+        "source_score_phase": "candidate_selection",
+        "request_file": {
+            "stage": "cluster_summary",
+            "path": request_relative.as_posix(),
+            "sha256": file_sha256(request_path),
+            "request_count": len(requests),
+            "transport": transport_override or role.transport,
+        },
+    }
+    stage_manifest["manifest_sha256"] = canonical_sha256(stage_manifest)
+    atomic_write_json(
+        run_root / "stages" / "cluster_summary" / "manifest.json",
+        stage_manifest,
+    )
+    return stage_manifest
+
+
 async def execute_live(
     *,
     run_root: Path,
@@ -332,15 +442,7 @@ async def execute_live(
 ) -> dict[str, int]:
     manifest = load_run_manifest(run_root)
     recipe = LabelingRecipe.model_validate(manifest["recipe"])
-    request_entry = next(
-        item for item in manifest["request_files"] if item["stage"] == stage
-    )
-    request_path = run_root / request_entry["path"]
-    if file_sha256(request_path) != request_entry["sha256"]:
-        raise ValueError("request file hash mismatch")
-    requests = [
-        GenerationRequest.model_validate(value) for value in read_jsonl(request_path)
-    ]
+    requests = load_stage_requests(run_root, stage)
     if request_ids is not None:
         requests = [request for request in requests if request.request_id in request_ids]
     if any(request.transport != "live" for request in requests):
@@ -370,28 +472,64 @@ async def execute_live(
             raise ValueError(f"partial request output exists for {request.request_id}")
         async with semaphore:
             result = await backend.generate(request)
-        atomic_write_json(result_path, result.model_dump(mode="json"))
-        cost = estimate_cost(
-            prices,
-            provider=request.provider,
-            model=request.model,
-            transport=request.transport,
-            usage=result.usage,
-        )
-        telemetry = TelemetryRecord.from_request_result(
-            request,
-            result,
+        persist_generation_result(
+            run_root=run_root,
+            manifest=manifest,
+            request=request,
+            result=result,
             endpoint_identity=backend.endpoint_identity,
-            result_artifact=result_relative.as_posix(),
-            cost=cost,
-            slurm_job_id=os.environ.get("SLURM_JOB_ID"),
-            slurm_array_task_id=os.environ.get("SLURM_ARRAY_TASK_ID"),
-            host=socket.gethostname(),
+            prices=prices,
         )
-        atomic_write_json(telemetry_path, telemetry.model_dump(mode="json"))
         counts["completed"] += 1
         if result.parse_status != "success":
             counts["failed"] += 1
 
     await asyncio.gather(*(run_one(request) for request in requests))
     return counts
+
+
+def persist_generation_result(
+    *,
+    run_root: Path,
+    manifest: dict[str, Any],
+    request: GenerationRequest,
+    result: GenerationResult,
+    endpoint_identity: str,
+    prices: dict[str, Any] | None = None,
+) -> None:
+    result_relative = Path("results") / request.stage / f"{request.request_id}.json"
+    telemetry_relative = (
+        Path("telemetry") / request.stage / f"{request.request_id}.json"
+    )
+    result_path = run_root / result_relative
+    telemetry_path = run_root / telemetry_relative
+    if result_path.exists() or telemetry_path.exists():
+        raise FileExistsError(f"request output already exists: {request.request_id}")
+    if prices is None:
+        price_path = Path(manifest["price_snapshot_path"])
+        if file_sha256(price_path) != manifest["price_snapshot_sha256"]:
+            raise ValueError("price snapshot hash mismatch")
+        prices = load_price_snapshot(price_path)
+    cost = estimate_cost(
+        prices,
+        provider=request.provider,
+        model=request.model,
+        transport=request.transport,
+        usage=result.usage,
+    )
+    telemetry = TelemetryRecord.from_request_result(
+        request,
+        result,
+        endpoint_identity=endpoint_identity,
+        result_artifact=result_relative.as_posix(),
+        cost=cost,
+        slurm_job_id=os.environ.get("SLURM_JOB_ID"),
+        slurm_array_task_id=os.environ.get("SLURM_ARRAY_TASK_ID"),
+        host=socket.gethostname(),
+    )
+    atomic_write_json(result_path, result.model_dump(mode="json"))
+    try:
+        atomic_write_json(telemetry_path, telemetry.model_dump(mode="json"))
+    except BaseException:
+        # Leave a conspicuous partial result rather than hiding telemetry loss.
+        raise
