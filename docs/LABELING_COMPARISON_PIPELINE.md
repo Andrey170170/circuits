@@ -202,3 +202,15 @@ On 2026-07-27:
 - a minimal `gpt-5.6-luna` Responses request parsed successfully and reported usage;
 - a minimal `claude-haiku-4-5-20251001` Messages request parsed successfully and reported usage;
 - no Terra, Opus, native batch, Qwen endpoint, or Transluce simulator production call was made.
+
+The prepared 12-cluster pilot is:
+
+```text
+/scratch/general/vast/$USER/circuits/results/bonafide/labeling/
+comparison-pilot-fcb2549-v1
+```
+
+It contains six primary clusters (`0, 12, 24, 38, 50, 62`) and six alternative clusters
+(`0, 17, 37, 54, 73, 94`). Each recipe has 60 candidate requests and 12 profile files. The sets of
+12 rendered prompt hashes are identical across Qwen, OpenAI, and Anthropic. OpenAI and Anthropic
+native-batch inputs are prepared but have not been submitted.

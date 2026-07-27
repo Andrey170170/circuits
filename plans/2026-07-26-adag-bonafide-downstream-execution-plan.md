@@ -2510,3 +2510,28 @@ labeling environment. It was not present in the configured Hugging Face cache at
 time. Qwen endpoint variables were also not present in this thread's environment; that endpoint is
 owned by the separate serving track. The operating procedure and output layout are recorded in
 `docs/LABELING_COMPARISON_PIPELINE.md`.
+
+After fixing `--cluster-limit` to mean a total across requested states, code revision `fcb2549`
+prepared the non-billable 12-cluster pilot at:
+
+```text
+/scratch/general/vast/u1653998/circuits/results/bonafide/labeling/
+comparison-pilot-fcb2549-v1
+```
+
+The shared selection is primary clusters `0, 12, 24, 38, 50, 62` and alternative clusters
+`0, 17, 37, 54, 73, 94`. Each recipe contains 60 candidate requests and 12 persisted cluster
+profiles. The 12 unique rendered prompt hashes are identical across all three recipes.
+
+Run manifests:
+
+| Recipe | Run ID | Manifest SHA-256 |
+| --- | --- | --- |
+| Qwen-only | `labeling-93fb184ea79b2318` | `e6768c018b3811eeecf9a32740c86f7c717fa8f2f72fd47357246893c52b82a6` |
+| OpenAI 5.6 | `labeling-180c5fe58531ed36` | `509823a3e6af310dc1e0a7fcb584628cfc9576d0ac6f89567f5105c488a53739` |
+| Anthropic upgraded | `labeling-f242fcaab41aca70` | `883384599da9e3fc35b5763d4e84ea13bd8b5a70274ef98f07d32b666227229b` |
+
+The OpenAI and Anthropic native candidate-batch payloads were prepared but not submitted. Their
+input SHA-256 values are `771528757ee34f0346deb6df080f817ec1bd28c0f7aaa50c4dfdde1c629f8783`
+and `973e2180a2303b724f17e1e893d8b6b0337de64906f0c504770e9f36a34d5180`,
+respectively. No billable provider batch or Slurm scoring job was created.
