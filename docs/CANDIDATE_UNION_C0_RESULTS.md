@@ -89,3 +89,15 @@ The two-pass system achieves the intended comparison contract:
 
 The result is still a pruned union. A node or edge absent from every independent
 pass-one graph is outside the refinement set and remains unmeasured.
+
+## Decision
+
+C0 passes. The project locks `model_top5_plus_observed` plus independent
+candidate-specific `k=1` topology, exact edge/node union, and fixed-union
+candidate rescoring as the production approach.
+
+The next gate is C1: freeze and run a 24--48-target,
+family/response-balanced discovery cohort to establish end-to-end resource,
+storage, numerical-health, realized-width-five, and realized-width-six bounds
+for this exact two-pass contract. C1 does not authorize C2 or the full matched
+corpus by itself.

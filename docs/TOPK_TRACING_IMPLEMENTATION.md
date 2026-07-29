@@ -1,13 +1,40 @@
 # Contribution-aware same-position candidate tracing
 
-Status: engineering and GPU smoke checkpoint. CPU fixtures and compatibility tests pass.
-Observed-token parity and raw joint-objective smoke checks have passed on Qwen. The complete C0
-candidate-reference cohort, C1/C2 probes, and matched corpus remain unexecuted and unauthorized.
+Status: C0 complete and production topology semantics frozen. CPU fixtures, observed-token parity,
+candidate-policy smokes, the ten-target C0 comparison, and the two-pass candidate-union rerun pass.
+C1/C2 and a matched corpus remain unexecuted and unauthorized.
 
 The scientific and launch contract remains Section 10 of
 `plans/2026-07-26-adag-bonafide-downstream-execution-plan.md`.
 
-## Trace semantics
+## Locked trace semantics
+
+The production candidate family is no longer a scalar candidate-joint graph. C0 established the
+following target-local two-pass contract:
+
+```text
+one example and response position
+        |
+model_top5_plus_observed (realized width 5 or 6)
+        |
+one independent specified-token k=1 trace per candidate
+        |
+exact union of independently selected nodes and exact edges
+        |
+candidate-specific fixed-union node and edge rescoring
+        |
+dense candidate-union artifact with applicability and selection masks
+```
+
+No induced all-pairs edge is added merely because two endpoints appear in the node union.
+Internal and embedding-to-MLP union edges are applicable to every candidate. A terminal logit edge
+is applicable only to the candidate whose logit it targets. Measured zero and inapplicable null
+remain distinct.
+
+The original joint top-k schema remains readable and useful for the completed C0 raw-sum and
+contrastive diagnostics. It is not the production C1/C2 topology family.
+
+## Legacy joint-trace semantics
 
 A top-k artifact represents one teacher-forced response target and one shared prediction
 position. Candidate logits form a separate output-contribution axis:
@@ -71,9 +98,14 @@ validator, saver, loader, checksum, and resume path. The legacy
 - writes candidate norms, effective rank, sign counts, runtime, HBM, RSS, graph size, and
   instrumentation diagnostics.
 
-The GPU launcher is `scripts/bonafide/topk_tracing.sbatch`. It requires an absolute top-k
-manifest and a lane-specific absolute `UV_PROJECT_ENVIRONMENT`. It is limited to an explicitly
-reviewed parity or C0 wave; it does not authorize C1, C2, or a full corpus.
+The legacy joint/reference GPU launcher is `scripts/bonafide/topk_tracing.sbatch`. It requires an
+absolute top-k manifest and a lane-specific absolute `UV_PROJECT_ENVIRONMENT`. It is limited to
+an explicitly reviewed parity or C0 wave; it does not authorize C1, C2, or a full corpus.
+
+The fixed-union launcher is `scripts/bonafide/candidate_union_refinement.sbatch`. Its runner
+checksum-validates the independently saved references, freezes exact node and edge unions,
+applies no pruning thresholds during measurement, preserves zero-valued measurements, saves each
+candidate rescore independently for resume, and atomically assembles the final union artifact.
 
 `scripts/bonafide/topk_rank_screen.sbatch` is a discovery-only selection-evidence launcher. It
 loads the frozen model once, measures observed-token rank for low-probability discovery targets,
@@ -97,9 +129,15 @@ rank six, 409 graph nodes, 5,902 graph edges, 33.05 seconds trace wall time, 16.
 reserved HBM, and 62.99 GiB headroom. Its compact payload SHA-256 is
 `8b06a1ab8ba9093384e175f1fd0219e7a2bfee12ae04b5e4f73ba6787ab5321b`.
 
-These checks establish executable width-five/width-six policy behavior and resource feasibility.
-They do not answer C0 topology recovery and therefore do not authorize the 24--48 target C1
-resource cohort.
+These checks established executable width-five/width-six policy behavior and initial resource
+feasibility. C0 subsequently completed 55 independent reference traces and 55 fixed-union
+rescoring traces over ten targets. All ten union artifacts passed integrity and topology
+validation. See `docs/CANDIDATE_UNION_C0_RESULTS.md`.
+
+C0 recovered 5,208 previously missing node-candidate measurements and 880,789 previously missing
+edge-candidate measurements. The result locks candidate-specific union refinement as the C1/C2
+approach. It authorizes planning and explicit review of C1; it does not authorize C2 or a matched
+corpus.
 
 ## Gate workflow
 
@@ -110,12 +148,15 @@ resource cohort.
    `scripts.bonafide.topk_parity`.
 5. Stop on any unexplained structural, provenance, numerical, contribution, or instrumentation
    mismatch.
-6. Freeze C0 joint raw/contrastive manifests and fixed-candidate `k=1` reference manifests for
-   8--12 discovery targets.
-7. Build the C0 topology report with `scripts.bonafide.topk_c0_compare`.
-8. Review per-candidate/union node and edge recall, retained absolute node-attribution mass,
-   source-to-logit path recall, exact omitted-path witnesses, candidate effective rank, sign
-   conflicts, numerical health, and resources.
+6. Freeze and run C0 joint raw/contrastive manifests plus fixed-candidate `k=1` references for ten
+   discovery targets. Complete.
+7. Compare joint graphs with the independent candidate union. Complete; joint objectives were too
+   lossy to become the primary family.
+8. Run exact-union fixed-topology node and edge refinement and audit the result. Complete.
+9. Freeze a 24--48-target, family/response-balanced C1 resource cohort using the same candidate
+   policy and two-pass contract.
+10. Measure total and per-candidate runtime, HBM, RSS, graph/union size, storage, numerical health,
+    observed-token rank, and realized width. Do not substitute joint-trace cost for two-pass cost.
 
-C1 and C2 remain blocked until the applicable earlier gates pass. A matched 2,594-position corpus
-remains blocked until all Section 10.7 gates and explicit Slurm review pass.
+C1 is now the next gate. C2 remains blocked until C1 passes. A matched 2,594-position corpus
+remains blocked until C2 and all Section 10.7 gates plus explicit Slurm review pass.

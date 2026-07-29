@@ -60,9 +60,10 @@ response-time multiplex
     independent width-one target graphs across response positions
     longitudinal correspondence is observational/identity-based, not a causal edge
 
-candidate-joint graph
-    one response position with several candidate output logits
-    topology is selected by an explicitly named joint candidate objective
+candidate-union graph
+    one response position with five or six candidate output logits
+    topology is the exact union of independent candidate-specific k=1 graphs
+    dense candidate values come from fixed-union node and edge rescoring
 ```
 
 This plan deliberately does not contain a ready-to-paste full-corpus `sbatch` command. Before any
@@ -97,10 +98,10 @@ their own go/no-go gates are complete:
 
 - the top-five trace path passes observed-token `k=1` parity against the completed width-one
   family;
-- a small candidate-specific reference set establishes how well the candidate-joint topology
-  recovers independently traced candidate graphs;
-- a versioned candidate-selection rule and joint-objective rule have been frozen for the top-five
-  family;
+- a small candidate-specific reference set establishes the topology loss of candidate-joint
+  graphs and validates exact-union refinement;
+- a versioned candidate-selection rule and candidate-union contract have been frozen for the
+  top-five family;
 - representative top-five probes establish runtime, host-memory, GPU-memory, graph-size, and
   numerical-health bounds, and a family/response-balanced scientific pilot establishes
   non-degenerate added information, before a matched corpus launch;
@@ -377,7 +378,8 @@ No track writes into another track's namespace.
 | Frozen cluster state | `adag.bonafide.cluster-state.v1` | Discovery features | Cluster mapping, fit configuration, stability evidence |
 | Label bundle | `adag.bonafide.cluster-labels.v1` | Frozen clusters and discovery exemplars | Model outputs, parsed labels, scores, usage, provenance |
 | Response-time multiplex | `adag.bonafide.response-time-multiplex.v1` | Compact traces plus frozen clusters | Exact target slices, target-supported paths, longitudinal trajectories, and summaries |
-| Top-five compact trace | `adag.compact-trace.topk-position.v1` | New trace execution | Joint topology plus named candidate-logit contributions |
+| Joint top-five diagnostic trace | `adag.compact-trace.topk-position.v1` | C0 diagnostic execution | Joint topology plus named candidate-logit contributions |
+| Candidate-union trace | `adag.compact-candidate-union.v1` | Independent `k=1` references plus fixed-union rescores | Exact independent topology union and dense candidate node/edge profiles |
 | Model server manifest | `adag.label-server.v1` | Immutable serving environment | Model/revision/runtime/hardware/endpoint contract |
 | Model evaluation | `adag.label-model-eval.v1` | Frozen pilot prompts and outputs | Quality, reliability, latency, GPU, token, and cost evidence |
 
@@ -387,7 +389,7 @@ Proposed large-output roots are under `$CIRCUITS_RESULTS_DIR`, for example:
 bonafide/downstream/dense-atlas-width1-v1/
 bonafide/downstream/dense-response-multiplex-width1-v1/
 bonafide/downstream/top5-probes-v1/
-bonafide/downstream/top5-traces-v1/
+bonafide/downstream/candidate-union-v1/
 bonafide/downstream/labels-pilot-v1/
 bonafide/downstream/model-eval-v1/
 ```
@@ -1411,7 +1413,8 @@ response position
 prediction position
 teacher-forced prefix
 candidate set
-joint topology objective
+independent candidate references
+exact union and fixed-union measurement contract
 ```
 
 If C0–C2 pass and a full matched corpus is explicitly authorized, it should cover the same 2,594
@@ -1463,59 +1466,47 @@ Pure `model_top5` remains a discovery-only sensitivity rule. The earlier
 C1 production policy because it drops the fifth-ranked model candidate when the observed token
 falls outside the top five. Do not mix policies under one trace-family ID.
 
-### 10.3 Joint objective and contribution semantics
+### 10.3 Frozen topology and contribution semantics
 
-For ADAG compatibility, the first implementation should:
-
-- select/prune graph topology with an explicitly versioned joint scalar objective over the five
-  or six selected logits;
-- preserve a named five- or six-element per-candidate contribution vector for each relevant
-  neuron;
-- retain the scalar graph attribution values separately from the candidate contribution vector;
-- never describe the joint graph as five exact independent graphs.
-
-The initial implementation candidate is an unweighted sum of the selected logits:
+C0 closed the topology decision. Raw unweighted-logit-sum and
+observed-versus-alternatives joint graphs remain versioned diagnostic artifacts, but neither is
+the production candidate-comparison family. The locked approach is a separately versioned
+candidate-specific union:
 
 ```text
-J_candidates = sum(logit[candidate_i] for each realized candidate i)
+candidate[0..N-1]
+    -> N independent specified-token k=1 traces
+    -> exact union of independently retained nodes and exact retained edges
+    -> N candidate-specific fixed-union rescoring traces
+    -> one dense candidate-union artifact
 ```
 
-Record this formula and its candidate order in the artifact. This rule is chosen to remain close
-to the repository's current multi-logit mechanics, not because summation is uniquely correct.
+The contract is:
 
-It is not frozen for full execution until a discovery-only objective comparison evaluates:
+- topology membership is established only by the independent candidate traces;
+- the union contains exact retained edges, not an induced all-pairs graph over union nodes;
+- pass two bypasses node and edge pruning on that frozen union and preserves measured zero;
+- internal and embedding-to-MLP union edges are applicable to every candidate;
+- a terminal logit edge is applicable only to its corresponding candidate;
+- each node and edge stores candidate-specific measurements, applicability, and original
+  `selected_by_candidate` membership;
+- the independent references and fixed-union rescoring artifacts remain separately checksummed
+  and resumable.
 
-- raw unweighted logit sum;
-- at least one explicitly defined centered or contrastive scalar objective;
-- the union of independent candidate-specific `k=1` reference topologies.
+Changing the candidate policy, union rule, applicability rule, or refinement measurement
+semantics creates a new trace-family and schema version. It may not silently revise this family.
 
-The comparison measures which scalar objective best preserves independently observed
-candidate-specific node/edge attribution mass and paths at acceptable graph/resource size. If no
-scalar objective is adequate, use a separately versioned candidate-specific-union family rather
-than executing a knowingly lossy full candidate-joint corpus.
+C0 found substantial opposing candidate effects and substantial topology loss in the scalar joint
+graphs. Across the locked union artifacts, pass two recovered 5,208 node-candidate and 880,789
+edge-candidate measurements that were absent from the corresponding independent graph. This is
+why missing observations remain missing in pass one and are measured explicitly in pass two
+rather than filled with zero or inferred from a pruning cutoff.
 
-This first version is candidate-resolved in the output-contribution profile, but not in topology:
-
-- it does not claim to provide five independently selected/pruned graphs;
-- it does not claim to provide per-candidate scalar node/edge attribution slices;
-- its node and edge attribution fields retain the named joint-objective semantics;
-- its neuron contribution profile retains the named candidate axis.
-
-A future per-candidate-union family would have to trace or retain each candidate's topology and
-scalar attributions separately. It must use a different objective/schema ID.
-
-Opposing effects can cancel in the scalar selection objective even when the candidate-resolved
-vector is informative. Therefore:
-
-- add a synthetic test with opposing candidate effects;
-- report candidate-vector norms and signs;
-- do not infer "unimportant" from a small summed attribution alone;
-- treat norm-based or per-candidate-union topology as a future trace family if cancellation is
-  material in probes.
-
-Cancellation is tested empirically as well as synthetically. On the candidate-specific reference
-set, report per-candidate topology recall, retained attribution-mass coverage, sign-conflict rate,
-and exact candidate paths omitted by the joint topology.
+For candidate comparisons, pass-two values are the canonical common-topology profiles. Pass-one
+membership and values remain audit evidence. The C0 audit reproduced every selected node value
+exactly. A one-case bfloat16/topology-batching sensitivity affected 742 of 618,302 selected edge
+entries; it is recorded in `docs/CANDIDATE_UNION_C0_RESULTS.md` and must remain visible in later
+numerical-health reports.
 
 ### 10.4 Observed-token `k=1` parity gate
 
@@ -1615,13 +1606,17 @@ Use three gates:
    - 8–12 deliberately selected discovery targets;
    - trace each selected candidate independently with `k=1`;
    - compare raw-sum, centered/contrastive, and candidate-specific-union topology semantics;
+   - completed on ten targets; the candidate-specific union was selected and fixed-union
+     node/edge refinement was validated;
 2. C1 policy/resource probe:
    - 24–48 family/response-balanced discovery targets;
    - use the frozen `model_top5_plus_observed` policy;
    - deliberately include both realized-width-five and realized-width-six cases;
-   - retain a small pure-`model_top5` sensitivity subset rather than a competing production
-     policy;
-   - establish runtime, HBM, RSS, graph-size, serialization, and numerical bounds;
+   - execute the locked independent-trace plus exact-union-refinement contract;
+   - retain a small pure-`model_top5` sensitivity subset only if separately versioned and
+     explicitly approved, never as a competing production policy;
+   - establish end-to-end and per-candidate runtime, HBM, RSS, independent/union graph size,
+     serialization, resume, and numerical bounds;
 3. C2 scientific-utility pilot:
    - approximately 200–300 family/response-balanced discovery targets, with the exact count and
      family/response membership frozen before execution;
@@ -1642,7 +1637,7 @@ raw and compact node/edge counts
 retained-attribution proxy
 candidate-vector effective rank and sign diversity
 observed-token rank
-joint-versus-independent candidate topology coverage where available
+independent selection membership and fixed-union dense-measurement coverage
 artifact size
 numerical validity
 ```
@@ -1656,14 +1651,16 @@ All must pass:
 - observed-token `k=1` parity;
 - candidate ordering and schema tests;
 - opposing-effect/cancellation fixture and C0 empirical candidate-specific comparison;
+- exact independent-union topology and fixed-union node/edge refinement validation;
 - representative probe completion without OOM or integrity failure;
 - runtime and memory model with clearly bounded extrapolation;
 - C2 contribution-vector effective-rank/sign-diversity report;
 - C2 evidence that contribution profiles add or materially change a predeclared discovery-only
   stability, coherence, separability, or trajectory metric;
-- C2 evidence that the frozen joint objective retains acceptable candidate-specific topology;
+- C2 evidence that the frozen candidate-union profile is numerically stable and scientifically
+  useful under the predeclared comparison;
 - frozen prompt/target membership;
-- frozen candidate policy and objective;
+- frozen candidate policy and candidate-union contract;
 - new config, manifest, execution plan, artifact root, and cohort lock;
 - successful dry run and `sbatch --test-only`;
 - explicit review of exact Slurm parameters.
@@ -2111,9 +2108,9 @@ Lane A:
 
 Lane B:
 
-- run observed-token `k=1` parity;
-- run the C0 candidate-specific reference if that extension is ready;
-- do not authorize C1/C2 or a full corpus from parity alone.
+- observed-token `k=1` parity and C0 candidate-specific union refinement are complete;
+- freeze and run C1 only after its exact discovery cohort and resource contract are reviewed;
+- do not authorize C2 or a full corpus from C1 resource success alone.
 
 Lane C:
 
@@ -2169,7 +2166,7 @@ Deliver:
 - C0 independent-candidate versus joint-topology report;
 - C1 candidate-policy/resource report;
 - C2 family/response-balanced scientific-utility feature and stability report;
-- frozen candidate-policy and joint-objective decision, or an explicit stop decision.
+- frozen candidate-policy and candidate-union decision, or an explicit stop decision.
 
 Gate: all Section 10.7 scientific, topology, numerical, and resource gates pass. Otherwise stop the
 full top-five extension while retaining the bounded probe evidence.
@@ -2227,7 +2224,7 @@ Only for stable, interpretable candidates:
 | Response-time multiplex | Target-support intersection, exact occurrence continuity, per-target round trip, and explicitly noncausal longitudinal correspondence | False path created by target union, basis/cluster contraction, or cross-time correspondence |
 | Holdout transport | Seen-mass coverage, frozen-prototype coherence, temporal/path recurrence, and eight per-family outcomes | Identity lookup reported as accuracy/generalization or 128 targets treated as independent trials |
 | Top-five parity | Observed-token `k=1` structural/numerical parity | Unexplained graph or value mismatch |
-| Top-five semantics | Observed-first provisional policy, frozen objective/vector schema, and C0 independent-candidate comparison | Mixed positions/policies, unnamed aggregation, or unmeasured candidate-topology loss |
+| Top-five semantics | Frozen `model_top5_plus_observed` policy, independent `k=1` topology union, fixed-union dense measurement, and explicit masks | Mixed positions/policies, joint-objective topology presented as independent, induced edges, or missing treated as zero |
 | Top-five utility | C2 non-degenerate profiles and material change in a predeclared discovery metric | Full corpus launched from schema/resource success alone |
 | Top-five resources | Measured runtime/HBM/RSS/storage headroom | Unsupported extrapolation or OOM |
 | Model server | Frozen revision/runtime, health and deterministic smoke | Mutable model/runtime or silent template drift |
@@ -2244,8 +2241,9 @@ Only for stable, interpretable candidates:
   cohort identity remain unchanged.
 - Hardware failure is isolated from parameter effects. Do not interpret a failed GPU/node as a
   scientific condition.
-- Any changed model revision, tokenizer, prompt template, candidate policy, joint objective,
-  clustering schema, feature normalization, or holdout rule creates a new versioned run family.
+- Any changed model revision, tokenizer, prompt template, candidate policy, candidate-union or
+  refinement contract, clustering schema, feature normalization, or holdout rule creates a new
+  versioned run family. A changed diagnostic joint objective also creates a new diagnostic family.
 - If resource probes invalidate the planned hardware or wall time, revise the execution plan while
   keeping workload and scientific semantics fixed.
 - If the workload itself must change, create and document a new manifest rather than editing the
@@ -2286,8 +2284,8 @@ The following are optional parallel extension tranches and do not block the dens
    - candidate provenance;
    - observed-token `k=1` compatibility path;
    - deterministic candidate selection;
-   - C0 independent-candidate and objective-comparison path;
-   - schema/cancellation tests;
+   - C0 independent-candidate, objective-comparison, and exact-union refinement path;
+   - candidate-union schema, applicability, missingness, and cancellation tests;
 7. model abstraction:
    - generic OpenAI-compatible generator/scorer/summarizer adapters;
    - fake backend;
@@ -2319,7 +2317,7 @@ Use this concrete working order:
    - one-pass dense feature and response-time multiplex construction by response in an
      `0-10%4` joint array, followed by separate deterministic compactors and multiplex query
      validation;
-   - top-five observed-token `k=1` parity and C0 independent-candidate probes only;
+   - top-five observed-token `k=1` parity and C0 candidate-union work are complete;
    - optional Qwen3.6-35B serving-environment/load smoke;
 4. second parallel job wave after first-wave gates:
    - clustering sweep arrays over the immutable dense feature store;
@@ -2331,7 +2329,7 @@ Use this concrete working order:
    - response-time viewer/export work;
    - clustering report and state-selection logic;
    - label-evidence rendering and provider-neutral clients;
-   - C0 topology-comparison analysis and later C1/C2 launchers.
+   - C1 selection/resource analysis and later C2 launchers.
 
 Stagger dense feature-store and response-time-multiplex compaction if both would create substantial
 VAST I/O. Do not launch C2, a full top-five corpus, holdout evaluation, production labeling, or
@@ -2342,8 +2340,9 @@ VAST I/O. Do not launch C2, a full top-five corpus, holdout evaluation, producti
 These decisions are intentionally evidence-gated:
 
 1. Candidate policy:
-   - observed token plus four alternatives as the provisional BonaFide default;
-   - pure model top five only as a sensitivity or separately named alternative-logit family.
+   - `model_top5_plus_observed` is the frozen BonaFide candidate policy;
+   - observed token is candidate zero and every distinct model-top-five token is retained;
+   - pure model top five is sensitivity-only under a separately named family.
 2. Width-one cluster input:
    - input-attribution profile only;
    - input attribution plus temporal trajectory if the trajectory view passes support/stability

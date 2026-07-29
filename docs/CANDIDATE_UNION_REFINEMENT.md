@@ -1,7 +1,30 @@
 # Candidate-union refinement
 
+Status: locked production approach for C1, C2, and any later explicitly
+authorized matched candidate corpus.
+
 This experiment keeps the C0 candidate traces independent while making their
 node and edge profiles comparable.
+
+## Decision
+
+C0 rejected a scalar joint-logit graph as the primary candidate-comparison
+artifact. Raw-sum and contrastive joint objectives remain diagnostic families,
+but neither recovered the independent candidate topology well enough to replace
+it.
+
+Moving forward, one response target uses:
+
+1. the frozen `model_top5_plus_observed` candidate policy;
+2. one independent specified-token `k=1` trace for each realized candidate;
+3. the exact union of those independently selected nodes and edges;
+4. one candidate-specific fixed-union rescore for nodes and edges;
+5. one assembled dense candidate-union artifact retaining applicability and
+   original-selection masks.
+
+Changing the candidate policy, topology construction, applicability semantics,
+or fixed-union measurement rule requires a new versioned trace family and a new
+decision record. It must not silently alter this family.
 
 ## Two-pass contract
 
