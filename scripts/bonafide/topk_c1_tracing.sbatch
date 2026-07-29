@@ -66,7 +66,7 @@ TRACE_FAMILY_ID="$(
         'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["trace_family"]["trace_family_id"])' \
         "$MANIFEST"
 )"
-if [[ ! "$TRACE_FAMILY_ID" =~ ^bonafide\\.c1\\.independent-candidate-[0-5]\\.v1$ ]]; then
+if [[ ! "$TRACE_FAMILY_ID" =~ ^bonafide[.]c1[.]independent-candidate-[0-5][.]v1$ ]]; then
     echo "This launcher rejects trace family ${TRACE_FAMILY_ID}." >&2
     exit 2
 fi
