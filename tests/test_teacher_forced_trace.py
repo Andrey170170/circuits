@@ -23,7 +23,7 @@ from circuits.tracing.candidates import (
     CandidateSelection,
     JointLogitObjective,
 )
-from circuits.tracing.clja import ADAGConfig
+from circuits.tracing.clja import ADAGConfig, FrozenGraphTopology
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.trace import (
     CircuitData,
@@ -34,6 +34,7 @@ from circuits.tracing.trace import (
     trace_teacher_forced_candidates,
     trace_teacher_forced_response,
 )
+from circuits.tracing.utils import NeuronIdx
 
 
 class FakeChatTokenizer:
@@ -245,6 +246,78 @@ def test_trace_teacher_forced_candidates_uses_distinct_candidate_axis(monkeypatc
     contract = result.circuit_data.trace_metadata["candidate_trace_contract"]
     assert contract == result.contract_dict()
     assert contract["candidate_count"] == 5
+
+
+def test_frozen_topology_candidate_trace_bypasses_dataframe_pruning(monkeypatch):
+    import circuits.tracing.trace as trace_module
+
+    captured = {}
+    topology = FrozenGraphTopology(
+        mlp_nodes=frozenset({NeuronIdx(0, 0, 3)}),
+        edges=frozenset(
+            {
+                (
+                    NeuronIdx(-1, 0, 1),
+                    NeuronIdx(0, 0, 3),
+                )
+            }
+        ),
+    )
+
+    def fake_clja(**kwargs):
+        captured["clja"] = kwargs
+        return [object()], [object()]
+
+    def fake_convert(*_args, **kwargs):
+        captured["convert"] = kwargs
+        return (
+            pd.DataFrame(
+                {
+                    "layer": [0],
+                    "token": [0],
+                    "neuron": [3],
+                    "attribution": [0.0],
+                    "activation": [1.0],
+                    "contrib_map": [[0.0]],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "layer": ["-1->0"],
+                    "token": ["0->0"],
+                    "neuron": ["1->3"],
+                    "attribution": [0.0],
+                    "weight": [0.0],
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        trace_module, "get_all_pairs_cl_ja_effects_with_attributions", fake_clja
+    )
+    monkeypatch.setattr(trace_module, "convert_circuit_to_dataframes", fake_convert)
+
+    result = trace_teacher_forced_candidates(
+        FakeModel(),
+        FakeChatTokenizer(),
+        "question",
+        "abcd",
+        2,
+        ADAGConfig(device="cpu", percentage_threshold=0.005),
+        candidate_policy_id="specified_token",
+        candidate_count=1,
+        specified_candidate_token_id=79,
+        frozen_topology=topology,
+        frozen_topology_sha256="a" * 64,
+    )
+
+    assert captured["clja"]["frozen_topology"] == topology
+    assert captured["convert"]["percentage_threshold"] is None
+    assert captured["convert"]["preserve_zero_attribution"] is True
+    assert result.circuit_data.trace_metadata["trace_mode"] == (
+        "teacher_forced_candidate_union_refinement"
+    )
+    assert result.circuit_data.trace_metadata["frozen_topology"]["sha256"] == "a" * 64
 
 
 def test_trace_teacher_forced_top5_plus_observed_records_realized_width(monkeypatch):

@@ -16,6 +16,7 @@ import torch
 from circuits.tracing.clja import (
     ADAGConfig,
     CLJAProbeSelection,
+    FrozenGraphTopology,
     get_all_pairs_cl_ja_effects_with_attributions,
 )
 from circuits.tracing.candidates import (
@@ -1294,6 +1295,8 @@ def trace_teacher_forced_candidates(
     system_prompt: str | None = None,
     ignore_bos: bool = False,
     instrumentation: TraceInstrumentation | None = None,
+    frozen_topology: FrozenGraphTopology | None = None,
+    frozen_topology_sha256: str | None = None,
 ) -> TopKPositionTrace:
     """Trace several candidate logits at one teacher-forced response position.
 
@@ -1308,6 +1311,18 @@ def trace_teacher_forced_candidates(
         )
     if not isinstance(trace_family_id, str) or not trace_family_id:
         raise ValueError("trace_family_id must be a non-empty string")
+    if frozen_topology is not None:
+        if candidate_policy_id != "specified_token" or candidate_count != 1:
+            raise ValueError(
+                "frozen-topology refinement requires one specified candidate"
+            )
+        if (
+            not isinstance(frozen_topology_sha256, str)
+            or len(frozen_topology_sha256) != 64
+        ):
+            raise ValueError(
+                "frozen-topology refinement requires a SHA-256 topology identity"
+            )
 
     with instrumentation_stage(instrumentation, "prepare_input"):
         prepared = prepare_teacher_forced_input(
@@ -1359,6 +1374,7 @@ def trace_teacher_forced_candidates(
             config=config,
             attention_masks=[prepared.attention_mask],
             candidate_axis=candidate_axis,
+            frozen_topology=frozen_topology,
             src_tokens=list(range(len(prepared.input_ids) - 1)),
             tgt_tokens=[prepared.target_prediction_positions[0]],
             instrumentation=instrumentation,
@@ -1375,7 +1391,10 @@ def trace_teacher_forced_candidates(
             [[0]],
             bs=1,
             ignore_bos=ignore_bos,
-            percentage_threshold=config.percentage_threshold,
+            percentage_threshold=(
+                None if frozen_topology is not None else config.percentage_threshold
+            ),
+            preserve_zero_attribution=frozen_topology is not None,
         )
     if instrumentation is not None:
         instrumentation.set_counter("final_dataframe_node_count", len(df_node))
@@ -1401,7 +1420,11 @@ def trace_teacher_forced_candidates(
         "candidate_contribution_schema": contribution_schema,
     }
     trace_metadata: dict[str, object] = {
-        "trace_mode": "teacher_forced_topk_position",
+        "trace_mode": (
+            "teacher_forced_candidate_union_refinement"
+            if frozen_topology is not None
+            else "teacher_forced_topk_position"
+        ),
         "prompt": prompt,
         "prompt_sha256": _stable_text_hash(prompt),
         "response": response,
@@ -1415,6 +1438,14 @@ def trace_teacher_forced_candidates(
         "chat_template_sha256": _stable_text_hash(get_chat_template(tokenizer)),
         "candidate_trace_contract": contract,
     }
+    if frozen_topology is not None:
+        trace_metadata["frozen_topology"] = {
+            "sha256": frozen_topology_sha256,
+            "mlp_node_count": len(frozen_topology.mlp_nodes),
+            "edge_count": len(frozen_topology.edges),
+            "selection_semantics": "exact_independent_candidate_union",
+            "measurement_semantics": "candidate_specific_fixed_topology_rescore",
+        }
     if instrumentation is not None:
         trace_metadata["instrumentation"] = instrumentation.snapshot()
     circuit_data = CircuitData(
@@ -1569,6 +1600,7 @@ def convert_circuit_to_dataframes(
     bs: int = 4,
     ignore_bos: bool = False,
     percentage_threshold: float | None = None,
+    preserve_zero_attribution: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Process CLSO graph data into a clean dataframe.
@@ -1650,7 +1682,9 @@ def convert_circuit_to_dataframes(
     df_edge = pd.concat(dfs_edge)
     # drop nodes below threshold per-item (with batching, neurons important in
     # any batch item get traced for all items, so we need per-item filtering here)
-    if percentage_threshold is not None:
+    if preserve_zero_attribution:
+        pass
+    elif percentage_threshold is not None:
         # Only apply threshold to MLP neurons, not embedding (layer -1) or final layer nodes
         max_layer = df_node["layer"].max()
         is_exempt = (df_node["layer"] < 0) | (df_node["layer"] == max_layer)
@@ -1659,7 +1693,8 @@ def convert_circuit_to_dataframes(
         ]
     else:
         df_node = df_node[df_node.attribution != 0]
-    df_edge = df_edge[df_edge.attribution != 0].dropna(subset=["attribution"])
+    if not preserve_zero_attribution:
+        df_edge = df_edge[df_edge.attribution != 0].dropna(subset=["attribution"])
 
     # prune edges whose src or tgt node was removed
     surviving_nodes = set(
