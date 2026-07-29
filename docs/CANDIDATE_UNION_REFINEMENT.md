@@ -67,3 +67,18 @@ The frozen plan is
 It binds all 55 independent C0 references by artifact ID, payload hash, source
 target, response position, and candidate token order. The two approved waves
 are `candidate-union-c0-dense` and `candidate-union-c0-broad`.
+
+## C1 execution
+
+The frozen launch bundle is
+`scripts/bonafide/manifests/qwen3_4b_instruct_topk_c1_launch_bundle_v1.json`.
+The pass-two plan is
+`scripts/bonafide/manifests/qwen3_4b_instruct_candidate_union_c1_plan_v1.json`.
+It binds 175 independent references for 32 discovery targets. All 175
+candidate refinements and all 32 union artifacts completed and passed the
+policy/resource gate, including an explicit completed-case resume check.
+
+See `docs/CANDIDATE_UNION_C1_RESULTS.md` for the cohort, runtime, HBM, RSS,
+storage, dense-measurement, reproduction, rank, and decision record. C1
+authorizes planning and explicit review of C2; it does not authorize a full
+matched corpus.

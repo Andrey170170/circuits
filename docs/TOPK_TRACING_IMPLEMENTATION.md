@@ -1,8 +1,9 @@
 # Contribution-aware same-position candidate tracing
 
-Status: C0 complete and production topology semantics frozen. CPU fixtures, observed-token parity,
-candidate-policy smokes, the ten-target C0 comparison, and the two-pass candidate-union rerun pass.
-C1/C2 and a matched corpus remain unexecuted and unauthorized.
+Status: C0 and C1 complete and production topology semantics frozen. CPU fixtures,
+observed-token parity, candidate-policy smokes, the ten-target C0 comparison, the two-pass C0
+rerun, and the 32-target C1 policy/resource gate pass. C2 and a matched corpus remain unexecuted
+and unauthorized.
 
 The scientific and launch contract remains Section 10 of
 `plans/2026-07-26-adag-bonafide-downstream-execution-plan.md`.
@@ -102,10 +103,12 @@ The legacy joint/reference GPU launcher is `scripts/bonafide/topk_tracing.sbatch
 absolute top-k manifest and a lane-specific absolute `UV_PROJECT_ENVIRONMENT`. It is limited to
 an explicitly reviewed parity or C0 wave; it does not authorize C1, C2, or a full corpus.
 
-The fixed-union launcher is `scripts/bonafide/candidate_union_refinement.sbatch`. Its runner
-checksum-validates the independently saved references, freezes exact node and edge unions,
-applies no pruning thresholds during measurement, preserves zero-valued measurements, saves each
-candidate rescore independently for resume, and atomically assembles the final union artifact.
+The C0 fixed-union launcher is `scripts/bonafide/candidate_union_refinement.sbatch`. The
+corresponding C1-only launchers are `scripts/bonafide/topk_c1_tracing.sbatch` and
+`scripts/bonafide/candidate_union_c1_refinement.sbatch`. Their runners checksum-validate the
+independently saved references, freeze exact node and edge unions, apply no pruning thresholds
+during measurement, preserve zero-valued measurements, save each candidate rescore independently
+for resume, and atomically assemble the final union artifact.
 
 `scripts/bonafide/topk_rank_screen.sbatch` is a discovery-only selection-evidence launcher. It
 loads the frozen model once, measures observed-token rank for low-probability discovery targets,
@@ -139,6 +142,13 @@ edge-candidate measurements. The result locks candidate-specific union refinemen
 approach. It authorizes planning and explicit review of C1; it does not authorize C2 or a matched
 corpus.
 
+C1 completed 175 independent traces and 175 fixed-union rescoring traces over 32 balanced
+discovery targets. All 32 dense union artifacts passed integrity, topology, numerical, resource,
+serialization, and resume checks. C1 recovered 16,882 node-candidate and 3,361,742 edge-candidate
+measurements absent from the corresponding independent graphs. Every raw contribution matrix had
+full candidate rank and every centered matrix had the maximum possible contrastive rank. See
+`docs/CANDIDATE_UNION_C1_RESULTS.md`.
+
 ## Gate workflow
 
 1. Freeze an observed-token `k=1` manifest over a representative discovery-only set.
@@ -154,9 +164,12 @@ corpus.
    lossy to become the primary family.
 8. Run exact-union fixed-topology node and edge refinement and audit the result. Complete.
 9. Freeze a 24--48-target, family/response-balanced C1 resource cohort using the same candidate
-   policy and two-pass contract.
+   policy and two-pass contract. Complete: 32 targets.
 10. Measure total and per-candidate runtime, HBM, RSS, graph/union size, storage, numerical health,
-    observed-token rank, and realized width. Do not substitute joint-trace cost for two-pass cost.
+    observed-token rank, and realized width. Complete.
+11. Freeze and explicitly review the C2 scientific-utility cohort, feature contract, weighting,
+    resource plan, and launch before execution.
 
-C1 is now the next gate. C2 remains blocked until C1 passes. A matched 2,594-position corpus
-remains blocked until C2 and all Section 10.7 gates plus explicit Slurm review pass.
+C2 is now the next gate. C1 authorizes its planning, not an automatic launch. A matched
+2,594-position corpus remains blocked until C2 and all Section 10.7 gates plus explicit Slurm
+review pass.
