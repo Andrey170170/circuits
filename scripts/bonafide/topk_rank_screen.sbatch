@@ -45,16 +45,24 @@ export UV_PROJECT_ENVIRONMENT="$RANK_UV_PROJECT_ENVIRONMENT"
 PYTHON_BIN="${UV_PROJECT_ENVIRONMENT}/bin/python"
 CONFIG="${CONFIG:-${REPO_ROOT}/scripts/bonafide/configs/qwen3_4b_instruct.json}"
 MAX_ITEMS="${MAX_ITEMS:-32}"
+SELECTION_ARGS=(--max-items "$MAX_ITEMS")
+if [[ -n "${SELECTION_POOL:-}" ]]; then
+    if [[ "$SELECTION_POOL" != /* ]] || [[ ! -f "$SELECTION_POOL" ]]; then
+        echo "SELECTION_POOL must be an existing absolute path." >&2
+        exit 2
+    fi
+    SELECTION_ARGS=(--selection-pool "$SELECTION_POOL")
+fi
 
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
-echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} max_items=${MAX_ITEMS}"
+echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} selection_args=${SELECTION_ARGS[*]}"
 echo "config=${CONFIG} source_manifest=${SOURCE_MANIFEST} output=${OUTPUT}"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
 "$PYTHON_BIN" -m scripts.bonafide.topk_rank_screen \
     --config "$CONFIG" \
     --source-manifest "$SOURCE_MANIFEST" \
-    --max-items "$MAX_ITEMS" \
+    "${SELECTION_ARGS[@]}" \
     --output "$OUTPUT"

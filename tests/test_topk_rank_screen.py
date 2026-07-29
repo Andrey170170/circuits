@@ -4,6 +4,7 @@ from copy import deepcopy
 
 from scripts.bonafide.topk_rank_screen import (
     screen_candidate_ranks,
+    select_exact_rank_screen_items,
     select_rank_screen_items,
 )
 from tests.test_bonafide_benchmark import _single_item_manifest
@@ -65,4 +66,36 @@ def test_rank_screen_measures_union_width_without_graph_tracing() -> None:
         125,
         124,
         123,
+    ]
+
+
+def test_rank_screen_resolves_exact_frozen_pool_order() -> None:
+    source = _rank_source_manifest()
+    source["waves"][0]["items"][0]["example"]["base_question_id"] = "family-1"
+    second = deepcopy(source["waves"][0]["items"][0])
+    second["artifact_id"] = "second"
+    source["waves"][0]["items"].append(second)
+    cases = []
+    for artifact_id in ("second", "source-trace-1"):
+        cases.append(
+            {
+                "source_width1_artifact_id": artifact_id,
+                "corpus_role": "dense_discovery",
+                "example_id": source["waves"][0]["items"][0]["example"]["example_id"],
+                "base_question_id": source["waves"][0]["items"][0]["example"][
+                    "base_question_id"
+                ],
+                "target_response_position": 2,
+            }
+        )
+    pool = {
+        "schema_version": "bonafide-topk-c2-screen-pool/v1",
+        "cases": cases,
+    }
+
+    selected = select_exact_rank_screen_items(source, pool)
+
+    assert [item["artifact_id"] for item in selected] == [
+        "second",
+        "source-trace-1",
     ]
