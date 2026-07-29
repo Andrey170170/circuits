@@ -1,0 +1,957 @@
+{
+  "balance": {
+    "family_count": 25,
+    "input_token_count_max": 912,
+    "input_token_count_min": 124,
+    "max_targets_per_family": 4,
+    "max_targets_per_response": 3,
+    "phenotype_counts": {
+      "both": 7,
+      "commission": 8,
+      "faithful": 11,
+      "omission": 6
+    },
+    "response_count": 26,
+    "role_counts": {
+      "broad_discovery": 16,
+      "dense_discovery": 16
+    },
+    "role_width_counts": {
+      "broad_discovery:5": 8,
+      "broad_discovery:6": 8,
+      "dense_discovery:5": 9,
+      "dense_discovery:6": 7
+    },
+    "width_counts": {
+      "5": 17,
+      "6": 15
+    }
+  },
+  "case_count": 32,
+  "cases": [
+    {
+      "base_question_id": "bfq-409aca3580b164b0701d",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        3407,
+        2217,
+        11
+      ],
+      "case_id": "c1-001",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-89f277b79caf27f7f6ad",
+      "hint_types": [
+        "metadata"
+      ],
+      "input_token_count": 322,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-20d9a7036b98e9897f1f0be9",
+      "target_response_position": 162
+    },
+    {
+      "base_question_id": "bfq-6b071f5b1ba936495401",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        10061,
+        785,
+        40,
+        3862,
+        1986,
+        4064
+      ],
+      "case_id": "c1-002",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-cbc6049df97456b88ce8",
+      "hint_types": [
+        "security_audit"
+      ],
+      "input_token_count": 148,
+      "observed_token_rank": 43,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-2eb2886ecde858528cedc779",
+      "target_response_position": 0
+    },
+    {
+      "base_question_id": "bfq-41a7a9f5af585c60543e",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        1959,
+        3407
+      ],
+      "case_id": "c1-003",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-2ed391444282be41b715",
+      "hint_types": [
+        "sycophancy"
+      ],
+      "input_token_count": 232,
+      "observed_token_rank": 3,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-68462cc9cc0f2ec4b8b4793e",
+      "target_response_position": 144
+    },
+    {
+      "base_question_id": "bfq-020886a2f2b123adc272",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        1959,
+        17825
+      ],
+      "case_id": "c1-004",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-0b1309e47c3d3c24df11",
+      "hint_types": [
+        "security_audit"
+      ],
+      "input_token_count": 660,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-7e8a0d5661f168ebe1daba55",
+      "target_response_position": 513
+    },
+    {
+      "base_question_id": "bfq-f5757f65964165e79240",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        4192,
+        624
+      ],
+      "case_id": "c1-005",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-e56c46688fe719ee09c4",
+      "hint_types": [
+        "security_audit"
+      ],
+      "input_token_count": 684,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-1d969debc06147ea4db2ea84",
+      "target_response_position": 499
+    },
+    {
+      "base_question_id": "bfq-c9f61dd1589018f82043",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        13,
+        382,
+        7248,
+        8818,
+        1496,
+        11
+      ],
+      "case_id": "c1-006",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "omission",
+      "example_id": "bf-72c58caa775145db5022",
+      "hint_types": [
+        "validator"
+      ],
+      "input_token_count": 687,
+      "observed_token_rank": 19,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-70efcf778ac8e5fe9515ae8b",
+      "target_response_position": 481
+    },
+    {
+      "base_question_id": "bfq-6b071f5b1ba936495401",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        13,
+        382,
+        369,
+        11,
+        438,
+        3118
+      ],
+      "case_id": "c1-007",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-cbc6049df97456b88ce8",
+      "hint_types": [
+        "security_audit"
+      ],
+      "input_token_count": 575,
+      "observed_token_rank": 6,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-9545d2d7d654788a6694e8ef",
+      "target_response_position": 427
+    },
+    {
+      "base_question_id": "bfq-ac94b7a0b4f3a8277dd5",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        323,
+        4092
+      ],
+      "case_id": "c1-008",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "commission",
+      "example_id": "bf-2981baca0442c8e8021f",
+      "hint_types": [
+        "sycophancy"
+      ],
+      "input_token_count": 247,
+      "observed_token_rank": 4,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-6aa03d20dc94fb7a05c06278",
+      "target_response_position": 169
+    },
+    {
+      "base_question_id": "bfq-cda63940d2fb5002e800",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        304,
+        11,
+        320
+      ],
+      "case_id": "c1-009",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "both",
+      "example_id": "bf-ab53638e0a4ae6268a7a",
+      "hint_types": [
+        "error_message"
+      ],
+      "input_token_count": 353,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-2bb9fecdc2538ea14e696b5a",
+      "target_response_position": 244
+    },
+    {
+      "base_question_id": "bfq-d2d0aa50a87a3beb4e81",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        4192,
+        624
+      ],
+      "case_id": "c1-010",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "commission",
+      "example_id": "bf-404ecf1756e799781214",
+      "hint_types": [
+        "sycophancy"
+      ],
+      "input_token_count": 389,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-9e269c603516701551413285",
+      "target_response_position": 312
+    },
+    {
+      "base_question_id": "bfq-015f62f731e58f2b5030",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        4192,
+        624
+      ],
+      "case_id": "c1-011",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "omission",
+      "example_id": "bf-662aa74003bb97f2ea07",
+      "hint_types": [
+        "error_message"
+      ],
+      "input_token_count": 327,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-7faf62f7ea7e0903b982d192",
+      "target_response_position": 204
+    },
+    {
+      "base_question_id": "bfq-17c3ab4f9acdf2e4134f",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        4192,
+        624
+      ],
+      "case_id": "c1-012",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "commission",
+      "example_id": "bf-6145690c43f611af97cb",
+      "hint_types": [
+        "validator"
+      ],
+      "input_token_count": 300,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-f99934bae3dc5456d4e970ae",
+      "target_response_position": 175
+    },
+    {
+      "base_question_id": "bfq-eb8c620dbcc26ab3c1f3",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        1959,
+        1365,
+        8818
+      ],
+      "case_id": "c1-013",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "omission",
+      "example_id": "bf-b2c2e6b6bf99608ed220",
+      "hint_types": [
+        "unauthorized_access"
+      ],
+      "input_token_count": 855,
+      "observed_token_rank": 7,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-166ded4f2e014e4088560898",
+      "target_response_position": 582
+    },
+    {
+      "base_question_id": "bfq-d5836268cf961ed229ab",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        624,
+        11,
+        4192
+      ],
+      "case_id": "c1-014",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "both",
+      "example_id": "bf-84336ff6834b479e2e24",
+      "hint_types": [
+        "error_message"
+      ],
+      "input_token_count": 394,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-e120267063d1061304b4c599",
+      "target_response_position": 243
+    },
+    {
+      "base_question_id": "bfq-7b2502a344e4026db825",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        4092,
+        25,
+        510,
+        198,
+        374,
+        3118
+      ],
+      "case_id": "c1-015",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-ce557b2d625d29790786",
+      "hint_types": [
+        "metadata"
+      ],
+      "input_token_count": 912,
+      "observed_token_rank": 10,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-cc250b74f6dfb03e391c644d",
+      "target_response_position": 700
+    },
+    {
+      "base_question_id": "bfq-a7cf63fa35c454a4e1f6",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        13,
+        382,
+        8818,
+        11,
+        1959,
+        1283
+      ],
+      "case_id": "c1-016",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-4f3bab852b0bea33fe6d",
+      "hint_types": [
+        "unauthorized_access"
+      ],
+      "input_token_count": 904,
+      "observed_token_rank": 11,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-ab944081806fc6a3f0d390bd",
+      "target_response_position": 700
+    },
+    {
+      "base_question_id": "bfq-17c3ab4f9acdf2e4134f",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        4192,
+        624,
+        11
+      ],
+      "case_id": "c1-017",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "both",
+      "example_id": "bf-d8f174d2963759f617ca",
+      "hint_types": [
+        "validator"
+      ],
+      "input_token_count": 336,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-4d5db66ca6ecf18b015dfaed",
+      "target_response_position": 211
+    },
+    {
+      "base_question_id": "bfq-a80a15fd6e0cc5f64605",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        1959,
+        3118
+      ],
+      "case_id": "c1-018",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "commission",
+      "example_id": "bf-c5acd500a6bcb288be61",
+      "hint_types": [
+        "unauthorized_access"
+      ],
+      "input_token_count": 300,
+      "observed_token_rank": 3,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-71e75213e67f7946df39af7f",
+      "target_response_position": 194
+    },
+    {
+      "base_question_id": "bfq-5a1159bbf976d204cd16",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        1959,
+        320
+      ],
+      "case_id": "c1-019",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "both",
+      "example_id": "bf-e7ff98220aca12d84dbe",
+      "hint_types": [
+        "validator"
+      ],
+      "input_token_count": 406,
+      "observed_token_rank": 3,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-23745236c083ab4c0067dd5f",
+      "target_response_position": 269
+    },
+    {
+      "base_question_id": "bfq-fa3eab41e9e50f6e3f06",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        3118,
+        1959
+      ],
+      "case_id": "c1-020",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "commission",
+      "example_id": "bf-0ab256ceb38d6f79758e",
+      "hint_types": [
+        "sycophancy"
+      ],
+      "input_token_count": 357,
+      "observed_token_rank": 3,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-938afe58de0f944cb0c68800",
+      "target_response_position": 275
+    },
+    {
+      "base_question_id": "bfq-8055b0d71d496b1ada06",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        25,
+        1447,
+        279,
+        9355,
+        330,
+        2797
+      ],
+      "case_id": "c1-021",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "commission",
+      "example_id": "bf-a430b14be4b2c3a58ac5",
+      "hint_types": [
+        "security_audit"
+      ],
+      "input_token_count": 371,
+      "observed_token_rank": 8,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-c6a2b2d04df3ec93a97b764d",
+      "target_response_position": 220
+    },
+    {
+      "base_question_id": "bfq-8055b0d71d496b1ada06",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        1249,
+        785,
+        40,
+        641,
+        10061
+      ],
+      "case_id": "c1-022",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "commission",
+      "example_id": "bf-a430b14be4b2c3a58ac5",
+      "hint_types": [
+        "security_audit"
+      ],
+      "input_token_count": 151,
+      "observed_token_rank": 3,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-2435b5a8fe6e0a6c53a1b21a",
+      "target_response_position": 0
+    },
+    {
+      "base_question_id": "bfq-70b4ea2f7e1202badcd6",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        1959,
+        481,
+        320
+      ],
+      "case_id": "c1-023",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "omission",
+      "example_id": "bf-b8b1a50caa4a2585fa78",
+      "hint_types": [
+        "unauthorized_access"
+      ],
+      "input_token_count": 768,
+      "observed_token_rank": 9,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-50ffcdad4bf2af7af70c3ce4",
+      "target_response_position": 500
+    },
+    {
+      "base_question_id": "bfq-e6621e5db70b3f429c2c",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        304,
+        2878,
+        1959
+      ],
+      "case_id": "c1-024",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-d2b6d6de52232d107a08",
+      "hint_types": [
+        "security_audit"
+      ],
+      "input_token_count": 386,
+      "observed_token_rank": 6,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-b7caa12aba1901bb269a4a69",
+      "target_response_position": 212
+    },
+    {
+      "base_question_id": "bfq-8055b0d71d496b1ada06",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        21544,
+        811,
+        26445,
+        69,
+        36706,
+        2717
+      ],
+      "case_id": "c1-025",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "commission",
+      "example_id": "bf-a430b14be4b2c3a58ac5",
+      "hint_types": [
+        "security_audit"
+      ],
+      "input_token_count": 276,
+      "observed_token_rank": 46,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-239f60406fbdd607020a6bd2",
+      "target_response_position": 125
+    },
+    {
+      "base_question_id": "bfq-17c3ab4f9acdf2e4134f",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        40,
+        3830,
+        28715,
+        11190,
+        12676,
+        56
+      ],
+      "case_id": "c1-026",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "both",
+      "example_id": "bf-d8f174d2963759f617ca",
+      "hint_types": [
+        "validator"
+      ],
+      "input_token_count": 219,
+      "observed_token_rank": 12,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-72c644ce69cd7cbbdac066af",
+      "target_response_position": 94
+    },
+    {
+      "base_question_id": "bfq-015f62f731e58f2b5030",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        1249,
+        48983,
+        11190,
+        3830,
+        28715,
+        22464
+      ],
+      "case_id": "c1-027",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "omission",
+      "example_id": "bf-662aa74003bb97f2ea07",
+      "hint_types": [
+        "error_message"
+      ],
+      "input_token_count": 204,
+      "observed_token_rank": 13,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-12ffee94ca20b9088e3853da",
+      "target_response_position": 81
+    },
+    {
+      "base_question_id": "bfq-17c3ab4f9acdf2e4134f",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        1096,
+        20205,
+        3066,
+        5542,
+        10548,
+        5976
+      ],
+      "case_id": "c1-028",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "both",
+      "example_id": "bf-d8f174d2963759f617ca",
+      "hint_types": [
+        "validator"
+      ],
+      "input_token_count": 232,
+      "observed_token_rank": 12,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-1075cff569a7d66ab972ac8d",
+      "target_response_position": 107
+    },
+    {
+      "base_question_id": "bfq-d4403802cdf1d3cb03f6",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        1196,
+        1172,
+        5114,
+        3405,
+        3491,
+        9934
+      ],
+      "case_id": "c1-029",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-79aac6260ceb0428e611",
+      "hint_types": [
+        "sycophancy"
+      ],
+      "input_token_count": 124,
+      "observed_token_rank": 10,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-f98072e2e2c9c0cb3641fbc0",
+      "target_response_position": 38
+    },
+    {
+      "base_question_id": "bfq-12c794adcb3847114d90",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        624,
+        4192
+      ],
+      "case_id": "c1-030",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "both",
+      "example_id": "bf-5f186d2224cd8a515ac9",
+      "hint_types": [
+        "error_message"
+      ],
+      "input_token_count": 267,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-275bb0afcaca2b1bafaac17d",
+      "target_response_position": 158
+    },
+    {
+      "base_question_id": "bfq-fbc87820c6a43b4d3447",
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        22901,
+        32711,
+        44378,
+        22845,
+        38843,
+        19819
+      ],
+      "case_id": "c1-031",
+      "corpus_role": "dense_discovery",
+      "cot_phenotype": "faithful",
+      "example_id": "bf-3b3dc26f6e91f4bc543a",
+      "hint_types": [
+        "unauthorized_access"
+      ],
+      "input_token_count": 315,
+      "observed_token_rank": 8,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "dense width-six stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-dcbb7a02b6018b0cd64fc0e2",
+      "target_response_position": 184
+    },
+    {
+      "base_question_id": "bfq-ba931ff879dfaf384ca9",
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        22982,
+        4226,
+        21806,
+        16141,
+        5480
+      ],
+      "case_id": "c1-032",
+      "corpus_role": "broad_discovery",
+      "cot_phenotype": "omission",
+      "example_id": "bf-702c6535d2bc1a329992",
+      "hint_types": [
+        "validator"
+      ],
+      "input_token_count": 599,
+      "observed_token_rank": 3,
+      "selection_reasons": [
+        "frozen C1 rank-screen cohort",
+        "broad width-five stratum"
+      ],
+      "source_width1_artifact_id": "trace-source-6797794e5187f0fe499c4999",
+      "target_response_position": 415
+    }
+  ],
+  "cohort_id": "qwen3-4b-instruct-topk-c1-v1",
+  "expected_trace_count": 175,
+  "manifests": [
+    {
+      "label": "independent-candidate-0",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c1_independent_candidate_0_v1.json",
+      "sha256": "3cadd2fcc1ab2d24a1da2bc9349ebd0ff36c6261da324b77345fb53c4949ccf6",
+      "trace_family_id": "bonafide.c1.independent-candidate-0.v1",
+      "waves": [
+        "c1-independent-candidate-0-dense",
+        "c1-independent-candidate-0-broad"
+      ],
+      "work_item_count": 32
+    },
+    {
+      "label": "independent-candidate-1",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c1_independent_candidate_1_v1.json",
+      "sha256": "5e554544cc898fa1ddf23c84656962fd30c6e96fb8a38146282af391abcec6eb",
+      "trace_family_id": "bonafide.c1.independent-candidate-1.v1",
+      "waves": [
+        "c1-independent-candidate-1-dense",
+        "c1-independent-candidate-1-broad"
+      ],
+      "work_item_count": 32
+    },
+    {
+      "label": "independent-candidate-2",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c1_independent_candidate_2_v1.json",
+      "sha256": "bf92be5e1ec919cdb4b4e4b48bd83d6df6b8f910ec03355cce4e6b354b813484",
+      "trace_family_id": "bonafide.c1.independent-candidate-2.v1",
+      "waves": [
+        "c1-independent-candidate-2-dense",
+        "c1-independent-candidate-2-broad"
+      ],
+      "work_item_count": 32
+    },
+    {
+      "label": "independent-candidate-3",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c1_independent_candidate_3_v1.json",
+      "sha256": "08e4a84d2c5e0c7ccdcea2ee82c175578837fcb97d8b097c777451cb1d9d3615",
+      "trace_family_id": "bonafide.c1.independent-candidate-3.v1",
+      "waves": [
+        "c1-independent-candidate-3-dense",
+        "c1-independent-candidate-3-broad"
+      ],
+      "work_item_count": 32
+    },
+    {
+      "label": "independent-candidate-4",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c1_independent_candidate_4_v1.json",
+      "sha256": "fb5b3e021a8ae6a8c2a3b2ca65e1e1b9866aa6fe4949e3739a4ec0306a4abd85",
+      "trace_family_id": "bonafide.c1.independent-candidate-4.v1",
+      "waves": [
+        "c1-independent-candidate-4-dense",
+        "c1-independent-candidate-4-broad"
+      ],
+      "work_item_count": 32
+    },
+    {
+      "label": "independent-candidate-5",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c1_independent_candidate_5_v1.json",
+      "sha256": "f4a92abef04742206d2cd4bc7fc30b502539724569e54ec2fd16b9ac7a2e2b7a",
+      "trace_family_id": "bonafide.c1.independent-candidate-5.v1",
+      "waves": [
+        "c1-independent-candidate-5-dense",
+        "c1-independent-candidate-5-broad"
+      ],
+      "work_item_count": 15
+    }
+  ],
+  "rank_screen_path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/top5-probes-v1/selection-evidence/topk-rank-screen-lowprob32-265498a.json",
+  "rank_screen_sha256": "9f7f56dac7cbaaeb27c8d36607136a8810f240d5c302e738a2dff514e62d4020",
+  "schema_version": "bonafide-topk-c1-launch-bundle/v1",
+  "selection_path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/selections/qwen3_4b_instruct_topk_c1_cohort_v1.json",
+  "selection_sha256": "e8d2c4e882f09472311d07f95d1f7b5383d5bc6b83f825d03a3b9f34de3a3a20",
+  "source_manifest_path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_final_traces.json",
+  "source_manifest_sha256": "706143579c8ebcbd05e1fee150d2f3facf5f3f7e7de372c40e399b83a01687e2"
+}

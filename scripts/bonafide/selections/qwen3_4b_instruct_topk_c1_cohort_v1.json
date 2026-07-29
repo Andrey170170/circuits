@@ -1,0 +1,279 @@
+{
+  "schema_version": "bonafide-topk-c1-cohort-selection/v1",
+  "cohort_id": "qwen3-4b-instruct-topk-c1-v1",
+  "source_manifest_path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_final_traces.json",
+  "source_manifest_sha256": "706143579c8ebcbd05e1fee150d2f3facf5f3f7e7de372c40e399b83a01687e2",
+  "rank_screen_path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/top5-probes-v1/selection-evidence/topk-rank-screen-lowprob32-265498a.json",
+  "rank_screen_sha256": "9f7f56dac7cbaaeb27c8d36607136a8810f240d5c302e738a2dff514e62d4020",
+  "selection_contract": {
+    "discovery_only": true,
+    "case_count": 32,
+    "dense_discovery_count": 16,
+    "broad_discovery_count": 16,
+    "realized_width_five_count": 17,
+    "realized_width_six_count": 15,
+    "response_count": 26,
+    "maximum_targets_per_response": 3,
+    "base_question_family_count": 25,
+    "maximum_targets_per_base_question_family": 4,
+    "purpose": "C1 end-to-end two-pass candidate-union resource and numerical-health gate"
+  },
+  "cases": [
+    {
+      "case_id": "c1-001",
+      "source_width1_artifact_id": "trace-source-20d9a7036b98e9897f1f0be9",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-002",
+      "source_width1_artifact_id": "trace-source-2eb2886ecde858528cedc779",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 43,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-six stratum"]
+    },
+    {
+      "case_id": "c1-003",
+      "source_width1_artifact_id": "trace-source-68462cc9cc0f2ec4b8b4793e",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 3,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-004",
+      "source_width1_artifact_id": "trace-source-7e8a0d5661f168ebe1daba55",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-five stratum"]
+    },
+    {
+      "case_id": "c1-005",
+      "source_width1_artifact_id": "trace-source-1d969debc06147ea4db2ea84",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-five stratum"]
+    },
+    {
+      "case_id": "c1-006",
+      "source_width1_artifact_id": "trace-source-70efcf778ac8e5fe9515ae8b",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 19,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-six stratum"]
+    },
+    {
+      "case_id": "c1-007",
+      "source_width1_artifact_id": "trace-source-9545d2d7d654788a6694e8ef",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 6,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-six stratum"]
+    },
+    {
+      "case_id": "c1-008",
+      "source_width1_artifact_id": "trace-source-6aa03d20dc94fb7a05c06278",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 4,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-009",
+      "source_width1_artifact_id": "trace-source-2bb9fecdc2538ea14e696b5a",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-five stratum"]
+    },
+    {
+      "case_id": "c1-010",
+      "source_width1_artifact_id": "trace-source-9e269c603516701551413285",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-five stratum"]
+    },
+    {
+      "case_id": "c1-011",
+      "source_width1_artifact_id": "trace-source-7faf62f7ea7e0903b982d192",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-012",
+      "source_width1_artifact_id": "trace-source-f99934bae3dc5456d4e970ae",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-013",
+      "source_width1_artifact_id": "trace-source-166ded4f2e014e4088560898",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 7,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-six stratum"]
+    },
+    {
+      "case_id": "c1-014",
+      "source_width1_artifact_id": "trace-source-e120267063d1061304b4c599",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-five stratum"]
+    },
+    {
+      "case_id": "c1-015",
+      "source_width1_artifact_id": "trace-source-cc250b74f6dfb03e391c644d",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 10,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-six stratum"]
+    },
+    {
+      "case_id": "c1-016",
+      "source_width1_artifact_id": "trace-source-ab944081806fc6a3f0d390bd",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 11,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-six stratum"]
+    },
+    {
+      "case_id": "c1-017",
+      "source_width1_artifact_id": "trace-source-4d5db66ca6ecf18b015dfaed",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-018",
+      "source_width1_artifact_id": "trace-source-71e75213e67f7946df39af7f",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 3,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-019",
+      "source_width1_artifact_id": "trace-source-23745236c083ab4c0067dd5f",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 3,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-five stratum"]
+    },
+    {
+      "case_id": "c1-020",
+      "source_width1_artifact_id": "trace-source-938afe58de0f944cb0c68800",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 3,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-five stratum"]
+    },
+    {
+      "case_id": "c1-021",
+      "source_width1_artifact_id": "trace-source-c6a2b2d04df3ec93a97b764d",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 8,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-six stratum"]
+    },
+    {
+      "case_id": "c1-022",
+      "source_width1_artifact_id": "trace-source-2435b5a8fe6e0a6c53a1b21a",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 3,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-023",
+      "source_width1_artifact_id": "trace-source-50ffcdad4bf2af7af70c3ce4",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 9,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-six stratum"]
+    },
+    {
+      "case_id": "c1-024",
+      "source_width1_artifact_id": "trace-source-b7caa12aba1901bb269a4a69",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 6,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-six stratum"]
+    },
+    {
+      "case_id": "c1-025",
+      "source_width1_artifact_id": "trace-source-239f60406fbdd607020a6bd2",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 46,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-six stratum"]
+    },
+    {
+      "case_id": "c1-026",
+      "source_width1_artifact_id": "trace-source-72c644ce69cd7cbbdac066af",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 12,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-six stratum"]
+    },
+    {
+      "case_id": "c1-027",
+      "source_width1_artifact_id": "trace-source-12ffee94ca20b9088e3853da",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 13,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-six stratum"]
+    },
+    {
+      "case_id": "c1-028",
+      "source_width1_artifact_id": "trace-source-1075cff569a7d66ab972ac8d",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 12,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-six stratum"]
+    },
+    {
+      "case_id": "c1-029",
+      "source_width1_artifact_id": "trace-source-f98072e2e2c9c0cb3641fbc0",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 10,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-six stratum"]
+    },
+    {
+      "case_id": "c1-030",
+      "source_width1_artifact_id": "trace-source-275bb0afcaca2b1bafaac17d",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-five stratum"]
+    },
+    {
+      "case_id": "c1-031",
+      "source_width1_artifact_id": "trace-source-dcbb7a02b6018b0cd64fc0e2",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 8,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "dense width-six stratum"]
+    },
+    {
+      "case_id": "c1-032",
+      "source_width1_artifact_id": "trace-source-6797794e5187f0fe499c4999",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 3,
+      "selection_reasons": ["frozen C1 rank-screen cohort", "broad width-five stratum"]
+    }
+  ]
+}
