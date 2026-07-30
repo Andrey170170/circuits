@@ -12,6 +12,7 @@ from circuits.labeling.runtime import (
     execute_live,
     prepare_candidate_run,
     prepare_summary_stage,
+    retry_failed_generation,
 )
 
 
@@ -39,6 +40,21 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--stage", default="candidate_generation")
     live.add_argument("--request-id", action="append", dest="request_ids")
 
+    retry = subparsers.add_parser("retry-failed")
+    retry.add_argument("--run-root", type=Path, required=True)
+    retry.add_argument(
+        "--stage",
+        choices=("candidate_generation", "cluster_summary"),
+        required=True,
+    )
+    retry.add_argument(
+        "--request-id",
+        action="append",
+        dest="request_ids",
+        required=True,
+    )
+    retry.add_argument("--max-output-tokens", type=int, required=True)
+
     scoring = subparsers.add_parser("score-local")
     scoring.add_argument("--run-root", type=Path, required=True)
     scoring.add_argument(
@@ -46,9 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         choices=("candidate_selection", "summary_audit"),
     )
-    scoring.add_argument(
-        "--states", nargs="+", choices=("primary", "alternative")
-    )
+    scoring.add_argument("--states", nargs="+", choices=("primary", "alternative"))
     scoring.add_argument("--cluster-id", action="append", type=int, dest="cluster_ids")
 
     summary = subparsers.add_parser("prepare-summaries")
@@ -102,6 +116,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(counts, sort_keys=True))
         return 0 if counts["failed"] == 0 else 1
+    if args.command == "retry-failed":
+        counts = asyncio.run(
+            retry_failed_generation(
+                run_root=args.run_root,
+                stage=args.stage,
+                request_ids=set(args.request_ids),
+                max_output_tokens=args.max_output_tokens,
+            )
+        )
+        print(json.dumps(counts, sort_keys=True))
+        return 0 if counts["failed"] == 0 else 1
     if args.command == "score-local":
         from circuits.labeling.scoring import score_run
 
@@ -113,7 +138,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(counts, sort_keys=True))
         return 0
-    if args.command in ("prepare-batch", "submit-batch", "batch-status", "collect-batch"):
+    if args.command in (
+        "prepare-batch",
+        "submit-batch",
+        "batch-status",
+        "collect-batch",
+    ):
         from circuits.labeling.batch_runtime import (
             collect_native_batch,
             native_batch_status,

@@ -35,7 +35,11 @@ from circuits.labeling.profiles import (
     load_cluster_members,
     render_highlighted_profile,
 )
-from circuits.labeling.schema import GenerationRequest, GenerationResult, TelemetryRecord
+from circuits.labeling.schema import (
+    GenerationRequest,
+    GenerationResult,
+    TelemetryRecord,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_SCHEMA = "adag.labeling.run.v1"
@@ -109,10 +113,7 @@ def resolve_local_snapshot(model_id: str, revision: str) -> Path:
     if not cache:
         raise ValueError("HF_HUB_CACHE is required to resolve the frozen tokenizer")
     path = (
-        Path(cache)
-        / f"models--{model_id.replace('/', '--')}"
-        / "snapshots"
-        / revision
+        Path(cache) / f"models--{model_id.replace('/', '--')}" / "snapshots" / revision
     )
     if not path.is_dir():
         raise ValueError(f"frozen tokenizer snapshot is not cached: {path}")
@@ -169,7 +170,9 @@ def prepare_candidate_run(
     recipe = load_recipe(recipe_path)
     code_revision = collect_code_revision()
     if code_revision["git_dirty"] and not allow_dirty:
-        raise ValueError("labeling source tree is dirty; commit it or pass --allow-dirty")
+        raise ValueError(
+            "labeling source tree is dirty; commit it or pass --allow-dirty"
+        )
     chosen_states = list(dict.fromkeys(states))
     if not chosen_states:
         raise ValueError("at least one state is required")
@@ -241,7 +244,9 @@ def prepare_candidate_run(
                         for partition in partition_profiles
                     },
                 }
-                profile_relative = Path("profiles") / name / f"cluster-{cluster_id:04d}.json"
+                profile_relative = (
+                    Path("profiles") / name / f"cluster-{cluster_id:04d}.json"
+                )
                 atomic_write_json(staging / profile_relative, profile_payload)
                 profile_files.append(
                     {
@@ -304,7 +309,9 @@ def prepare_candidate_run(
             "recipe": recipe.model_dump(mode="json"),
             "recipe_path": str(recipe_path.resolve()),
             "recipe_sha256": file_sha256(recipe_path),
-            "price_snapshot_path": str((recipe_path.parent / recipe.price_snapshot).resolve()),
+            "price_snapshot_path": str(
+                (recipe_path.parent / recipe.price_snapshot).resolve()
+            ),
             "price_snapshot_sha256": file_sha256(
                 recipe_path.parent / recipe.price_snapshot
             ),
@@ -359,7 +366,10 @@ def load_stage_requests(run_root: Path, stage: str) -> list[GenerationRequest]:
         expected = stage_manifest.pop("manifest_sha256", None)
         if expected != canonical_sha256(stage_manifest):
             raise ValueError(f"{stage} stage manifest hash mismatch")
-        if stage_manifest.get("source_run_manifest_sha256") != manifest["manifest_sha256"]:
+        if (
+            stage_manifest.get("source_run_manifest_sha256")
+            != manifest["manifest_sha256"]
+        ):
             raise ValueError(f"{stage} stage refers to a different run manifest")
         request_entry = stage_manifest["request_file"]
     request_path = run_root / request_entry["path"]
@@ -465,9 +475,13 @@ async def execute_live(
     recipe = LabelingRecipe.model_validate(manifest["recipe"])
     requests = load_stage_requests(run_root, stage)
     if request_ids is not None:
-        requests = [request for request in requests if request.request_id in request_ids]
+        requests = [
+            request for request in requests if request.request_id in request_ids
+        ]
     if any(request.transport != "live" for request in requests):
-        raise ValueError("execute-live accepts only requests prepared with live transport")
+        raise ValueError(
+            "execute-live accepts only requests prepared with live transport"
+        )
     config = _role(recipe, stage)
     backend = create_backend(config)
     price_path = Path(manifest["price_snapshot_path"])
@@ -478,12 +492,8 @@ async def execute_live(
     counts = {"planned": len(requests), "completed": 0, "skipped": 0, "failed": 0}
 
     async def run_one(request: GenerationRequest) -> None:
-        result_relative = (
-            Path("results") / stage / f"{request.request_id}.json"
-        )
-        telemetry_relative = (
-            Path("telemetry") / stage / f"{request.request_id}.json"
-        )
+        result_relative = Path("results") / stage / f"{request.request_id}.json"
+        telemetry_relative = Path("telemetry") / stage / f"{request.request_id}.json"
         result_path = run_root / result_relative
         telemetry_path = run_root / telemetry_relative
         if result_path.exists() and telemetry_path.exists():
@@ -509,6 +519,33 @@ async def execute_live(
     return counts
 
 
+def _generation_telemetry(
+    *,
+    request: GenerationRequest,
+    result: GenerationResult,
+    endpoint_identity: str,
+    result_artifact: str,
+    prices: dict[str, Any],
+) -> TelemetryRecord:
+    cost = estimate_cost(
+        prices,
+        provider=request.provider,
+        model=request.model,
+        transport=request.transport,
+        usage=result.usage,
+    )
+    return TelemetryRecord.from_request_result(
+        request,
+        result,
+        endpoint_identity=endpoint_identity,
+        result_artifact=result_artifact,
+        cost=cost,
+        slurm_job_id=os.environ.get("SLURM_JOB_ID"),
+        slurm_array_task_id=os.environ.get("SLURM_ARRAY_TASK_ID"),
+        host=socket.gethostname(),
+    )
+
+
 def persist_generation_result(
     *,
     run_root: Path,
@@ -531,22 +568,12 @@ def persist_generation_result(
         if file_sha256(price_path) != manifest["price_snapshot_sha256"]:
             raise ValueError("price snapshot hash mismatch")
         prices = load_price_snapshot(price_path)
-    cost = estimate_cost(
-        prices,
-        provider=request.provider,
-        model=request.model,
-        transport=request.transport,
-        usage=result.usage,
-    )
-    telemetry = TelemetryRecord.from_request_result(
-        request,
-        result,
+    telemetry = _generation_telemetry(
+        request=request,
+        result=result,
         endpoint_identity=endpoint_identity,
         result_artifact=result_relative.as_posix(),
-        cost=cost,
-        slurm_job_id=os.environ.get("SLURM_JOB_ID"),
-        slurm_array_task_id=os.environ.get("SLURM_ARRAY_TASK_ID"),
-        host=socket.gethostname(),
+        prices=prices,
     )
     atomic_write_json(result_path, result.model_dump(mode="json"))
     try:
@@ -554,3 +581,319 @@ def persist_generation_result(
     except BaseException:
         # Leave a conspicuous partial result rather than hiding telemetry loss.
         raise
+
+
+def _retry_manifest_payload(value: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(value)
+    payload.pop("manifest_sha256", None)
+    payload["manifest_sha256"] = canonical_sha256(payload)
+    return payload
+
+
+def _write_retry_manifest(
+    path: Path, value: dict[str, Any], *, overwrite: bool
+) -> None:
+    atomic_write_json(
+        path,
+        _retry_manifest_payload(value),
+        overwrite=overwrite,
+    )
+
+
+def _validate_failed_output_pair(
+    *,
+    run_root: Path,
+    request: GenerationRequest,
+) -> dict[str, Any]:
+    result_relative = Path("results") / request.stage / f"{request.request_id}.json"
+    telemetry_relative = (
+        Path("telemetry") / request.stage / f"{request.request_id}.json"
+    )
+    result_path = run_root / result_relative
+    telemetry_path = run_root / telemetry_relative
+    if result_path.exists() != telemetry_path.exists():
+        raise ValueError(f"partial request output exists for {request.request_id}")
+    if not result_path.is_file():
+        raise ValueError(f"request output is missing for {request.request_id}")
+    try:
+        result = GenerationResult.model_validate_json(
+            result_path.read_text(encoding="utf-8")
+        )
+        telemetry = TelemetryRecord.model_validate_json(
+            telemetry_path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            f"invalid request output pair for {request.request_id}"
+        ) from error
+    expected_logical_hash = canonical_sha256(request.logical_payload())
+    expected_artifact = result_relative.as_posix()
+    if (
+        result.request_id != request.request_id
+        or telemetry.request_id != request.request_id
+    ):
+        raise ValueError(f"request identity mismatch for {request.request_id}")
+    if telemetry.stage != request.stage:
+        raise ValueError(f"request stage mismatch for {request.request_id}")
+    if result.provider != request.provider or telemetry.backend != request.provider:
+        raise ValueError(f"request provider mismatch for {request.request_id}")
+    if (
+        result.model_requested != request.model
+        or telemetry.model_requested != request.model
+    ):
+        raise ValueError(f"request model mismatch for {request.request_id}")
+    if telemetry.transport != request.transport:
+        raise ValueError(f"request transport mismatch for {request.request_id}")
+    if telemetry.logical_request_sha256 != expected_logical_hash:
+        raise ValueError(f"logical request hash mismatch for {request.request_id}")
+    if telemetry.result_artifact != expected_artifact:
+        raise ValueError(f"result artifact mismatch for {request.request_id}")
+    if telemetry.parse_status != result.parse_status:
+        raise ValueError(f"parse status mismatch for {request.request_id}")
+    if telemetry.provider_request_id != result.provider_request_id:
+        raise ValueError(f"provider request identity mismatch for {request.request_id}")
+    if telemetry.response_sha256 != result.raw_response_sha256:
+        raise ValueError(f"response hash mismatch for {request.request_id}")
+    if result.parse_status == "success":
+        raise ValueError(f"refusing to retry successful request {request.request_id}")
+    return {
+        "result": result,
+        "telemetry": telemetry,
+        "result_path": result_path,
+        "telemetry_path": telemetry_path,
+        "result_relative": result_relative,
+        "telemetry_relative": telemetry_relative,
+        "result_sha256": file_sha256(result_path),
+        "telemetry_sha256": file_sha256(telemetry_path),
+        "logical_request_sha256": expected_logical_hash,
+    }
+
+
+def _archive_failed_output(
+    *,
+    run_root: Path,
+    request: GenerationRequest,
+    retry_request: GenerationRequest,
+    validated: dict[str, Any],
+    code_revision: dict[str, Any],
+) -> tuple[Path, dict[str, Any]]:
+    retry_parent = run_root / "provider_batches" / request.stage / "retries"
+    retry_dir = retry_parent / request.request_id
+    if retry_dir.exists():
+        raise FileExistsError(f"retry archive already exists: {retry_dir}")
+    staging = retry_parent / f".{request.request_id}.tmp-{uuid.uuid4().hex}"
+    staging.mkdir(parents=True)
+    try:
+        original_result_path = staging / "original-result.json"
+        original_telemetry_path = staging / "original-telemetry.json"
+        shutil.copy2(validated["result_path"], original_result_path)
+        shutil.copy2(validated["telemetry_path"], original_telemetry_path)
+        if file_sha256(original_result_path) != validated["result_sha256"]:
+            raise ValueError(f"result changed while archiving {request.request_id}")
+        if file_sha256(original_telemetry_path) != validated["telemetry_sha256"]:
+            raise ValueError(f"telemetry changed while archiving {request.request_id}")
+        atomic_write_json(
+            staging / "original-request.json",
+            request.model_dump(mode="json"),
+        )
+        atomic_write_json(
+            staging / "retry-request.json",
+            retry_request.model_dump(mode="json"),
+        )
+        retry_manifest: dict[str, Any] = {
+            "schema_version": "adag.labeling.retry.v1",
+            "request_id": request.request_id,
+            "run_id": request.run_id,
+            "stage": request.stage,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": "original_archived",
+            "code_revision": code_revision,
+            "override": {
+                "max_output_tokens": retry_request.max_output_tokens,
+                "transport": "live",
+            },
+            "original": {
+                "logical_request_sha256": validated["logical_request_sha256"],
+                "transport": request.transport,
+                "provider_request_id": validated["result"].provider_request_id,
+                "parse_status": validated["result"].parse_status,
+                "result_artifact": "original-result.json",
+                "result_sha256": validated["result_sha256"],
+                "telemetry_artifact": "original-telemetry.json",
+                "telemetry_sha256": validated["telemetry_sha256"],
+                "request_artifact": "original-request.json",
+                "request_sha256": file_sha256(staging / "original-request.json"),
+            },
+            "retry": {
+                "logical_request_sha256": canonical_sha256(
+                    retry_request.logical_payload()
+                ),
+                "transport": "live",
+                "request_artifact": "retry-request.json",
+                "request_sha256": file_sha256(staging / "retry-request.json"),
+            },
+        }
+        _write_retry_manifest(
+            staging / "manifest.json",
+            retry_manifest,
+            overwrite=False,
+        )
+        retry_parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staging, retry_dir)
+        return retry_dir, retry_manifest
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+async def retry_failed_generation(
+    *,
+    run_root: Path,
+    stage: str,
+    request_ids: set[str],
+    max_output_tokens: int,
+) -> dict[str, int]:
+    """Retry selected failed results live without mutating their frozen requests."""
+
+    if max_output_tokens < 1:
+        raise ValueError("max output tokens must be positive")
+    if not request_ids:
+        raise ValueError("at least one request ID is required")
+    manifest = load_run_manifest(run_root)
+    recipe = LabelingRecipe.model_validate(manifest["recipe"])
+    requests_by_id = {
+        request.request_id: request for request in load_stage_requests(run_root, stage)
+    }
+    unknown = sorted(request_ids - requests_by_id.keys())
+    if unknown:
+        raise ValueError(f"unknown request IDs for {stage}: {', '.join(unknown)}")
+    requests = [requests_by_id[request_id] for request_id in sorted(request_ids)]
+    config = _role(recipe, stage).model_copy(
+        update={"transport": "live", "max_output_tokens": max_output_tokens}
+    )
+    price_path = Path(manifest["price_snapshot_path"])
+    if file_sha256(price_path) != manifest["price_snapshot_sha256"]:
+        raise ValueError("price snapshot hash mismatch")
+    prices = load_price_snapshot(price_path)
+    code_revision = collect_code_revision()
+
+    validated_by_id: dict[str, dict[str, Any]] = {}
+    retry_requests: dict[str, GenerationRequest] = {}
+    for request in requests:
+        validated_by_id[request.request_id] = _validate_failed_output_pair(
+            run_root=run_root,
+            request=request,
+        )
+        retry_dir = (
+            run_root / "provider_batches" / stage / "retries" / request.request_id
+        )
+        if retry_dir.exists():
+            raise FileExistsError(f"retry archive already exists: {retry_dir}")
+        retry_requests[request.request_id] = request.model_copy(
+            update={
+                "transport": "live",
+                "max_output_tokens": max_output_tokens,
+            }
+        )
+
+    backend = create_backend(config)
+    archives: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for request in requests:
+        archives[request.request_id] = _archive_failed_output(
+            run_root=run_root,
+            request=request,
+            retry_request=retry_requests[request.request_id],
+            validated=validated_by_id[request.request_id],
+            code_revision=code_revision,
+        )
+
+    semaphore = asyncio.Semaphore(config.concurrency)
+    counts = {"planned": len(requests), "completed": 0, "failed": 0}
+
+    async def run_one(request: GenerationRequest) -> None:
+        retry_request = retry_requests[request.request_id]
+        validated = validated_by_id[request.request_id]
+        retry_dir, retry_manifest = archives[request.request_id]
+        async with semaphore:
+            result = await backend.generate(retry_request)
+        telemetry = _generation_telemetry(
+            request=retry_request,
+            result=result,
+            endpoint_identity=backend.endpoint_identity,
+            result_artifact=validated["result_relative"].as_posix(),
+            prices=prices,
+        )
+        retry_result_path = retry_dir / "retry-result.json"
+        retry_telemetry_path = retry_dir / "retry-telemetry.json"
+        atomic_write_json(retry_result_path, result.model_dump(mode="json"))
+        atomic_write_json(retry_telemetry_path, telemetry.model_dump(mode="json"))
+        response_obtained = (
+            result.provider_request_id is not None
+            and result.parse_status != "provider_error"
+        )
+        retry_manifest["retry"].update(
+            {
+                "provider_request_id": result.provider_request_id,
+                "parse_status": result.parse_status,
+                "result_artifact": "retry-result.json",
+                "result_sha256": file_sha256(retry_result_path),
+                "telemetry_artifact": "retry-telemetry.json",
+                "telemetry_sha256": file_sha256(retry_telemetry_path),
+            }
+        )
+        retry_manifest["status"] = (
+            "provider_response_archived"
+            if response_obtained
+            else "no_provider_response"
+        )
+        _write_retry_manifest(
+            retry_dir / "manifest.json",
+            retry_manifest,
+            overwrite=True,
+        )
+        if not response_obtained:
+            counts["failed"] += 1
+            return
+
+        # Detect concurrent mutation before replacing either canonical artifact.
+        if file_sha256(validated["result_path"]) != validated["result_sha256"]:
+            raise ValueError(
+                f"canonical result changed during retry {request.request_id}"
+            )
+        if file_sha256(validated["telemetry_path"]) != validated["telemetry_sha256"]:
+            raise ValueError(
+                f"canonical telemetry changed during retry {request.request_id}"
+            )
+        atomic_write_json(
+            validated["result_path"],
+            result.model_dump(mode="json"),
+            overwrite=True,
+        )
+        atomic_write_json(
+            validated["telemetry_path"],
+            telemetry.model_dump(mode="json"),
+            overwrite=True,
+        )
+        if file_sha256(validated["result_path"]) != file_sha256(retry_result_path):
+            raise ValueError(
+                f"canonical retry result hash mismatch: {request.request_id}"
+            )
+        if file_sha256(validated["telemetry_path"]) != file_sha256(
+            retry_telemetry_path
+        ):
+            raise ValueError(
+                f"canonical retry telemetry hash mismatch: {request.request_id}"
+            )
+        retry_manifest["status"] = "committed"
+        retry_manifest["committed_at"] = datetime.now(timezone.utc).isoformat()
+        _write_retry_manifest(
+            retry_dir / "manifest.json",
+            retry_manifest,
+            overwrite=True,
+        )
+        counts["completed"] += 1
+        if result.parse_status != "success":
+            counts["failed"] += 1
+
+    await asyncio.gather(*(run_one(request) for request in requests))
+    return counts
