@@ -31,6 +31,7 @@ from circuits.tracing.trace import trace_teacher_forced_candidates
 from scripts.bonafide.runner import (
     _append_jsonl,
     _directory_size,
+    _ensure_execution_cohort,
     _gpu_info,
     _load_model_and_tokenizer,
     _rss_peak_bytes,
@@ -259,6 +260,17 @@ def run_candidate_union_wave(
     repo_root = Path(__file__).resolve().parents[2]
     code_revision = dict(_code_revision or collect_code_revision(repo_root))
     runtime_environment = dict(_runtime_environment or collect_runtime_environment())
+    execution = plan.get("execution")
+    if isinstance(execution, Mapping):
+        if execution.get("config_canonical_sha256") != _sha256(config):
+            raise ValueError("candidate-union execution config hash drift")
+        if (
+            execution.get("required_clean_worktree") is True
+            and code_revision.get("git_dirty") is not False
+        ):
+            raise ValueError(
+                "candidate-union execution requires a clean frozen worktree"
+            )
     plan_sha256 = _sha256(plan)
     if plan["source"]["model_id"] != config["model"]["model_id"]:
         raise ValueError("candidate-union model ID disagrees with config")
@@ -329,6 +341,13 @@ def run_candidate_union_wave(
     if dry_run or not planned:
         return results
 
+    _ensure_execution_cohort(
+        artifact_root=artifact_root,
+        plan_sha256=plan_sha256,
+        config=config,
+        code_revision=code_revision,
+        runtime_environment=runtime_environment,
+    )
     if _model_bundle is None:
         load_started = time.perf_counter()
         model, tokenizer = _load_model_and_tokenizer(config)

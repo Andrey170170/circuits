@@ -14,6 +14,7 @@ from scripts.bonafide.candidate_union_runner import (
     run_candidate_union_wave,
     validate_candidate_union_plan,
 )
+from scripts.bonafide.runner import _sha256
 from tests.test_bonafide_benchmark import _config
 from tests.test_topk_topology_comparison import _joint_and_references
 
@@ -112,6 +113,44 @@ def test_candidate_union_plan_rejects_reference_order_drift(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="indices are not ordered"):
         validate_candidate_union_plan(_plan(records))
+
+
+def test_candidate_union_execution_contract_rejects_config_or_code_drift(
+    tmp_path: Path,
+) -> None:
+    _traces, records = _saved_references(tmp_path)
+    config = _config()
+    config["model"]["device"] = "cpu"
+    config["model"]["dtype"] = "float32"
+    plan = _plan(records)
+    plan["execution"] = {
+        "config_canonical_sha256": _sha256(config),
+        "required_clean_worktree": True,
+    }
+    changed = {**config, "test_drift": True}
+    with pytest.raises(ValueError, match="config hash drift"):
+        run_candidate_union_wave(
+            config=changed,
+            plan=plan,
+            wave_id="candidate-union-c0-test",
+            artifact_root=tmp_path / "artifacts",
+            summary_jsonl=tmp_path / "summary.jsonl",
+            dry_run=True,
+            _code_revision=_code_revision(),
+            _runtime_environment={"python": "test"},
+        )
+    dirty = {**_code_revision(), "git_dirty": True}
+    with pytest.raises(ValueError, match="clean frozen worktree"):
+        run_candidate_union_wave(
+            config=config,
+            plan=plan,
+            wave_id="candidate-union-c0-test",
+            artifact_root=tmp_path / "artifacts",
+            summary_jsonl=tmp_path / "summary.jsonl",
+            dry_run=True,
+            _code_revision=dirty,
+            _runtime_environment={"python": "test"},
+        )
 
 
 def test_refinement_topology_requires_exact_nodes_and_edges(
