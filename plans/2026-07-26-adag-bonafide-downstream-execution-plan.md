@@ -2535,3 +2535,11 @@ The OpenAI and Anthropic native candidate-batch payloads were prepared but not s
 input SHA-256 values are `771528757ee34f0346deb6df080f817ec1bd28c0f7aaa50c4dfdde1c629f8783`
 and `973e2180a2303b724f17e1e893d8b6b0337de64906f0c504770e9f36a34d5180`,
 respectively. No billable provider batch or Slurm scoring job was created.
+
+On 2026-07-29, offline simulator preflight required a new provenance cohort. Commit `755e37a`
+pins and locally resolves Transluce simulator revision
+`63919a3fe41f88d91ef764213ae9018e1f8a578e`; the corrected comparison pilot lives under
+`comparison-pilot-755e37a-v1`. Luna and Haiku candidate generation completed with 60 valid
+descriptions per recipe after one archived-and-recorded live retry of a malformed Haiku batch
+response. Candidate-selection scorer jobs `1676775` and `1676776` were submitted on preemptible
+A800 GPUs. The identically selected Qwen recipe is prepared but remains endpoint-gated.

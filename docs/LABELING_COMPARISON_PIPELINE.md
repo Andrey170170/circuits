@@ -1,7 +1,7 @@
 # Frozen labeling comparison pipeline
 
-Status: implementation-ready; hosted-provider smoke tests passed; no production labeling batch or
-local simulator job has been launched.
+Status: implementation-ready; hosted-provider smoke tests passed; the corrected 12-cluster
+comparison pilot is active.
 
 ## Comparison contract
 
@@ -215,3 +215,25 @@ It contains six primary clusters (`0, 12, 24, 38, 50, 62`) and six alternative c
 (`0, 17, 37, 54, 73, 94`). Each recipe has 60 candidate requests and 12 profile files. The sets of
 12 rendered prompt hashes are identical across Qwen, OpenAI, and Anthropic. OpenAI and Anthropic
 native-batch inputs are prepared but have not been submitted.
+
+### Corrected active pilot
+
+Offline scorer preflight exposed a Transformers metadata lookup when the simulator was loaded by
+repository name. Commit `755e37a` pins simulator revision
+`63919a3fe41f88d91ef764213ae9018e1f8a578e` and resolves it to the local snapshot path before
+loading. Because this changes recorded scorer provenance, the original `fcb2549` pilot remains
+unsubmitted and a new pilot was prepared at:
+
+```text
+/scratch/general/vast/$USER/circuits/results/bonafide/labeling/
+comparison-pilot-755e37a-v1
+```
+
+On 2026-07-29, the OpenAI Luna and Anthropic Haiku candidate batches each completed 60 requests.
+All Luna outputs parsed successfully. One Haiku output was invalid JSON and was retried once
+through the live Messages endpoint; the failed batch artifact and telemetry remain archived under
+that request's `provider_batches/candidate_generation/retries/` directory. Both recipes therefore
+enter candidate scoring with 60 valid descriptions. Candidate-selection scoring jobs `1676775`
+(OpenAI) and `1676776` (Anthropic) were submitted to Granite's preemptible A800 queue. The Qwen
+pilot root is prepared with the identical cluster selection and waits for its separately managed
+endpoint.
