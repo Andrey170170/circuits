@@ -17,6 +17,10 @@ def test_comparison_recipes_are_valid(name: str) -> None:
     assert recipe.candidate_samples == 5
     assert recipe.scorer.backend == "transluce_finetuned"
     assert recipe.scorer.model == "Transluce/llama_8b_simulator"
+    assert (
+        recipe.scorer.model_revision
+        == "63919a3fe41f88d91ef764213ae9018e1f8a578e"
+    )
 
 
 def test_recipes_keep_local_scorer_fixed() -> None:

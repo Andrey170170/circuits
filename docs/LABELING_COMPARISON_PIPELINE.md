@@ -124,8 +124,9 @@ request. Multiple clusters are never combined into one semantic prompt.
 ## Local scoring and summarization
 
 The simulator checkpoint must be staged before submission and the frozen labeling environment
-must contain it. The checkpoint was not present in the configured Hugging Face cache at
-implementation time.
+must contain exact revision `63919a3fe41f88d91ef764213ae9018e1f8a578e`. Scoring resolves the
+repository/revision pair to its cached snapshot path before loading, so the production job remains
+strictly offline and does not depend on Hugging Face metadata access.
 
 Candidate scoring:
 

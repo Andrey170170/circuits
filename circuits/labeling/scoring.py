@@ -15,7 +15,11 @@ from circuits.descriptions.vllm_backend import FinetunedSimulator, score_attr_ex
 from circuits.labeling.config import LabelingRecipe
 from circuits.labeling.io import atomic_write_json
 from circuits.labeling.profiles import retokenize_for_simulator
-from circuits.labeling.runtime import load_run_manifest, load_stage_requests
+from circuits.labeling.runtime import (
+    load_run_manifest,
+    load_stage_requests,
+    resolve_local_snapshot,
+)
 from circuits.labeling.schema import GenerationResult
 
 
@@ -122,8 +126,11 @@ def score_run(
 
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(recipe.scorer.gpu_index)
+    simulator_snapshot = resolve_local_snapshot(
+        recipe.scorer.model, recipe.scorer.model_revision
+    )
     simulator = FinetunedSimulator(
-        model_name=recipe.scorer.model,
+        model_name=str(simulator_snapshot),
         gpu_idx=recipe.scorer.gpu_index,
     )
     try:
@@ -222,6 +229,7 @@ def score_run(
             "phase": phase,
             "backend": recipe.scorer.backend,
             "model": recipe.scorer.model,
+            "model_revision": recipe.scorer.model_revision,
             "elapsed_seconds": elapsed,
             "allocated_gpu_count": allocated_gpus,
             "gpu_hours": allocated_gpus * elapsed / 3600,

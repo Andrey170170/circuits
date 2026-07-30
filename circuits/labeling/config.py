@@ -46,6 +46,7 @@ class ModelRoleConfig(StrictModel):
 class LocalScorerConfig(StrictModel):
     backend: Literal["transluce_finetuned"] = "transluce_finetuned"
     model: str = "Transluce/llama_8b_simulator"
+    model_revision: str = "63919a3fe41f88d91ef764213ae9018e1f8a578e"
     gpu_index: int = Field(default=0, ge=0)
     source_tokenizer: str = "Qwen/Qwen3-4B-Instruct-2507"
     source_tokenizer_revision: str = "cdbee75f17c01a7cc42f958dc650907174af0554"

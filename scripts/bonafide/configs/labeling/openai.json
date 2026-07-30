@@ -18,6 +18,7 @@
   "scorer": {
     "backend": "transluce_finetuned",
     "model": "Transluce/llama_8b_simulator",
+    "model_revision": "63919a3fe41f88d91ef764213ae9018e1f8a578e",
     "gpu_index": 0,
     "source_tokenizer": "Qwen/Qwen3-4B-Instruct-2507",
     "source_tokenizer_revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
