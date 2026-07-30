@@ -39,5 +39,5 @@
     "timeout_seconds": 180,
     "retry": {"max_attempts": 3, "initial_backoff_seconds": 1, "max_backoff_seconds": 15}
   },
-  "price_snapshot": "prices-2026-07-27.json"
+  "price_snapshot": "prices-2026-07-30.json"
 }

@@ -51,6 +51,25 @@ def test_cost_estimate_uses_mutually_exclusive_usage_buckets() -> None:
     assert estimate.total_cost == pytest.approx(1.62)
 
 
+def test_current_openai_batch_prices_include_cache_buckets() -> None:
+    snapshot = load_price_snapshot(CONFIG_ROOT / "prices-2026-07-30.json")
+    estimate = estimate_cost(
+        snapshot,
+        provider="openai",
+        model="gpt-5.6-terra",
+        transport="native_batch",
+        usage=Usage(
+            input_tokens=1_300_000,
+            uncached_input_tokens=1_000_000,
+            cache_read_tokens=200_000,
+            cache_write_tokens=100_000,
+            output_tokens=100_000,
+        ),
+    )
+    assert estimate.complete
+    assert estimate.total_cost == pytest.approx(1.745)
+
+
 def test_unknown_rate_fails_open_as_incomplete_not_zero() -> None:
     snapshot = load_price_snapshot(CONFIG_ROOT / "prices-2026-07-27.json")
     estimate = estimate_cost(
