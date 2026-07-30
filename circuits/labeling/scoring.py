@@ -125,6 +125,10 @@ def score_run(
     import torch
 
     if torch.cuda.is_available():
+        # Some CHPC CUDA/driver combinations reject memory-stat operations until
+        # the process has initialized its CUDA context explicitly.
+        torch.cuda.init()
+        torch.cuda.set_device(recipe.scorer.gpu_index)
         torch.cuda.reset_peak_memory_stats(recipe.scorer.gpu_index)
     simulator_snapshot = resolve_local_snapshot(
         recipe.scorer.model, recipe.scorer.model_revision
