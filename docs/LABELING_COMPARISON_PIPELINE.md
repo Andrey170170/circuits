@@ -46,11 +46,12 @@ Secrets are read only from the environment. They are never put in requests, run 
 telemetry, command arguments, or endpoint identities.
 
 The price snapshot is not silently refreshed. A new official price date requires a new file and
-recipe revision. The current snapshot is based on the official
+recipe revision. New runs use `prices-2026-07-30.json`, based on the official
 [OpenAI pricing](https://developers.openai.com/api/docs/pricing),
 [OpenAI Batch](https://developers.openai.com/api/docs/guides/batch), and
 [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing) pages as read on
-2026-07-27.
+2026-07-30. Older run manifests retain their original dated snapshot and telemetry; later price
+changes are recorded as additive reconciliations rather than retroactive artifact edits.
 
 ## Prepare a smoke or pilot
 
@@ -233,7 +234,35 @@ On 2026-07-29, the OpenAI Luna and Anthropic Haiku candidate batches each comple
 All Luna outputs parsed successfully. One Haiku output was invalid JSON and was retried once
 through the live Messages endpoint; the failed batch artifact and telemetry remain archived under
 that request's `provider_batches/candidate_generation/retries/` directory. Both recipes therefore
-enter candidate scoring with 60 valid descriptions. Candidate-selection scoring jobs `1676775`
-(OpenAI) and `1676776` (Anthropic) were submitted to Granite's preemptible A800 queue. The Qwen
-pilot root is prepared with the identical cluster selection and waits for its separately managed
+entered candidate scoring with 60 valid descriptions.
+
+The initial A800 jobs `1676775` and `1676776` and first owner-A100 attempts `14382311` and
+`14382312` failed before scoring because CUDA memory telemetry was reset before the process had
+initialized its CUDA context. They wrote no score artifacts. Recovery jobs `14382647` (OpenAI)
+and `14382648` (Anthropic) explicitly initialized the context and completed all 12 clusters and
+60 candidate correlations per recipe with no null scores. They used 0.038759 and 0.023972
+A100 GPU-hours, respectively. Commit `579a71b` codifies the initialization for future jobs; the
+active run manifests remain bound to the unchanged `755e37a` source snapshot. Three clusters per
+recipe have a negative best candidate correlation, so their generated summaries remain
+provisional rather than being silently discarded.
+
+On 2026-07-30, the 12-request Terra summary batch
+`batch_6a6bc0cecb2481908f73edf4e3854077` completed with 12 valid labels. The 12-request Opus batch
+`msgbatch_01Dzn8SKncTvvYUNh5vvwf6P` completed at the provider but hit its 300-token cap on ten
+responses. Commit `e2859fd` added provenance-preserving live retries; all ten 1,200-token retries
+parsed successfully while retaining the original result, telemetry, requests, hashes, and retry
+manifests. Terra's 12-label audit completed in job `14383331`; its correlations range from
+-0.093977 to 0.150438, reinforcing that these are exploratory labels rather than accepted
+mechanistic explanations. Opus audit job `14383798` also completed all 12 labels, using
+0.005594 A100 GPU-hours; its correlations range from -0.038592 to 0.220686.
+
+The active manifests still pin `prices-2026-07-27.json`. A separate 2026-07-30 reconciliation uses
+the reduced OpenAI native-Batch rates per million uncached-input/cache-read/output tokens:
+Luna `$0.10/$0.01/$0.60` and Terra `$1.00/$0.10/$6.00`. The measured Luna usage reprices to
+`$0.01113894`; measured Terra usage (21,310 input and 754 output tokens) reprices to `$0.025834`.
+The pilot's OpenAI path is therefore `$0.03697294` at current rates. Scaling the maximum-output
+pilot envelope to all 150 ready clusters gives a conservative estimate of about `$0.68`; a `$1`
+full-run OpenAI guardrail leaves ample contingency. Historical telemetry is not rewritten.
+
+The Qwen pilot root retains the identical cluster selection and waits for its separately managed
 endpoint.

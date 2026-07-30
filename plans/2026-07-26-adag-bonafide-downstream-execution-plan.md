@@ -2541,5 +2541,28 @@ pins and locally resolves Transluce simulator revision
 `63919a3fe41f88d91ef764213ae9018e1f8a578e`; the corrected comparison pilot lives under
 `comparison-pilot-755e37a-v1`. Luna and Haiku candidate generation completed with 60 valid
 descriptions per recipe after one archived-and-recorded live retry of a malformed Haiku batch
-response. Candidate-selection scorer jobs `1676775` and `1676776` were submitted on preemptible
-A800 GPUs. The identically selected Qwen recipe is prepared but remains endpoint-gated.
+response.
+
+The initial A800 scorer jobs `1676775` and `1676776` and first owner-A100 attempts `14382311` and
+`14382312` failed before producing score artifacts because the CUDA context was not initialized
+before memory telemetry reset. Recovery jobs `14382647` and `14382648` completed all 12 clusters
+and 60 candidate correlations per hosted recipe, using a combined 0.062731 A100 GPU-hours. The
+recovery launch explicitly initialized CUDA; commit `579a71b` codifies that ordering for future
+runs without changing the active manifests' `755e37a` provenance.
+
+On 2026-07-30, Terra batch `batch_6a6bc0cecb2481908f73edf4e3854077` produced 12 valid summaries.
+Opus batch `msgbatch_01Dzn8SKncTvvYUNh5vvwf6P` produced two valid summaries and ten truncated
+responses at the frozen 300-token cap. Commit `e2859fd` added a fail-closed retry command; ten
+explicit live retries at 1,200 tokens completed successfully with original artifacts and hashes
+archived. Terra audit job `14383331` completed 12/12 labels with correlations from -0.093977 to
+0.150438. Opus audit job `14383798` completed 12/12 labels with correlations from -0.038592 to
+0.220686. Weak or negative scores remain visible and are not regenerated or excluded through
+semantic inspection.
+
+OpenAI reduced Luna and Terra prices on 2026-07-30. New recipes bind the additive
+`prices-2026-07-30.json` snapshot; active manifests and telemetry retain the frozen 2026-07-27
+snapshot. At the new native-Batch rates, measured pilot usage reconciles to `$0.01113894` for Luna
+and `$0.025834` for Terra, or `$0.03697294` for the OpenAI path. A maximum-output extrapolation to
+all 150 ready clusters is about `$0.68`, so the forward full-run OpenAI guardrail is `$1`.
+
+The identically selected Qwen recipe remains endpoint-gated.
