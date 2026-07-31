@@ -856,6 +856,79 @@ def _artifact_binding(path: Path, manifest: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
+def _validate_bound_manifest(record: Any, *, label: str) -> Mapping[str, Any]:
+    if not isinstance(record, Mapping):
+        raise TypeError(f"{label} binding is invalid")
+    path = Path(str(record.get("manifest_path")))
+    if not path.is_file() or file_sha256(path) != record.get("manifest_file_sha256"):
+        raise ValueError(f"{label} manifest file drift")
+    manifest = load_json_object(path)
+    core = dict(manifest)
+    recorded = core.pop("manifest_sha256", None)
+    if recorded != canonical_sha256(core) or recorded != record.get("manifest_sha256"):
+        raise ValueError(f"{label} manifest content drift")
+    if manifest.get("schema_version") != record.get("schema_version"):
+        raise ValueError(f"{label} schema drift")
+    return manifest
+
+
+def _load_labelability_evaluation_portably(path: Path) -> dict[str, Any]:
+    """Deep-validate an upstream report without importing it from two worktrees."""
+
+    report = load_candidate_labelability_evaluation(path, verify_sources=False)
+    revision = report.get("code_revision")
+    if (
+        not isinstance(revision, Mapping)
+        or revision.get("tracked_worktree_clean") is not True
+    ):
+        raise ValueError("candidate labelability source revision is invalid")
+    recorded_root = Path(str(revision.get("repo_root")))
+    bindings = candidate_labelability_module._SOURCE_BINDINGS
+    records = revision.get("files")
+    if not isinstance(records, list) or len(records) != len(bindings):
+        raise ValueError("candidate labelability source file inventory drift")
+    by_role = {item.get("role"): item for item in records if isinstance(item, Mapping)}
+    if set(by_role) != set(bindings):
+        raise ValueError("candidate labelability source roles drift")
+    for role, relative in bindings.items():
+        item = by_role[role]
+        if item.get("path") != relative or file_sha256(
+            recorded_root / relative
+        ) != item.get("sha256"):
+            raise ValueError(f"candidate labelability source hash drift: {role}")
+
+    input_record = report.get("source_input_bundle")
+    baseline_record = report.get("source_clustering_baseline")
+    input_manifest = _validate_bound_manifest(
+        input_record, label="candidate labelability input bundle"
+    )
+    baseline_manifest = _validate_bound_manifest(
+        baseline_record, label="candidate labelability clustering baseline"
+    )
+    assert isinstance(input_record, Mapping)
+    assert isinstance(baseline_record, Mapping)
+    bundle = load_candidate_cluster_input_bundle(
+        Path(str(input_record["manifest_path"])).resolve().parent
+    )
+    baseline = load_candidate_clustering_baseline(
+        Path(str(baseline_record["manifest_path"])).resolve().parent,
+        verify_source=True,
+    )
+    if (
+        bundle.manifest != input_manifest
+        or baseline.manifest != baseline_manifest
+        or baseline.manifest["source_input_bundle"]["manifest_sha256"]
+        != bundle.manifest["manifest_sha256"]
+    ):
+        raise ValueError("candidate labelability portable source binding drift")
+    recomputed = candidate_labelability_module.evaluate_loaded_candidate_labelability(
+        bundle, baseline
+    )
+    if report.get("evaluation") != recomputed:
+        raise ValueError("candidate labelability portable recomputation drift")
+    return report
+
+
 def run_candidate_labeling_preparation(
     *,
     input_root: Path,
@@ -873,9 +946,7 @@ def run_candidate_labeling_preparation(
     revision = collect_candidate_labeling_revision(repo_root)
     bundle = load_candidate_cluster_input_bundle(input_root)
     baseline = load_candidate_clustering_baseline(baseline_root, verify_source=True)
-    report = load_candidate_labelability_evaluation(
-        evaluation_path, verify_sources=True
-    )
+    report = _load_labelability_evaluation_portably(evaluation_path)
     anchors, generation, scoring, handoff = build_candidate_labeling_comparison(
         bundle=bundle,
         baseline=baseline,
@@ -888,9 +959,7 @@ def run_candidate_labeling_preparation(
     final_baseline = load_candidate_clustering_baseline(
         baseline_root, verify_source=True
     )
-    final_report = load_candidate_labelability_evaluation(
-        evaluation_path, verify_sources=True
-    )
+    final_report = _load_labelability_evaluation_portably(evaluation_path)
     if (
         dict(final_bundle.manifest) != dict(bundle.manifest)
         or dict(final_baseline.manifest) != dict(baseline.manifest)
@@ -1092,9 +1161,7 @@ def load_candidate_labeling_comparison(
             verify_source=True,
         )
         report_path = Path(str(evaluation_record["path"]))
-        report = load_candidate_labelability_evaluation(
-            report_path, verify_sources=True
-        )
+        report = _load_labelability_evaluation_portably(report_path)
         if (
             bundle.manifest["manifest_sha256"] != input_record["manifest_sha256"]
             or baseline.manifest["manifest_sha256"]
