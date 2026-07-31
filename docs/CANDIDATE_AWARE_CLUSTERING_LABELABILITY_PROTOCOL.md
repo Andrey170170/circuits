@@ -3,6 +3,9 @@
 Status: frozen before candidate-aware cluster fitting, cluster selection, or description
 generation.
 
+Every executable input manifest must bind this file's SHA-256 and a clean Git commit containing it;
+dirty, missing, or mismatched protocol provenance fails closed.
+
 ## Question and decision boundary
 
 This post-hoc discovery analysis asks whether the completed C2 candidate-union measurements can
@@ -48,6 +51,13 @@ target/family weights. Polarity is the sign of the observed-candidate activation
 production cluster-profile and labeling identity. A zero activation is unsupported. Repeated
 token occurrences of the same signed basis are reduced by signed sum.
 
+This deliberately differs from the attribution-sign identity used inside the completed C2
+retrieval analyzer. Neither of its profile dictionaries is reused. Recompute both views from raw
+artifacts, require every retained internal node's activation to be candidate-invariant, and emit an
+attribution-sign to activation-sign crosswalk with agreement/disagreement counts and weights. Any
+candidate-varying internal activation fails input construction. The generated input manifest binds
+the new basis index, crosswalk, feature files, and payload hashes.
+
 Build four views:
 
 1. `W`, matched width-one input view: the missing-aware source-token `attr_map` used by the dense
@@ -74,6 +84,10 @@ eligibility requires support in at least three targets, two responses, and two f
 scientific views. A pair requires valid directional overlap in at least two targets, two responses,
 and two families; `F` requires those gates independently in both views.
 
+Only the 18 frozen generation families enter basis eligibility, pair evidence, empirical-CDF
+calibration, affinity construction, seed-medoid selection, or assignments. Selection and audit
+families never influence a fitted cluster state.
+
 For `W`, `C`, and `F`, fit normalized sparse spectral clustering with:
 
 - cluster counts `32, 64, 96`;
@@ -82,10 +96,14 @@ For `W`, `C`, and `F`, fit normalized sparse spectral clustering with:
 - deterministic `union_max` symmetrization;
 - self-loop weight `1.0` and eigen tolerance `1e-6`.
 
-The primary matched comparison uses 64 clusters if all three views yield valid states. Otherwise
-it uses the smallest tested count valid for all three; if none is common, the matched comparison
-fails. Within one view/count, the medoid seed maximizes mean assignment ARI to the other seeds,
-with the smaller seed breaking ties. `S` uses the chosen common count and the same spectral
+The primary matched comparison uses 64 clusters if all three views yield numerically valid states.
+Otherwise it uses the smallest tested count valid for all three; if none is common, the matched
+comparison fails. A state is numerically valid only when the generation-only affinity is finite,
+exactly symmetric, has at least `n_clusters + 1` active bases, has no more connected components
+than requested clusters, converges without eigensolver fallback, and assigns at least 95% of the
+primary eligible universe. Disconnected or unassigned bases remain explicit and are never
+force-assigned. Within one view/count, the medoid seed maximizes mean assignment ARI to the other
+seeds, with the smaller seed breaking ties. `S` uses the chosen common count and the same spectral
 settings.
 
 ## Support and directional nulls
@@ -93,16 +111,22 @@ settings.
 The support-only state is mandatory because the C2 salvage signal was largely explained by
 candidate-score applicability.
 
-Also run 100 deterministic candidate-direction null refits. Within each target, permute the
-five-channel vectors among bases within layer, activation polarity, and candidate-vector L2-mass
-decile. This preserves topology/support, the candidate set, layer/polarity composition, and vector
-magnitude while breaking signed-basis-to-competitive-direction identity. Seeds derive from the
-protocol file hash plus replicate index.
+Also run 100 deterministic candidate-direction null refits using generation evidence only. Within
+each target, permute the five-channel vectors among bases within layer, activation polarity, and
+candidate-vector L2-mass decile. Pool a stratum with the nearest adjacent mass decile, breaking an
+equal-distance tie toward the lower decile, until it has at least four bases; strata still smaller
+than four are left fixed. Report movable basis-occurrence and hierarchical target-weight fractions.
+If either fraction is below 80%, the null is ineffective and no directional result can pass. This
+preserves topology/support, the candidate set, layer/polarity composition, and vector magnitude
+while breaking signed-basis-to-competitive-direction identity. Seeds derive from the protocol file
+hash plus replicate index.
 
-Each null refit uses the permuted vectors to construct its cluster state, but its assignments are
-scored against the original unpermuted vectors with the same held-out-family coherence estimator.
-A candidate result is directional only when its held-out candidate-coherence statistic exceeds
-both `S` and the 95th percentile of that null distribution on common scoreable occurrences.
+Each null replicate repeats candidate and fusion construction, common-count selection, and seed-
+medoid selection, then scores its assignments against original unpermuted selection and audit
+vectors. The null statistic is `max(C improvement over W, F improvement over W)` among numerically
+valid states, so choosing between `C` and `F` is multiplicity-controlled. A candidate result is
+directional only when it exceeds both `S` and the corresponding 95th-percentile max statistic on
+common scoreable occurrences, first on selection and independently on audit.
 
 ## Label-free evaluation
 
@@ -113,21 +137,31 @@ Report for every state and resolution:
 - affinity enrichment, modularity, and conductance;
 - response/family/target recurrence and phase concentration;
 - labeling-support counts under the frozen family partitions;
-- held-out-family candidate-direction coherence.
+- selection and audit candidate-direction coherence.
 
-Held-out-family coherence omits one family at a time from cluster prototype construction. For each
-cluster, L2-normalize every supported five-channel basis-target vector and average the vectors from
-the remaining families, then L2-normalize that centroid. For an omitted-family occurrence, the
-primary score is cosine to its assigned-cluster centroid minus the maximum cosine to any other
-nonempty cluster centroid. Compute the hierarchical mean first within target, response, and family;
-comparisons between states use only occurrences scoreable in both states and report that common
-coverage. Report own-cluster cosine, the primary between-cluster margin, coverage, family-block
-bootstrap intervals, and family effects. Candidate clustering passes the functional gate only if
+For each fitted cluster, L2-normalize every supported five-channel generation basis-target vector,
+average them under hierarchical occurrence weights, then L2-normalize that generation centroid.
+For a selection or audit occurrence, the primary score is cosine to its assigned-cluster centroid
+minus the maximum cosine to any other nonempty cluster centroid. Compute the hierarchical mean
+first within target, response, and family; comparisons between states use only occurrences
+scoreable in both states and report that common coverage. Report own-cluster cosine, the primary
+between-cluster margin, coverage, family-block bootstrap intervals, and per-family effects.
+
+Width-one input-profile coherence is computed within each selection or audit target, where source-
+token coordinates are aligned: mean cosine for scoreable pairs assigned to the same cluster minus
+mean cosine for scoreable pairs assigned to different clusters. Reduce hierarchically by target,
+response, and family and compare states only on common scoreable pairs. This is the `F` preservation
+metric; input maps are never concatenated or centroided across unrelated target sequences.
+
+Separately, leave out each generation family, rebuild eligibility, pair evidence, calibration,
+affinity, all three seed states, and the medoid assignment, then compare that refit with the full
+generation state on common assigned bases. Report median and p10 family-jackknife ARI; require at
+least `0.60/0.45` for a scientific state. Candidate clustering passes the functional gate only if
 `C` or `F`:
 
 1. improves family-weighted candidate-direction coherence over `W` by at least `0.05`;
-2. has a 95% family-block-bootstrap lower bound above zero;
-3. has positive improvement in at least 80% of family omissions;
+2. has a 95% family-block-bootstrap lower bound above zero separately on selection and audit;
+3. has positive improvement in at least seven of eight families in both partitions;
 4. exceeds `S` and the candidate-direction-null 95th percentile; and
 5. for `F`, reduces width-one input-profile coherence by no more than `0.05`.
 
@@ -158,10 +192,13 @@ and at least `8/4/4` target witnesses in those partitions.
 
 ## Factorial labeling pilot
 
-If a candidate state passes the label-free functional gate, select 12 deterministic matched
-cluster triplets at the common resolution. Match `W`, `C`, and `F` by signed-basis overlap using a
-maximum-weight assignment, then stratify the retained triplets across member-size and witness-
-support quantiles. Freeze the IDs before generating descriptions.
+Select 12 deterministic labeling-ready `W` anchors across member-size and generation-witness-
+support quantiles, breaking all ties by cluster ID. Independently match `W` to `C`, `F`, and `S`
+with Hungarian maximum-weight assignment on signed-member-basis Jaccard similarity, ordered first
+by `W` cluster ID and then comparison cluster ID for deterministic ties. The 12 `W` anchors are the
+paired denominator. A comparison match below Jaccard `0.10`, a missing output, or an unscoreable
+output counts as an abstention; it is never replaced after labels are seen. Freeze all IDs and
+overlaps before description generation.
 
 Run five arms to distinguish better evidence from better clusters:
 
@@ -171,22 +208,48 @@ Run five arms to distinguish better evidence from better clusters:
 4. `F` clusters with combined evidence;
 5. `S` clusters with combined evidence as the support control.
 
-Combined witnesses show the local prefix and observed token, all five ranked competitors with
-their probabilities, the cluster's signed rank-aligned contribution-difference vector, and the
-width-one source-attribution highlights as separate evidence fields. Generation prompts never
-contain selection or audit measurements. Prompts require a bounded local feature hypothesis and
-forbid response-identity, causality, selectivity, generality, or faithfulness claims.
+Combined witnesses show the local prefix and observed token; the five model-rank slots with token,
+logit, probability, and observed-token flag; the cluster candidate signature; and width-one source-
+attribution highlights as separate evidence fields. A width-five case contains four distinct
+competitors because one rank slot is the observed token's structural zero; a width-six case has
+five competitors.
 
-Use Opus as the fixed semantic generator/rewriter and Terra as the conservative abstention
-control. Qwen may be added later without changing this comparison.
+For target `t` and cluster `k`, include every supported occurrence of an assigned signed basis in
+that candidate-union node table. Let `d_b` be its rank-aligned five-vector after within-basis signed
+sum over repeated token occurrences. Persist and render, without clipping: member-occurrence count
+`m`; `sum_b d_b`; the elementwise mean `(sum_b d_b)/m`; its L2 norm; and the unit direction when
+the norm is nonzero. Missing members are omitted and reflected only in `m`. JSON stores full
+finite double precision; prompts render six significant digits in rank order one through five.
+Generation prompts never contain selection or audit measurements. Prompts require a bounded local
+input feature hypothesis, type candidate-effect prose separately as exploratory, and forbid
+response-identity, causality, selectivity, generality, or faithfulness claims.
+
+Run arms 1 and 2 regardless of whether `C` or `F` passes the functional clustering gate; this tests
+whether richer evidence alone reduces abstention on unchanged clusters. Run arms 3 through 5 only
+after at least one candidate scientific state passes. Use Opus as the fixed semantic generator and
+rewriter and Terra as the conservative abstention control. Qwen may be added later without changing
+this comparison.
 
 ## Label validation and success
 
-The fixed Transluce simulator continues to score only the input-localization hypothesis on the
-selection and audit source-token attribution records. It is not a candidate-contribution
-simulator. Candidate-direction coherence is validated separately by the label-free held-out
-measurement gate above. Every label bundle attaches the measured numeric candidate signature;
-natural-language candidate-effect wording remains exploratory and requires blinded human review.
+Every model output is typed as `input_localization_hypothesis`,
+`exploratory_candidate_description`, `background_or_confound`, `limitations`, and `status`. The
+fixed Transluce simulator scores only `input_localization_hypothesis` on selection and audit
+source-token attribution records. It is not a candidate-contribution simulator. Candidate-
+direction coherence is validated separately by the held-out measurement gate above. Every bundle
+attaches the measured numeric candidate signature. `exploratory_candidate_description` is never
+called validated; it may be retained as descriptive text only after blinded literal review.
+
+Freeze these three shared input-localization controls, in order:
+
+1. `tokens near the current response position`;
+2. `common punctuation and formatting tokens`;
+3. `shared instruction-template and response-boilerplate tokens`.
+
+Their ordered-list canonical SHA-256 is
+`2f222eecb6f07350fd9f2f4c0217116b26158af00c50a1f02550c22309e5bf12`. Score all three on the
+same selection records, select the highest-correlation control per cluster with list order as the
+tie-breaker, and carry that one unchanged to audit. Audit never selects a control.
 
 A label is retained only when it:
 
@@ -194,16 +257,25 @@ A label is retained only when it:
 - has input-localization correlation at least `0.15` on selection and `0.10` on audit with the
   same sign;
 - beats the best frozen generic local-token/formatting control by at least `0.05` on audit;
-- belongs to a state that passed candidate-direction coherence when candidate evidence is claimed;
-- passes blinded review for literal support, specificity, and claim boundaries.
+- belongs to a state that passed candidate-direction coherence when its exploratory candidate
+  description is reported;
+- has its input-localization wording pass blinded review for literal support, specificity, and
+  claim boundaries.
 
-The pilot succeeds only if `C` or `F`, relative to `W` with the same combined evidence:
+The evidence-only pilot succeeds if arm 2, relative to arm 1 on the same 12 `W` anchors:
+
+- yields at least three additional retained input-localization hypotheses;
+- lowers abstention by at least 20 percentage points; and
+- loses no more than one hypothesis retained in arm 1.
+
+The reclustering pilot succeeds only if `C` or `F`, relative to arm 2 on the same 12 `W`-anchored
+matches:
 
 - yields at least three additional retained labels among the 12 matched clusters;
 - lowers abstention by at least 20 percentage points; and
 - loses no more than one label that was valid on width-one input localization.
 
-Comparing the two `W` arms isolates evidence-only benefit; comparing `C` or `F` with
-`W + combined evidence` isolates reclustering benefit. A pass justifies a newly frozen
-confirmatory replication or targeted intervention study. It does not automatically authorize
-full-corpus candidate tracing.
+Missing or weak matches remain in both abstention and gain/loss denominators. The two decisions are
+reported separately: candidate evidence may help labeling even if candidate-based reclustering
+fails. A pass justifies a newly frozen confirmatory replication or targeted intervention study. It
+does not automatically authorize full-corpus candidate tracing.
