@@ -58,6 +58,11 @@ attribution-sign to activation-sign crosswalk with agreement/disagreement counts
 candidate-varying internal activation fails input construction. The generated input manifest binds
 the new basis index, crosswalk, feature files, and payload hashes.
 
+Candidate invariance uses NumPy-style `allclose(candidate, candidate_zero, rtol=1e-6,
+atol=1e-7)` for every applicable internal-node activation. Record maximum absolute and relative
+deviation, using `max(abs(candidate_zero), 1e-12)` in the relative denominator, plus comparison and
+violation counts. Any violation blocks input publication.
+
 Build four views:
 
 1. `W`, matched width-one input view: the missing-aware source-token `attr_map` used by the dense
@@ -70,8 +75,12 @@ Build four views:
    by the number of positive similarities in that view. Average the two calibrated values only for
    pairs supported in both views, then apply the common kNN rule. There is no missing-view fallback
    and no raw feature concatenation.
-4. `S`, support-only control: candidate-union weighted target-support Jaccard/co-occurrence with no
-   directional contribution values.
+4. `S`, support-only control: weighted candidate-union target-support Jaccard with no directional
+   contribution values. For bases `i,j`, its affinity is
+   `sum_t w_t I(i and j supported) / sum_t w_t I(i or j supported)` over generation targets. A
+   candidate-union occurrence counts as support even when its direction vector has zero norm. Apply
+   the same primary universe, minimum two co-supported targets/responses/families, positive 32-NN,
+   and `union_max` rules as the scientific states; do not percentile-calibrate `S`.
 
 The primary matched universe contains only bases eligible in both `W` and `C`. Candidate-union
 bases outside that universe are reported as an expanded-coverage diagnostic and cannot make the
@@ -112,14 +121,20 @@ The support-only state is mandatory because the C2 salvage signal was largely ex
 candidate-score applicability.
 
 Also run 100 deterministic candidate-direction null refits using generation evidence only. Within
-each target, permute the five-channel vectors among bases within layer, activation polarity, and
-candidate-vector L2-mass decile. Pool a stratum with the nearest adjacent mass decile, breaking an
-equal-distance tie toward the lower decile, until it has at least four bases; strata still smaller
-than four are left fixed. Report movable basis-occurrence and hierarchical target-weight fractions.
-If either fraction is below 80%, the null is ineffective and no directional result can pass. This
-preserves topology/support, the candidate set, layer/polarity composition, and vector magnitude
-while breaking signed-basis-to-competitive-direction identity. Seeds derive from the protocol file
-hash plus replicate index.
+each target/layer/activation-polarity group, assign candidate-vector L2 mass deciles, scan nonempty
+deciles in ascending order, and merge consecutive deciles into a disjoint block until it contains
+at least four bases. If the final block is smaller than four, merge it backward once into the prior
+block; if no prior block exists, leave it fixed. Permute each resulting block exactly once. Report
+movable basis-occurrence and hierarchical target-weight fractions. If either fraction is below 80%,
+the null is ineffective and no directional result can pass. This preserves topology/support, the
+candidate set, layer/polarity composition, and local vector-magnitude distribution while breaking
+signed-basis-to-competitive-direction identity.
+
+For replicate `r=0..99`, derive the RNG seed as the unsigned big-endian integer in the first eight
+bytes of SHA-256 over the protocol file SHA-256 text, a NUL byte, `direction-null-v1`, a NUL byte,
+and the eight-byte big-endian replicate index. All 100 refits must be numerically valid. Define the
+null 95th percentile with NumPy `quantile(..., 0.95, method="higher")`; an invalid replicate makes
+the directional gate fail rather than being discarded or replaced.
 
 Each null replicate repeats candidate and fusion construction, common-count selection, and seed-
 medoid selection, then scores its assignments against original unpermuted selection and audit
@@ -171,6 +186,15 @@ modularity at least `0.20`, within-cluster affinity enrichment at least `1.25`, 
 of clusters with the frozen minimum labeling support. Failure remains visible; thresholds are not
 relaxed after outcomes.
 
+For each partition and state comparison, compute 10,000 paired family-block bootstrap replicates
+from the eight fixed family effects. Every family must have common scoreable observations or that
+partition fails the functional gate. Draw eight family IDs with replacement and average their
+fixed paired effects; no occurrence-level resampling or pool reconstruction occurs. Derive the RNG
+seed from the first eight bytes, interpreted unsigned big-endian, of SHA-256 over the protocol file
+SHA-256 text, a NUL byte, the partition name, a NUL byte, and `candidate-coherence-bootstrap-v1`.
+Use NumPy `quantile` with `method="linear"` for the 2.5th and 97.5th percentiles. No invalid
+bootstrap replicate may be dropped or redrawn.
+
 ## Frozen discovery partitions
 
 Before fitting or description generation, create a deterministic family-level `18/8/8` split:
@@ -192,8 +216,14 @@ and at least `8/4/4` target witnesses in those partitions.
 
 ## Factorial labeling pilot
 
-Select 12 deterministic labeling-ready `W` anchors across member-size and generation-witness-
-support quantiles, breaking all ties by cluster ID. Independently match `W` to `C`, `F`, and `S`
+Select 12 deterministic labeling-ready `W` anchors using a fixed two-dimensional quantile design.
+For each ready `W` cluster, compute ascending midrank percentiles `(midrank - 0.5) / n` separately
+for member count and generation-target witness count, breaking exact value ties by cluster ID only
+after assigning the shared midrank. Define 12 target points as the Cartesian product of member
+coordinates `(1/6, 1/2, 5/6)` and support coordinates `(1/8, 3/8, 5/8, 7/8)`, in that order.
+Use Hungarian minimum-cost assignment with squared Euclidean rank distance and cluster ID as the
+final deterministic tie-breaker. Fewer than 12 ready `W` clusters fails both label pilots; there is
+no sparse-cell fallback. Independently match `W` to `C`, `F`, and `S`
 with Hungarian maximum-weight assignment on signed-member-basis Jaccard similarity, ordered first
 by `W` cluster ID and then comparison cluster ID for deterministic ties. The 12 `W` anchors are the
 paired denominator. A comparison match below Jaccard `0.10`, a missing output, or an unscoreable
@@ -250,6 +280,17 @@ Their ordered-list canonical SHA-256 is
 `2f222eecb6f07350fd9f2f4c0217116b26158af00c50a1f02550c22309e5bf12`. Score all three on the
 same selection records, select the highest-correlation control per cluster with list order as the
 tie-breaker, and carry that one unchanged to audit. Audit never selects a control.
+
+Blinded literal review uses two independent reviewers. Each sees one randomly identified output,
+its exact generation/selection/audit witnesses, and the typed limitations, but not provider, arm,
+view, cluster ID, automatic scores, competing-arm outputs, or pass thresholds. For the input
+hypothesis each reviewer answers yes/no to: localized evidence is literal; wording is more specific
+than a frozen control; limitations preserve the claim boundary. For exploratory candidate text
+they separately answer whether the prose literally matches the displayed five-channel numeric
+signature. Accept a component only on unanimous yes answers. Any disagreement goes to a third
+reviewer under the same blinding, with the majority decision final. The deterministic blinded-ID
+mapping and completed forms are hashed before unblinding. Until both primary reviews and any needed
+adjudication exist, report automated results as `pending_blinded_review`, not retained labels.
 
 A label is retained only when it:
 
