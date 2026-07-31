@@ -254,11 +254,13 @@ For each ready `W` cluster, compute ascending midrank percentiles `(midrank - 0.
 for member count and generation-target witness count, breaking exact value ties by cluster ID only
 after assigning the shared midrank. Define 12 target points as the Cartesian product of member
 coordinates `(1/6, 1/2, 5/6)` and support coordinates `(1/8, 3/8, 5/8, 7/8)`, in that order.
-Use Hungarian minimum-cost assignment with squared Euclidean rank distance and cluster ID as the
-final deterministic tie-breaker. Fewer than 12 ready `W` clusters fails both label pilots; there is
-no sparse-cell fallback. Independently match `W` to `C`, `F`, and `S`
-with Hungarian maximum-weight assignment on signed-member-basis Jaccard similarity, ordered first
-by `W` cluster ID and then comparison cluster ID for deterministic ties. The 12 `W` anchors are the
+Use Hungarian minimum-cost assignment with squared Euclidean rank distance. Among all globally
+optimal solutions choose the lexicographically smallest tuple of assigned `W` cluster IDs in target-
+point order. Fewer than 12 ready `W` clusters fails both label pilots; there is no sparse-cell
+fallback. Independently match `W` to `C`, `F`, and `S` with Hungarian maximum-weight assignment on
+signed-member-basis Jaccard similarity. Among all globally optimal solutions choose the
+lexicographically smallest tuple of comparison cluster IDs ordered by ascending `W` cluster ID. The
+12 `W` anchors are the
 paired denominator. A comparison match below Jaccard `0.10`, a missing output, or an unscoreable
 output counts as an abstention; it is never replaced after labels are seen. Freeze all IDs and
 overlaps before description generation.
@@ -324,6 +326,11 @@ signature. Accept a component only on unanimous yes answers. Any disagreement go
 reviewer under the same blinding, with the majority decision final. The deterministic blinded-ID
 mapping and completed forms are hashed before unblinding. Until both primary reviews and any needed
 adjudication exist, report automated results as `pending_blinded_review`, not retained labels.
+
+For output identity `o`, set its blinded ID to the first 16 hexadecimal characters of SHA-256 over
+`candidate-label-blind-v1`, a NUL byte, the frozen labeling-manifest SHA-256 text, a NUL byte, and
+`o`. Reject any collision and present bundles in ascending blinded-ID order. Persist this complete
+mapping in a self-hashed blinded-review manifest before either reviewer receives a bundle.
 
 A label is retained only when it:
 
