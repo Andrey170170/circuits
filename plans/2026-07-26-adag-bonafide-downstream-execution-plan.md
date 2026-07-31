@@ -1695,6 +1695,26 @@ cluster-state identity. Required comparisons:
 The contribution-aware atlas remains an optional extension. It is not required to declare the
 dense response-time feasibility phase complete.
 
+### 10.9 Candidate-aware local clustering salvage
+
+The failed C2 temporal-retrieval gate does not answer whether non-degenerate candidate profiles
+improve local functional clustering or labelability. The completed candidate view has substantial
+effective rank and sign diversity, while its post-hoc standalone retrieval signal is above null
+but largely explained by support applicability. Before rejecting the local contribution view, run
+one separately frozen post-hoc comparison on the existing 245 C2 discovery targets only.
+
+The comparison rebuilds the production width-one source-attribution view directly from those
+compact traces and compares matched width-one, candidate-direction, late-fusion, and support-only
+cluster states. It requires shared signed-basis eligibility, held-out-family directional
+coherence, a support-only state, and vector-permutation nulls before any descriptions are accepted.
+If the label-free functional gate passes, a matched factorial labeling pilot distinguishes the
+effect of adding candidate evidence from the effect of reclustering with that evidence.
+
+The full frozen contract, thresholds, prompt boundary, and success rule are in
+`docs/CANDIDATE_AWARE_CLUSTERING_LABELABILITY_PROTOCOL.md`. This salvage neither changes the C2
+decision nor authorizes more tracing; it first tests whether already-computed local competition
+measurements solve the present cluster-labeling evidence problem.
+
 ## 11. Workstream D: explanation, simulation, and Qwen serving
 
 This workstream uses Qwen3.5/Qwen3.6 only as downstream explanation, prompted-simulation, and
