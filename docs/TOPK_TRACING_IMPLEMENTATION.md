@@ -176,3 +176,10 @@ full candidate rank and every centered matrix had the maximum possible contrasti
 
 The matched 2,594-position corpus remains blocked. C2 does not provide the required scientific
 utility evidence, and no full-corpus manifest or Slurm launch is authorized.
+
+The frozen post-hoc salvage analysis subsequently found above-null candidate-only trajectory
+signal. Descriptively, support applicability appears to contribute most of the lift, but it was not
+a separate corrected endpoint. The analysis did not demonstrate above-null width-one-missing
+rescue or useful percentile-calibrated backoff. The result supports bounded exploratory reuse and
+a possible small holdout replication, not full-corpus promotion. See
+`docs/CANDIDATE_UNION_C2_SALVAGE_RESULTS.md`.
