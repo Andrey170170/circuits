@@ -12,16 +12,29 @@ import torch
 from circuits.tracing.artifact import (
     DATA_FILENAME,
     load_compact_trace,
+    load_topk_compact_trace,
     save_compact_trace,
+    save_topk_compact_trace,
     validate_compact_trace_data,
+    validate_topk_trace_data,
 )
-from circuits.tracing.clja import ADAGConfig
+from circuits.tracing.candidates import (
+    CandidateLogit,
+    CandidateSelection,
+    JointLogitObjective,
+)
+from circuits.tracing.clja import ADAGConfig, FrozenGraphTopology
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.trace import (
     CircuitData,
+    TOPK_CONTRIBUTION_SCHEMA_ID,
+    TOPK_TRACE_FAMILY_ID,
+    TopKPositionTrace,
     prepare_teacher_forced_input,
+    trace_teacher_forced_candidates,
     trace_teacher_forced_response,
 )
+from circuits.tracing.utils import NeuronIdx
 
 
 class FakeChatTokenizer:
@@ -151,13 +164,276 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
     assert data.target_provenance[0]["prediction_token_position"] == 5
     assert data.benchmark_only is False
     snapshot = data.trace_metadata["instrumentation"]
-    assert set(("prepare_input", "target_scoring", "clja_total", "dataframe_conversion")) <= set(
-        snapshot["stages"]
-    )
+    assert set(
+        ("prepare_input", "target_scoring", "clja_total", "dataframe_conversion")
+    ) <= set(snapshot["stages"])
     assert snapshot["counters"]["raw_node_count"] == 1
     assert snapshot["counters"]["raw_edge_count"] == 1
     assert snapshot["counters"]["final_dataframe_node_count"] == 1
     assert snapshot["counters"]["final_dataframe_edge_count"] == 1
+
+
+def test_trace_teacher_forced_candidates_uses_distinct_candidate_axis(monkeypatch):
+    import circuits.tracing.trace as trace_module
+
+    captured = {}
+
+    def fake_clja(**kwargs):
+        captured.update(kwargs)
+        return [object()], [object()]
+
+    monkeypatch.setattr(
+        trace_module,
+        "get_all_pairs_cl_ja_effects_with_attributions",
+        fake_clja,
+    )
+    monkeypatch.setattr(
+        trace_module,
+        "convert_circuit_to_dataframes",
+        lambda *_args, **_kwargs: (
+            pd.DataFrame(
+                {
+                    "layer": [0],
+                    "token": [0],
+                    "neuron": [0],
+                    "attribution": [0.5],
+                    "activation": [1.0],
+                    "attr_map": [[0.1]],
+                    "contrib_map": [[0.1, 0.2, 0.3, 0.4, 0.5]],
+                    "label": ["row-1___0"],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "layer": ["0->1"],
+                    "token": ["0->0"],
+                    "neuron": ["0->0"],
+                    "attribution": [0.25],
+                    "weight": [0.5],
+                    "label": ["row-1___0"],
+                }
+            ),
+        ),
+    )
+
+    result = trace_teacher_forced_candidates(
+        FakeModel(),
+        FakeChatTokenizer(),
+        "question",
+        "abcd",
+        2,
+        ADAGConfig(device="cpu"),
+        candidate_policy_id="observed_plus_top4_alternatives",
+        candidate_count=5,
+        label="row-1",
+    )
+
+    axis = captured["candidate_axis"]
+    assert captured["tgt_tokens"] == [5]
+    assert "focus_positions" not in captured
+    assert "focus_logits" not in captured
+    assert axis.prediction_position == 5
+    assert axis.token_ids_by_batch == ((79, 127, 126, 125, 124),)
+    assert axis.objective_weights == (1.0, 1.0, 1.0, 1.0, 1.0)
+    assert result.shared_response_position == 2
+    assert result.shared_prediction_position == 5
+    assert result.candidate_count == 5
+    assert result.circuit_data.target_logits == [[79]]
+    assert result.circuit_data.k == 1
+    assert result.circuit_data.trace_metadata["trace_mode"] == (
+        "teacher_forced_topk_position"
+    )
+    contract = result.circuit_data.trace_metadata["candidate_trace_contract"]
+    assert contract == result.contract_dict()
+    assert contract["candidate_count"] == 5
+
+
+def test_frozen_topology_candidate_trace_bypasses_dataframe_pruning(monkeypatch):
+    import circuits.tracing.trace as trace_module
+
+    captured = {}
+    topology = FrozenGraphTopology(
+        mlp_nodes=frozenset({NeuronIdx(0, 0, 3)}),
+        edges=frozenset(
+            {
+                (
+                    NeuronIdx(-1, 0, 1),
+                    NeuronIdx(0, 0, 3),
+                )
+            }
+        ),
+    )
+
+    def fake_clja(**kwargs):
+        captured["clja"] = kwargs
+        return [object()], [object()]
+
+    def fake_convert(*_args, **kwargs):
+        captured["convert"] = kwargs
+        return (
+            pd.DataFrame(
+                {
+                    "layer": [0],
+                    "token": [0],
+                    "neuron": [3],
+                    "attribution": [0.0],
+                    "activation": [1.0],
+                    "contrib_map": [[0.0]],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "layer": ["-1->0"],
+                    "token": ["0->0"],
+                    "neuron": ["1->3"],
+                    "attribution": [0.0],
+                    "weight": [0.0],
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        trace_module, "get_all_pairs_cl_ja_effects_with_attributions", fake_clja
+    )
+    monkeypatch.setattr(trace_module, "convert_circuit_to_dataframes", fake_convert)
+
+    result = trace_teacher_forced_candidates(
+        FakeModel(),
+        FakeChatTokenizer(),
+        "question",
+        "abcd",
+        2,
+        ADAGConfig(device="cpu", percentage_threshold=0.005),
+        candidate_policy_id="specified_token",
+        candidate_count=1,
+        specified_candidate_token_id=79,
+        frozen_topology=topology,
+        frozen_topology_sha256="a" * 64,
+    )
+
+    assert captured["clja"]["frozen_topology"] == topology
+    assert captured["convert"]["percentage_threshold"] is None
+    assert captured["convert"]["preserve_zero_attribution"] is True
+    assert result.circuit_data.trace_metadata["trace_mode"] == (
+        "teacher_forced_candidate_union_refinement"
+    )
+    assert result.circuit_data.trace_metadata["frozen_topology"]["sha256"] == "a" * 64
+
+
+def test_trace_teacher_forced_top5_plus_observed_records_realized_width(monkeypatch):
+    import circuits.tracing.trace as trace_module
+
+    captured = {}
+
+    def fake_clja(**kwargs):
+        captured.update(kwargs)
+        return [object()], [object()]
+
+    monkeypatch.setattr(
+        trace_module,
+        "get_all_pairs_cl_ja_effects_with_attributions",
+        fake_clja,
+    )
+    monkeypatch.setattr(
+        trace_module,
+        "convert_circuit_to_dataframes",
+        lambda *_args, **_kwargs: (
+            pd.DataFrame(
+                {
+                    "layer": [0],
+                    "token": [0],
+                    "neuron": [0],
+                    "attribution": [0.5],
+                    "activation": [1.0],
+                    "contrib_map": [[0.1] * 6],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "layer": ["0->1"],
+                    "token": ["0->0"],
+                    "neuron": ["0->0"],
+                    "attribution": [0.25],
+                    "weight": [0.5],
+                }
+            ),
+        ),
+    )
+    instrumentation = TraceInstrumentation(device="cpu")
+
+    result = trace_teacher_forced_candidates(
+        FakeModel(),
+        FakeChatTokenizer(),
+        "question",
+        "abcd",
+        2,
+        ADAGConfig(device="cpu"),
+        candidate_policy_id="model_top5_plus_observed",
+        candidate_count=6,
+        instrumentation=instrumentation,
+    )
+
+    assert captured["candidate_axis"].token_ids_by_batch == (
+        (79, 127, 126, 125, 124, 123),
+    )
+    assert result.candidate_count == 6
+    assert result.candidate_contribution_schema["width"] == 6
+    assert result.contract_dict()["candidate_count"] == 6
+    assert instrumentation.snapshot()["counters"]["candidate_count"] == 6
+    assert validate_topk_trace_data(result) == 6
+
+
+def test_observed_candidate_k1_wires_same_logit_as_width_one(monkeypatch):
+    import circuits.tracing.trace as trace_module
+
+    candidate_calls = []
+
+    def fake_clja(**kwargs):
+        candidate_calls.append(kwargs)
+        return [object()], [object()]
+
+    monkeypatch.setattr(
+        trace_module,
+        "get_all_pairs_cl_ja_effects_with_attributions",
+        fake_clja,
+    )
+    monkeypatch.setattr(
+        trace_module,
+        "convert_circuit_to_dataframes",
+        lambda *_args, **_kwargs: (
+            pd.DataFrame({"layer": [0]}),
+            pd.DataFrame({"layer": ["0->1"]}),
+        ),
+    )
+
+    legacy = trace_teacher_forced_response(
+        FakeModel(),
+        FakeChatTokenizer(),
+        "question",
+        "abcd",
+        [2],
+        ADAGConfig(device="cpu"),
+    )
+    candidate = trace_teacher_forced_candidates(
+        FakeModel(),
+        FakeChatTokenizer(),
+        "question",
+        "abcd",
+        2,
+        ADAGConfig(device="cpu"),
+        candidate_policy_id="observed_token",
+        candidate_count=1,
+    )
+
+    legacy_call, candidate_call = candidate_calls
+    assert legacy_call["focus_logits"] == [[79]]
+    assert candidate_call["candidate_axis"].token_ids_by_batch == ((79,),)
+    assert candidate_call["candidate_axis"].objective_weights == (1.0,)
+    assert candidate_call["tgt_tokens"] == legacy_call["tgt_tokens"] == [5]
+    assert candidate.circuit_data.target_logits == legacy.target_logits
+    assert candidate.circuit_data.target_logit_values == legacy.target_logit_values
+    assert candidate.circuit_data.target_logit_probs == legacy.target_logit_probs
+    assert candidate.circuit_data.target_provenance == legacy.target_provenance
 
 
 def test_multi_target_trace_requires_benchmark_only(monkeypatch):
@@ -264,6 +540,66 @@ def _circuit_data(*, target_count=1, benchmark_only=False):
     )
 
 
+def _topk_trace(*, contribution_width=5) -> TopKPositionTrace:
+    data = _circuit_data()
+    data.df_node["token"] = [0]
+    data.df_node["neuron"] = [1]
+    data.df_node["label"] = ["row-1___0"]
+    data.df_edge["token"] = ["0->0"]
+    data.df_edge["neuron"] = ["1->1"]
+    data.df_edge["label"] = ["row-1___0"]
+    candidates = tuple(
+        CandidateLogit(
+            candidate_index=index,
+            full_distribution_rank=index + 1,
+            token_id=40 if index == 0 else 100 + index,
+            token_text=f"tok-{40 if index == 0 else 100 + index}",
+            logit=float(10 - index),
+            probability=0.2 - index * 0.01,
+            is_observed=index == 0,
+        )
+        for index in range(5)
+    )
+    selection = CandidateSelection(
+        policy_id="observed_plus_top4_alternatives",
+        policy_version="1",
+        ordering_rule="descending_logit_then_ascending_token_id",
+        observed_token_id=40,
+        observed_token_text="tok-40",
+        observed_token_rank=1,
+        candidates=candidates,
+    )
+    objective = JointLogitObjective(
+        objective_id="raw_logit_sum",
+        objective_version="1",
+        formula=" + ".join(f"logit[candidate_{index}]" for index in range(5)),
+        candidate_weights=(1.0,) * 5,
+        percentage_threshold_reference="signed_joint_objective",
+    )
+    contribution_schema = {
+        "schema_id": TOPK_CONTRIBUTION_SCHEMA_ID,
+        "axis": "candidate_index",
+        "width": 5,
+        "semantics": "gradient_times_activation_for_each_raw_candidate_logit",
+        "scalar_graph_attribution_semantics": "named_joint_objective",
+    }
+    data.df_node["contrib_map"] = [[0.1 * index for index in range(contribution_width)]]
+    trace = TopKPositionTrace(
+        circuit_data=data,
+        trace_family_id=TOPK_TRACE_FAMILY_ID,
+        shared_response_position=0,
+        shared_prediction_position=4,
+        candidate_selection=selection,
+        joint_objective=objective,
+        candidate_contribution_schema=contribution_schema,
+    )
+    data.trace_metadata = {
+        "trace_mode": "teacher_forced_topk_position",
+        "candidate_trace_contract": trace.contract_dict(),
+    }
+    return trace
+
+
 def test_compact_trace_round_trip_and_atomic_destination(tmp_path):
     destination = tmp_path / "trace-unit"
     save_compact_trace(
@@ -283,6 +619,45 @@ def test_compact_trace_round_trip_and_atomic_destination(tmp_path):
     assert not list(tmp_path.glob(".trace-unit.tmp-*"))
     with pytest.raises(FileExistsError):
         save_compact_trace(destination, _circuit_data())
+
+
+def test_topk_compact_trace_uses_separate_schema_and_loader(tmp_path):
+    destination = tmp_path / "topk-trace"
+    trace = _topk_trace()
+
+    save_topk_compact_trace(
+        destination,
+        trace,
+        metrics={"elapsed_seconds": 4.5},
+        manifest={"dataset_row_id": "row-1"},
+    )
+
+    loaded = load_topk_compact_trace(destination)
+    assert loaded.metrics == {"elapsed_seconds": 4.5}
+    assert loaded.manifest["schema_version"] == ("adag.compact-trace.topk-position.v1")
+    assert loaded.manifest["target_count"] == 1
+    assert loaded.manifest["candidate_count"] == 5
+    assert loaded.manifest["scientifically_reusable"] is True
+    assert loaded.topk_trace.contract_dict() == trace.contract_dict()
+    with pytest.raises(ValueError, match="unsupported compact trace schema"):
+        load_compact_trace(destination)
+
+
+def test_legacy_compact_saver_rejects_candidate_axis_payload(tmp_path):
+    trace = _topk_trace()
+
+    with pytest.raises(ValueError, match="save_topk_compact_trace"):
+        save_compact_trace(tmp_path / "wrong-schema", trace.circuit_data)
+
+
+def test_topk_validation_rejects_contribution_width_mismatch(tmp_path):
+    trace = _topk_trace(contribution_width=4)
+
+    with pytest.raises(ValueError, match="contrib_map must match"):
+        validate_topk_trace_data(trace)
+    with pytest.raises(ValueError, match="contrib_map must match"):
+        save_topk_compact_trace(tmp_path / "invalid", trace)
+    assert not (tmp_path / "invalid").exists()
 
 
 def test_compact_trace_rejects_unmarked_multi_target_and_marks_benchmark(tmp_path):

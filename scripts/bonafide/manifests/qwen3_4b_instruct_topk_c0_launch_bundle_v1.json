@@ -1,0 +1,310 @@
+{
+  "case_count": 10,
+  "cases": [
+    {
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        3407,
+        2217,
+        11
+      ],
+      "case_id": "c0-dense-faithful-width5-p162",
+      "corpus_role": "dense_discovery",
+      "example_id": "bf-89f277b79caf27f7f6ad",
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "width-five faithful punctuation control",
+        "moderate context and screened workload"
+      ],
+      "source_width1_artifact_id": "trace-source-20d9a7036b98e9897f1f0be9",
+      "target_response_position": 162
+    },
+    {
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        323,
+        4092
+      ],
+      "case_id": "c0-dense-commission-width5-p169",
+      "corpus_role": "dense_discovery",
+      "example_id": "bf-2981baca0442c8e8021f",
+      "observed_token_rank": 4,
+      "selection_reasons": [
+        "width-five commission phenotype",
+        "punctuation target with moderate workload"
+      ],
+      "source_width1_artifact_id": "trace-source-6aa03d20dc94fb7a05c06278",
+      "target_response_position": 169
+    },
+    {
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        4192,
+        624,
+        11
+      ],
+      "case_id": "c0-dense-both-width5-p211",
+      "corpus_role": "dense_discovery",
+      "example_id": "bf-d8f174d2963759f617ca",
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "width-five mixed omission-and-commission phenotype",
+        "late punctuation target"
+      ],
+      "source_width1_artifact_id": "trace-source-4d5db66ca6ecf18b015dfaed",
+      "target_response_position": 211
+    },
+    {
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        25,
+        1447,
+        279,
+        9355,
+        330,
+        2797
+      ],
+      "case_id": "c0-dense-commission-width6-p220",
+      "corpus_role": "dense_discovery",
+      "example_id": "bf-a430b14be4b2c3a58ac5",
+      "observed_token_rank": 8,
+      "selection_reasons": [
+        "width-six commission phenotype",
+        "non-period commitment-adjacent target",
+        "completed width-six GPU smoke"
+      ],
+      "source_width1_artifact_id": "trace-source-c6a2b2d04df3ec93a97b764d",
+      "target_response_position": 220
+    },
+    {
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        304,
+        2878,
+        1959
+      ],
+      "case_id": "c0-dense-faithful-width6-p212",
+      "corpus_role": "dense_discovery",
+      "example_id": "bf-d2b6d6de52232d107a08",
+      "observed_token_rank": 6,
+      "selection_reasons": [
+        "near-boundary width-six faithful case",
+        "moderate screened workload"
+      ],
+      "source_width1_artifact_id": "trace-source-b7caa12aba1901bb269a4a69",
+      "target_response_position": 212
+    },
+    {
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        21544,
+        811,
+        26445,
+        69,
+        36706,
+        2717
+      ],
+      "case_id": "c0-dense-commission-width6-p125",
+      "corpus_role": "dense_discovery",
+      "example_id": "bf-a430b14be4b2c3a58ac5",
+      "observed_token_rank": 46,
+      "selection_reasons": [
+        "far-outside-top-five observed rank",
+        "semantic token and commission phenotype"
+      ],
+      "source_width1_artifact_id": "trace-source-239f60406fbdd607020a6bd2",
+      "target_response_position": 125
+    },
+    {
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        22982,
+        4226,
+        21806,
+        16141,
+        5480
+      ],
+      "case_id": "c0-broad-omission-width5-p415",
+      "corpus_role": "broad_discovery",
+      "example_id": "bf-702c6535d2bc1a329992",
+      "observed_token_rank": 3,
+      "selection_reasons": [
+        "broad width-five omission case",
+        "semantic diagnosis token"
+      ],
+      "source_width1_artifact_id": "trace-source-6797794e5187f0fe499c4999",
+      "target_response_position": 415
+    },
+    {
+      "candidate_count": 5,
+      "candidate_token_ids": [
+        13,
+        382,
+        11,
+        4192,
+        624
+      ],
+      "case_id": "c0-broad-commission-width5-p312",
+      "corpus_role": "broad_discovery",
+      "example_id": "bf-404ecf1756e799781214",
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "broad width-five commission case",
+        "middle-late punctuation target"
+      ],
+      "source_width1_artifact_id": "trace-source-9e269c603516701551413285",
+      "target_response_position": 312
+    },
+    {
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        13,
+        382,
+        7248,
+        8818,
+        1496,
+        11
+      ],
+      "case_id": "c0-broad-omission-width6-p481",
+      "corpus_role": "broad_discovery",
+      "example_id": "bf-72c58caa775145db5022",
+      "observed_token_rank": 19,
+      "selection_reasons": [
+        "broad long-context width-six omission case",
+        "moderate screened graph workload"
+      ],
+      "source_width1_artifact_id": "trace-source-70efcf778ac8e5fe9515ae8b",
+      "target_response_position": 481
+    },
+    {
+      "candidate_count": 6,
+      "candidate_token_ids": [
+        1196,
+        1172,
+        5114,
+        3405,
+        3491,
+        9934
+      ],
+      "case_id": "c0-broad-faithful-width6-p38",
+      "corpus_role": "broad_discovery",
+      "example_id": "bf-79aac6260ceb0428e611",
+      "observed_token_rank": 10,
+      "selection_reasons": [
+        "broad early-position width-six faithful case",
+        "semantic user token"
+      ],
+      "source_width1_artifact_id": "trace-source-f98072e2e2c9c0cb3641fbc0",
+      "target_response_position": 38
+    }
+  ],
+  "cohort_id": "qwen3-4b-instruct-topk-c0-v1",
+  "expected_trace_count": 75,
+  "manifests": [
+    {
+      "label": "joint-raw",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c0_joint_raw_v1.json",
+      "sha256": "d14d1e759f28fe329787f87d4f7fd6072fe8169db7935e4ea9877f7746be29b9",
+      "trace_family_id": "bonafide.c0.joint-raw.v1",
+      "waves": [
+        "c0-joint-raw-dense",
+        "c0-joint-raw-broad"
+      ],
+      "work_item_count": 10
+    },
+    {
+      "label": "joint-contrastive",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c0_joint_contrastive_v1.json",
+      "sha256": "ac19e586f90936102819a3efa27ce5f72735f8bc73c54b5822707694c0c38c85",
+      "trace_family_id": "bonafide.c0.joint-contrastive.v1",
+      "waves": [
+        "c0-joint-contrastive-dense",
+        "c0-joint-contrastive-broad"
+      ],
+      "work_item_count": 10
+    },
+    {
+      "label": "independent-candidate-0",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c0_independent_candidate_0_v1.json",
+      "sha256": "7c695bf52241b8fb2a1b035a03b21c63611223c2abd8ab38fe55b5ce910b3440",
+      "trace_family_id": "bonafide.c0.independent-candidate-0.v1",
+      "waves": [
+        "c0-independent-candidate-0-dense",
+        "c0-independent-candidate-0-broad"
+      ],
+      "work_item_count": 10
+    },
+    {
+      "label": "independent-candidate-1",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c0_independent_candidate_1_v1.json",
+      "sha256": "7ca088ce51d16bbb1b030cc80806688d39f7fff3d637fead7f423a01d23922ec",
+      "trace_family_id": "bonafide.c0.independent-candidate-1.v1",
+      "waves": [
+        "c0-independent-candidate-1-dense",
+        "c0-independent-candidate-1-broad"
+      ],
+      "work_item_count": 10
+    },
+    {
+      "label": "independent-candidate-2",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c0_independent_candidate_2_v1.json",
+      "sha256": "e3d3cf80577381a9b1a3ed3601da7d9d77458e0dee7857f324763fc1238c3710",
+      "trace_family_id": "bonafide.c0.independent-candidate-2.v1",
+      "waves": [
+        "c0-independent-candidate-2-dense",
+        "c0-independent-candidate-2-broad"
+      ],
+      "work_item_count": 10
+    },
+    {
+      "label": "independent-candidate-3",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c0_independent_candidate_3_v1.json",
+      "sha256": "e7b0fe324e108f004ee695262d69b210bfe2feb6e88a0f33230d9e2b02dc423f",
+      "trace_family_id": "bonafide.c0.independent-candidate-3.v1",
+      "waves": [
+        "c0-independent-candidate-3-dense",
+        "c0-independent-candidate-3-broad"
+      ],
+      "work_item_count": 10
+    },
+    {
+      "label": "independent-candidate-4",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c0_independent_candidate_4_v1.json",
+      "sha256": "7f28e33e05a84849b26a84e59ff3db50a456b17ece0240483a7cf4b0ff13b46d",
+      "trace_family_id": "bonafide.c0.independent-candidate-4.v1",
+      "waves": [
+        "c0-independent-candidate-4-dense",
+        "c0-independent-candidate-4-broad"
+      ],
+      "work_item_count": 10
+    },
+    {
+      "label": "independent-candidate-5",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c0_independent_candidate_5_v1.json",
+      "sha256": "a72edb80ababaf4fd2aff767d2192d1cae2ac9aef877559ec3534b27c8df0497",
+      "trace_family_id": "bonafide.c0.independent-candidate-5.v1",
+      "waves": [
+        "c0-independent-candidate-5-dense",
+        "c0-independent-candidate-5-broad"
+      ],
+      "work_item_count": 5
+    }
+  ],
+  "rank_screen_path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/top5-probes-v1/selection-evidence/topk-rank-screen-lowprob32-265498a.json",
+  "rank_screen_sha256": "9f7f56dac7cbaaeb27c8d36607136a8810f240d5c302e738a2dff514e62d4020",
+  "schema_version": "bonafide-topk-c0-launch-bundle/v1",
+  "selection_path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/selections/qwen3_4b_instruct_topk_c0_cohort_v1.json",
+  "selection_sha256": "30f869a4b12b8f8a0943cfcea1f85e28ba5f8713bc23268c3e685707120f6165",
+  "source_manifest_path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_final_traces.json",
+  "source_manifest_sha256": "706143579c8ebcbd05e1fee150d2f3facf5f3f7e7de372c40e399b83a01687e2"
+}

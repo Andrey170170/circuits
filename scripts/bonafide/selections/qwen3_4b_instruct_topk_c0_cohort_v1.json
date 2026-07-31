@@ -1,0 +1,121 @@
+{
+  "schema_version": "bonafide-topk-c0-cohort-selection/v1",
+  "cohort_id": "qwen3-4b-instruct-topk-c0-v1",
+  "source_manifest_path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_final_traces.json",
+  "source_manifest_sha256": "706143579c8ebcbd05e1fee150d2f3facf5f3f7e7de372c40e399b83a01687e2",
+  "rank_screen_path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/top5-probes-v1/selection-evidence/topk-rank-screen-lowprob32-265498a.json",
+  "rank_screen_sha256": "9f7f56dac7cbaaeb27c8d36607136a8810f240d5c302e738a2dff514e62d4020",
+  "cases": [
+    {
+      "case_id": "c0-dense-faithful-width5-p162",
+      "source_width1_artifact_id": "trace-source-20d9a7036b98e9897f1f0be9",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "width-five faithful punctuation control",
+        "moderate context and screened workload"
+      ]
+    },
+    {
+      "case_id": "c0-dense-commission-width5-p169",
+      "source_width1_artifact_id": "trace-source-6aa03d20dc94fb7a05c06278",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 4,
+      "selection_reasons": [
+        "width-five commission phenotype",
+        "punctuation target with moderate workload"
+      ]
+    },
+    {
+      "case_id": "c0-dense-both-width5-p211",
+      "source_width1_artifact_id": "trace-source-4d5db66ca6ecf18b015dfaed",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "width-five mixed omission-and-commission phenotype",
+        "late punctuation target"
+      ]
+    },
+    {
+      "case_id": "c0-dense-commission-width6-p220",
+      "source_width1_artifact_id": "trace-source-c6a2b2d04df3ec93a97b764d",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 8,
+      "selection_reasons": [
+        "width-six commission phenotype",
+        "non-period commitment-adjacent target",
+        "completed width-six GPU smoke"
+      ]
+    },
+    {
+      "case_id": "c0-dense-faithful-width6-p212",
+      "source_width1_artifact_id": "trace-source-b7caa12aba1901bb269a4a69",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 6,
+      "selection_reasons": [
+        "near-boundary width-six faithful case",
+        "moderate screened workload"
+      ]
+    },
+    {
+      "case_id": "c0-dense-commission-width6-p125",
+      "source_width1_artifact_id": "trace-source-239f60406fbdd607020a6bd2",
+      "corpus_role": "dense_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 46,
+      "selection_reasons": [
+        "far-outside-top-five observed rank",
+        "semantic token and commission phenotype"
+      ]
+    },
+    {
+      "case_id": "c0-broad-omission-width5-p415",
+      "source_width1_artifact_id": "trace-source-6797794e5187f0fe499c4999",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 3,
+      "selection_reasons": [
+        "broad width-five omission case",
+        "semantic diagnosis token"
+      ]
+    },
+    {
+      "case_id": "c0-broad-commission-width5-p312",
+      "source_width1_artifact_id": "trace-source-9e269c603516701551413285",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 5,
+      "observed_token_rank": 2,
+      "selection_reasons": [
+        "broad width-five commission case",
+        "middle-late punctuation target"
+      ]
+    },
+    {
+      "case_id": "c0-broad-omission-width6-p481",
+      "source_width1_artifact_id": "trace-source-70efcf778ac8e5fe9515ae8b",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 19,
+      "selection_reasons": [
+        "broad long-context width-six omission case",
+        "moderate screened graph workload"
+      ]
+    },
+    {
+      "case_id": "c0-broad-faithful-width6-p38",
+      "source_width1_artifact_id": "trace-source-f98072e2e2c9c0cb3641fbc0",
+      "corpus_role": "broad_discovery",
+      "candidate_count": 6,
+      "observed_token_rank": 10,
+      "selection_reasons": [
+        "broad early-position width-six faithful case",
+        "semantic user token"
+      ]
+    }
+  ]
+}
