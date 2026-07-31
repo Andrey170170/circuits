@@ -2589,3 +2589,34 @@ The deterministic v2 quality report has no automatic acceptance state. A non-pos
 best selection correlation or model-declared insufficiency yields `insufficient_evidence`; every
 other label is `review_required`. Audit correlation is reported independently and cannot revise,
 accept, or reject the generated label. The original v1 artifacts and telemetry remain unchanged.
+
+The hosted v2.1 pilot completed on 2026-07-31 under
+`comparison-pilot-adbfff4-v2` using the same explicitly frozen six primary and six alternative
+cluster IDs as v1. Luna and Haiku generated five candidates per cluster, the fixed Transluce
+simulator ranked them on `selection_scoring`, Terra and Opus generated final labels, and the
+simulator then scored the exact final labels separately on `selection_scoring` and `audit`.
+Candidate and summary artifacts bind source revision `adbfff4`; the additive final-label scoring,
+fail-closed quality gate, and retry-aware telemetry correction bind revision `7c65e74`.
+
+The corrected automatic result is 12/12 `insufficient_evidence` for Terra and six
+`review_required` plus six `insufficient_evidence` for Opus. Semantic review retains four bounded
+hypotheses: primary 38 and 50 as the strongest provisional lexical/phrase-role associations, and
+primary 24 plus alternative 37 as background/template descriptors. Primary 0 and alternative 17
+are downgraded despite positive in-sample scores because target-local recency or ubiquitous
+position/function-word structure is a better explanation and their audit correlations are
+negative. This is diagnostic evidence from single-target traces; none is a causal, contribution,
+faithfulness, selectivity, or generality claim.
+
+The retry-aware ledger records 196 real hosted API attempts, 803,450 input tokens, 131,598 output
+tokens, and `$2.45775876` total API cost (`$0.09524426` OpenAI and `$2.36251450` Anthropic).
+Successful simulator work used `0.095270` measured A100 GPU-hours; six successful Slurm
+allocations occupied `0.3236` A100-hours including startup. The initial stale-cache failure and
+cancelled companion launch added `0.1028` A100-hours and produced no scores. The launcher now pins
+the simulator cache. The complete per-cluster dispositions and provenance ledger are recorded in
+`docs/LABELING_WIDTH_ONE_V2_PILOT.md`.
+
+Use Opus as the semantic labeler and Terra as a conservative abstention/disagreement baseline for
+the next comparison. Do not yet scale either hosted recipe across all 150 labeling-ready clusters:
+first run the identically selected Qwen cohort, then use provider agreement and the four retained
+hypotheses to decide whether a larger pass is informative. Matched controls or top-k traces remain
+necessary before interpreting these width-one associations as contribution structure.

@@ -1,7 +1,6 @@
 # Frozen labeling comparison pipeline
 
-Status: implementation-ready; hosted-provider smoke tests passed; the corrected 12-cluster
-comparison pilot is active.
+Status: width-one v2.1 pilot completed for OpenAI and Anthropic; Qwen remains endpoint-gated.
 
 ## Comparison contract
 
@@ -14,6 +13,10 @@ generation/selection/audit partitions, and local evaluator:
 | `openai-5.6-v1` | `gpt-5.6-luna` | `Transluce/llama_8b_simulator` | `gpt-5.6-terra` |
 | `anthropic-original-upgraded-v1` | `claude-haiku-4-5-20251001` | `Transluce/llama_8b_simulator` | `claude-opus-5` |
 
+The additive `*-width-one-v2` recipes use the same provider/model assignments with width-one-aware
+prompts, structured abstention, final-label selection scoring, and retry-aware telemetry. They do
+not change the frozen v1 recipes or artifacts.
+
 Changing the hosted provider does not change the judge. The simulator is loaded inside a circuits
 GPU job because it consumes per-token logits and is not equivalent to an ordinary chat endpoint.
 Qwen remains a separate HTTP service and does not share the tracing environment.
@@ -23,7 +26,8 @@ The evidence flow is:
 ```text
 generation witnesses -> five candidate descriptions
 selection_scoring witnesses -> fixed local simulator -> candidate ranking
-ranked candidates + frozen structure -> one cluster summary
+ranked candidates + exact witnesses -> one cluster summary or abstention
+selection_scoring witnesses -> fixed local simulator -> final-label consistency score
 audit witnesses -> fixed local simulator -> final-label audit
 ```
 
@@ -133,11 +137,11 @@ Candidate scoring:
 
 ```bash
 sbatch --test-only \
-  --export=ALL,RUN_ROOT=/absolute/run/root,LABELING_ENV=/absolute/frozen/env,PHASE=candidate_selection \
+  --export=ALL,RUN_ROOT=/absolute/run/root,LABELING_ENV=/absolute/frozen/env,PHASE=candidate_selection,LABELING_HF_CACHE=/absolute/huggingface/cache \
   scripts/bonafide/labeling_score.sbatch
 
 sbatch \
-  --export=ALL,RUN_ROOT=/absolute/run/root,LABELING_ENV=/absolute/frozen/env,PHASE=candidate_selection \
+  --export=ALL,RUN_ROOT=/absolute/run/root,LABELING_ENV=/absolute/frozen/env,PHASE=candidate_selection,LABELING_HF_CACHE=/absolute/huggingface/cache \
   scripts/bonafide/labeling_score.sbatch
 ```
 
@@ -152,12 +156,20 @@ After all candidate score files exist:
   prepare-summaries --run-root /absolute/run/root
 ```
 
-Run or batch `cluster_summary` through the same commands used for generation. Then audit final
-labels:
+Run or batch `cluster_summary` through the same commands used for generation. For a v2 run, score
+the exact final label on the selection partition before opening the audit partition:
 
 ```bash
 sbatch \
-  --export=ALL,RUN_ROOT=/absolute/run/root,LABELING_ENV=/absolute/frozen/env,PHASE=summary_audit \
+  --export=ALL,RUN_ROOT=/absolute/run/root,LABELING_ENV=/absolute/frozen/env,PHASE=summary_selection,LABELING_HF_CACHE=/absolute/huggingface/cache \
+  scripts/bonafide/labeling_score.sbatch
+```
+
+Then audit final labels:
+
+```bash
+sbatch \
+  --export=ALL,RUN_ROOT=/absolute/run/root,LABELING_ENV=/absolute/frozen/env,PHASE=summary_audit,LABELING_HF_CACHE=/absolute/huggingface/cache \
   scripts/bonafide/labeling_score.sbatch
 ```
 
@@ -177,9 +189,11 @@ provider_batches/<stage>/
 results/<stage>/<request_id>.json
 telemetry/<stage>/<request_id>.json
 scores/candidate_selection/<state>/cluster-####.json
+scores/summary_selection/<state>/cluster-####.json
 scores/summary_audit/<state>/cluster-####.json
 telemetry/local_scoring/<phase>-<job>-<task>.json
 stages/cluster_summary/manifest.json
+assessments/label_quality_v2/<state>/cluster-####.json
 ```
 
 A retry skips only requests having both a result and telemetry file. A lone file is treated as a
@@ -192,6 +206,15 @@ stop reason, parse status, response hash, uncached/cache-read/cache-write/input/
 tokens, and a cost estimate tied to the price snapshot. Unknown rates make the estimate incomplete
 instead of zero. Local telemetry keeps API dollars and GPU-hours separate and records elapsed
 time, allocated GPUs, peak HBM, and peak host RSS.
+
+Use the retry-aware read-only rollup for actual spend. It counts canonical telemetry, archived
+original attempts, and distinct retries once each, while deduplicating the successful retry copy
+that replaces a canonical result:
+
+```bash
+"$UV_PROJECT_ENVIRONMENT/bin/python" scripts/bonafide/labeling_pipeline.py \
+  summarize-telemetry --run-root /absolute/run/root
+```
 
 ## Current verification
 
@@ -287,8 +310,9 @@ The additive `width_one_v2` prompt policy leaves the v1 recipes and artifacts un
 - requires candidate outputs to separate localized evidence, background/confounds, and limitations;
 - gives the final summarizer the exact highlighted `generation` and `selection_scoring` witnesses,
   with their profile and score hashes, while excluding `audit` witnesses;
-- permits an explicit `insufficient_evidence` result and raises summary output limits to 1,200
-  tokens;
+- permits an explicit `insufficient_evidence` result and enforces at least a 1,200-token summary
+  budget; the completed pilot established 1,400 Haiku candidate tokens and 3,200 adaptive-Opus
+  summary tokens as safer defaults;
 - writes a deterministic post-run quality bundle in which non-positive or nonfinite selection
   scores and model-declared insufficiency fail closed, while every remaining label is
   `review_required`, never automatically accepted;
@@ -298,3 +322,56 @@ The additive `width_one_v2` prompt policy leaves the v1 recipes and artifacts un
 The rerun uses explicit cluster IDs rather than recomputing a size-limited sample: primary
 `0, 12, 24, 38, 50, 62` and alternative `0, 17, 37, 54, 73, 94`. The v1 pilot tree remains an
 immutable comparison predecessor.
+
+#### Completed v2.1 result
+
+The hosted-provider rerun is frozen under:
+
+```text
+/scratch/general/vast/$USER/circuits/results/bonafide/labeling/
+comparison-pilot-adbfff4-v2
+```
+
+Candidate and summary requests use source commit `adbfff4`; the additive final-label selection
+and retry-aware telemetry correction use commit `7c65e74`. Run IDs and frozen manifest hashes are:
+
+| Path | Run ID | Manifest SHA-256 |
+| --- | --- | --- |
+| OpenAI | `labeling-69c6cda8c5bb6f55` | `df8ad545537e6cfed0a3af54839260d2ce5aaa01d9b82aba849186f667cd2b58` |
+| Anthropic | `labeling-72dde357e4ecd351` | `4f536207e55d360eba88cf4cba816b698afc501ca4a8f41f925a52a38d7365ca` |
+
+Luna produced 60/60 valid candidates. Haiku produced 20 valid batch responses and 40 JSON
+responses truncated at 700 tokens; the exact 40 requests succeeded through archived 1,400-token
+live retries. Terra produced 12/12 valid summaries. Adaptive Opus exhausted the original
+1,200-token budget for all 12 summaries; archived 3,200-token live retries succeeded 12/12. These
+observations motivate the updated Anthropic v2 defaults and do not alter the frozen run manifests.
+
+The initial quality implementation scored Haiku/Luna candidates but allowed Terra/Opus to rewrite
+them, so its `review_required` state did not validate the actual final label. V2.1 corrects the
+order additively: literal abstentions are control flow, the exact final label is scored on
+`selection_scoring`, the candidate best score is diagnostic only, and audit remains non-gating.
+The corrected `label_quality_v2` bundles contain:
+
+| Path | Insufficient | Review required |
+| --- | ---: | ---: |
+| OpenAI/Terra | 12 | 0 |
+| Anthropic/Opus | 6 | 6 |
+
+Human semantic review narrows the six Opus survivors to four corpus-bounded hypotheses: primary
+38 (information/data-reference nouns), primary 50 (heads of evidential-source phrases), primary
+24 (shared answer-format instruction template), and alternative 37 (shared boilerplate plus
+response onset). Primary 0 and alternative 17 retain positive in-sample final-label correlations
+but are better explained by target-local recency and ubiquitous function-word/answer-slot
+position, respectively; their held-out audit correlations are also negative. No retained label is
+a contribution, causal, faithfulness, selectivity, or generality claim.
+
+The retry-aware telemetry rollup counts 196 real API attempts, 803,450 input tokens, 131,598 output
+tokens, and `$2.45775876` total API cost: `$0.09524426` OpenAI and `$2.36251450` Anthropic. Six
+successful scorer jobs across candidate selection, summary audit, and final-label selection used
+`0.095270` measured A100 GPU-hours. Those Slurm allocations occupied `0.3236` A100-hours including
+startup; one failed and one deliberately cancelled stale-cache launch added `0.1028` A100-hours.
+The launcher now pins `LABELING_HF_CACHE`, so later jobs cannot inherit that stale cache path.
+
+The v1 comparison tree was rehashed after the run and remains unchanged at aggregate SHA-256
+`cb94f2003ffb21ae30dabf22b9c4f573253b9a48a7b0b32503a0e28b464c0c94`. Qwen remains a separate
+endpoint-gated comparison path.
