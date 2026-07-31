@@ -83,6 +83,42 @@ the old dense store covers only 77 of the 245 matched C2 targets. New anchors, w
 and evidence hashes must be frozen before any model call. Candidate descriptions remain
 exploratory; the fixed simulator validates only the input-localization hypothesis.
 
+## Frozen evidence-only comparison
+
+Revision `eea52ab` published the provider-neutral, pre-model-call comparison at:
+
+```text
+/scratch/general/vast/$USER/circuits/results/bonafide/downstream/
+candidate-aware-clustering-c2-v1/labeling-comparison-v1
+```
+
+Its manifest SHA-256 is
+`227cde5658f1381963b94df192b8e86e1188ca13e28c334003a5a100d3496b55`. The deterministic W64
+anchors, in the frozen 3-by-4 target-point order, are:
+
+```text
+61, 5, 42, 34, 41, 21, 59, 13, 43, 58, 49, 47
+```
+
+The artifact contains 601 generation evidence rows, 530 prompt-ineligible selection/audit scoring
+rows, and 24 arm handoffs: one width-only and one width-plus-candidate handoff for each anchor. The
+two arms have identical W clusters and generation witness IDs. Candidate slots and numeric
+signatures are additive fields only in the combined arm contract. Selection and audit records are
+physically separate, marked prompt-ineligible, and reserved for later input-localization scoring
+and blinded review.
+
+Every exact teacher-forced prefix, observed token, source-attribution profile, top-16 source-token
+highlights, model-rank slots, and candidate signature is persisted before model calls. Candidate
+signatures retain the full-precision occurrence count, sum, mean, norm, and unit direction; the
+width-five observed-rank channel is checked as a structural zero. A post-publication deep reload
+recomputed the entire artifact from the bound input, clustering, labelability, and tokenizer
+sources and reproduced the manifest and row counts.
+
+This artifact is deliberately not launchable. It retains all supported generation witnesses and
+sets `renderer_frozen=false`; a separate committed renderer must freeze a bounded, identical
+witness subset for both arms, six-significant-digit prompt formatting, typed output parsing, and
+the Opus/Terra request plan before any paid API call.
+
 ## Remaining reporting boundary
 
 The persisted evaluator covers numerical validity, structural metrics, held-out candidate

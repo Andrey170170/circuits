@@ -2642,3 +2642,34 @@ the next comparison. Do not yet scale either hosted recipe across all 150 labeli
 first run the identically selected Qwen cohort, then use provider agreement and the four retained
 hypotheses to decide whether a larger pass is informative. Matched controls or top-k traces remain
 necessary before interpreting these width-one associations as contribution structure.
+
+### 19.3 Candidate-evidence matched labeling comparison
+
+The C2 candidate-aware clustering experiment did not promote `C` or `F`: both narrowly missed the
+frozen selection lift, while `C` also failed stability/modularity and `F` failed selection
+width-preservation and the 80% readiness guardrail. Direction-null and generation-family
+jackknife arrays were not launched because those later computations cannot repair the already
+failed necessary conditions. The result and bounded interpretation are recorded in
+`docs/CANDIDATE_AWARE_CLUSTERING_LABELABILITY_RESULTS.md`.
+
+The remaining eligible labeling experiment holds the W64 clusters fixed and compares width-one
+evidence against the identical clusters/witnesses with candidate evidence added. Revision
+`eea52ab` froze 12 deterministic anchors and published the provider-neutral evidence bundle under
+`candidate-aware-clustering-c2-v1/labeling-comparison-v1`, manifest SHA-256
+`227cde5658f1381963b94df192b8e86e1188ca13e28c334003a5a100d3496b55`. It contains all 601
+generation witness rows, 530 prompt-ineligible held-out scorer rows, and 24 paired arm handoffs.
+
+Execution order from this checkpoint is:
+
+1. freeze a bounded renderer that selects one identical, W-only-determined generation witness set
+   per anchor for both arms and renders candidate numbers to six significant digits;
+2. prepare the full token/cost estimate and exact Opus-generation, Opus-rewrite, and Terra-control
+   batch parameters for approval;
+3. run the fixed Transluce simulator only on `input_localization_hypothesis`, first on selection
+   and then on audit without changing the label or selected generic control;
+4. freeze blinded review IDs/forms before review and unblind only after the required decisions;
+5. decide the evidence-only pilot by the prospectively frozen retained-label, abstention, and loss
+   thresholds. Candidate text remains exploratory even if the evidence-only pilot passes.
+
+No model call is authorized directly by the evidence bundle: its manifest deliberately records
+`renderer_frozen=false` and requires the renderer/request cohort to be committed first.
