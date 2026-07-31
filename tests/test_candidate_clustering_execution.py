@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import subprocess
 from dataclasses import replace
@@ -378,6 +379,13 @@ def test_publish_race_does_not_replace_empty_destination(
         output.mkdir()
 
     monkeypatch.setattr(execution, "_write_json", write_then_race)
+    monkeypatch.setattr(
+        execution,
+        "_rename_directory_no_replace",
+        lambda source, destination: (_ for _ in ()).throw(
+            OSError(errno.EINVAL, "synthetic unsupported rename")
+        ),
+    )
     with pytest.raises(FileExistsError, match="already exists"):
         run_candidate_clustering_baseline(
             input_root=bundle.root,
@@ -387,6 +395,49 @@ def test_publish_race_does_not_replace_empty_destination(
     assert output.is_dir()
     assert not any(output.iterdir())
     assert not list(tmp_path.glob(".baseline.tmp-*"))
+
+
+def test_manifest_last_fallback_succeeds_and_cleans_caught_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from circuits.analysis.bonafide import candidate_clustering_execution as execution
+
+    bundle, evidence, fit = _synthetic_pipeline(tmp_path / "success" / "input")
+    _patch_pipeline(monkeypatch, bundle, evidence, fit)
+    monkeypatch.setattr(
+        execution,
+        "_rename_directory_no_replace",
+        lambda source, destination: (_ for _ in ()).throw(
+            OSError(errno.EINVAL, "synthetic unsupported rename")
+        ),
+    )
+    output = tmp_path / "success" / "baseline"
+    run_candidate_clustering_baseline(
+        input_root=bundle.root, output_root=output, repo_root=tmp_path
+    )
+    assert load_candidate_clustering_baseline(output).manifest["numerically_valid"]
+
+    failure = tmp_path / "failure"
+    bundle, evidence, fit = _synthetic_pipeline(failure / "input")
+    _patch_pipeline(monkeypatch, bundle, evidence, fit)
+    moved: list[str] = []
+    original_move = execution._move_staged_file
+
+    def fail_on_manifest(source: Path, destination: Path) -> None:
+        moved.append(source.name)
+        if source.name == "manifest.json":
+            raise RuntimeError("synthetic manifest publication failure")
+        original_move(source, destination)
+
+    monkeypatch.setattr(execution, "_move_staged_file", fail_on_manifest)
+    output = failure / "baseline"
+    with pytest.raises(RuntimeError, match="manifest publication failure"):
+        run_candidate_clustering_baseline(
+            input_root=bundle.root, output_root=output, repo_root=failure
+        )
+    assert moved[-1] == "manifest.json"
+    assert not output.exists()
+    assert not list(failure.glob(".baseline.tmp-*"))
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -416,10 +467,32 @@ def _synthetic_repo(root: Path, *, untracked_role: str | None = None) -> Path:
     return root
 
 
+def _patch_runtime_paths(monkeypatch, repo: Path) -> None:
+    from circuits.analysis.bonafide import candidate_clustering_execution as execution
+
+    monkeypatch.setattr(
+        execution,
+        "_runtime_source_paths",
+        lambda: {
+            role: repo / _SOURCE_BINDINGS[role]
+            for role in (
+                "canonical",
+                "clustering",
+                "clustering_store",
+                "candidate_profiles",
+                "candidate_clustering",
+                "frozen_clustering_evaluation",
+                "candidate_clustering_execution",
+            )
+        },
+    )
+
+
 def test_revision_binds_clean_full_tree_and_rejects_tracked_dirt(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     repo = _synthetic_repo(tmp_path / "repo")
+    _patch_runtime_paths(monkeypatch, repo)
     revision = collect_candidate_clustering_revision(repo)
     assert revision["git_commit"] == _git(repo, "rev-parse", "HEAD")
     assert revision["git_tree"] == _git(repo, "rev-parse", "HEAD^{tree}")
@@ -430,7 +503,16 @@ def test_revision_binds_clean_full_tree_and_rejects_tracked_dirt(
         collect_candidate_clustering_revision(repo)
 
 
-def test_revision_rejects_untracked_source_module(tmp_path: Path) -> None:
+def test_revision_rejects_untracked_source_module(tmp_path: Path, monkeypatch) -> None:
     repo = _synthetic_repo(tmp_path / "repo", untracked_role="candidate_nulls")
+    _patch_runtime_paths(monkeypatch, repo)
     with pytest.raises(ValueError, match="source is not tracked:.*candidate_nulls"):
+        collect_candidate_clustering_revision(repo)
+
+
+def test_revision_rejects_runtime_module_from_another_worktree(
+    tmp_path: Path,
+) -> None:
+    repo = _synthetic_repo(tmp_path / "repo")
+    with pytest.raises(ValueError, match="runtime source path mismatch"):
         collect_candidate_clustering_revision(repo)

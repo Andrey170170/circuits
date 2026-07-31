@@ -1,4 +1,4 @@
-"""Atomic persistence for the frozen candidate-aware clustering baseline.
+"""Fail-closed persistence for the frozen candidate-aware clustering baseline.
 
 This module is intentionally label-free.  It persists only graph affinities,
 cluster assignments, and structural diagnostics produced from the generation
@@ -29,6 +29,12 @@ import pyarrow.parquet as pq
 from scipy.sparse import csr_matrix, load_npz, save_npz
 from scipy.sparse.csgraph import connected_components
 
+import circuits.analysis.bonafide.candidate_clustering as candidate_clustering_module
+import circuits.analysis.bonafide.candidate_profiles as candidate_profiles_module
+import circuits.analysis.bonafide.canonical as canonical_module
+import circuits.analysis.bonafide.clustering as clustering_module
+import circuits.analysis.bonafide.clustering_evaluation as clustering_evaluation_module
+import circuits.analysis.bonafide.clustering_store as clustering_store_module
 from circuits.analysis.bonafide.candidate_clustering import (
     CLUSTER_COUNTS,
     NEIGHBORS,
@@ -83,6 +89,21 @@ _SOURCE_BINDINGS = {
     ),
     "candidate_clustering_fit_cli": ("scripts/bonafide/candidate_clustering_fit.py"),
 }
+
+
+def _runtime_source_paths() -> dict[str, Path]:
+    return {
+        "canonical": Path(str(canonical_module.__file__)),
+        "clustering": Path(str(clustering_module.__file__)),
+        "clustering_store": Path(str(clustering_store_module.__file__)),
+        "candidate_profiles": Path(str(candidate_profiles_module.__file__)),
+        "candidate_clustering": Path(str(candidate_clustering_module.__file__)),
+        "frozen_clustering_evaluation": Path(
+            str(clustering_evaluation_module.__file__)
+        ),
+        "candidate_clustering_execution": Path(__file__),
+    }
+
 
 _BASIS_FIELDS = (
     "signed_basis_index",
@@ -164,6 +185,13 @@ def collect_candidate_clustering_revision(repo_root: Path) -> dict[str, Any]:
     repo_root = repo_root.resolve()
     if Path(_git(repo_root, "rev-parse", "--show-toplevel")).resolve() != repo_root:
         raise ValueError("candidate clustering must run from the repository root")
+    for role, observed in _runtime_source_paths().items():
+        expected = (repo_root / _SOURCE_BINDINGS[role]).resolve()
+        if observed.resolve() != expected:
+            raise ValueError(
+                "candidate clustering runtime source path mismatch: "
+                f"{role} loaded from {observed.resolve()}, expected {expected}"
+            )
     tracked_status = _git(
         repo_root,
         "status",
@@ -507,13 +535,13 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
         os.fsync(handle.fileno())
 
 
-def _publish_directory_no_replace(source: Path, destination: Path) -> None:
-    """Atomically publish a directory with Linux renameat2 NOREPLACE."""
-
+def _rename_directory_no_replace(source: Path, destination: Path) -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
     if renameat2 is None:
-        raise RuntimeError("atomic no-replace directory publication is unavailable")
+        raise OSError(
+            errno.ENOSYS, "atomic no-replace directory publication is unavailable"
+        )
     renameat2.argtypes = [
         ctypes.c_int,
         ctypes.c_char_p,
@@ -539,6 +567,66 @@ def _publish_directory_no_replace(source: Path, destination: Path) -> None:
             str(destination),
         )
     raise OSError(error_number, os.strerror(error_number), str(destination))
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    except OSError as error:
+        if error.errno not in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
+            raise
+    finally:
+        os.close(descriptor)
+
+
+def _move_staged_file(source: Path, destination: Path) -> None:
+    os.replace(source, destination)
+
+
+def _publish_directory_no_replace(source: Path, destination: Path) -> None:
+    """Publish without overwrite, using a manifest-last fallback when needed."""
+
+    try:
+        _rename_directory_no_replace(source, destination)
+        return
+    except OSError as error:
+        if error.errno not in {
+            errno.EINVAL,
+            errno.ENOSYS,
+            errno.ENOTSUP,
+            errno.EOPNOTSUPP,
+        }:
+            raise
+
+    created_destination = False
+    try:
+        try:
+            destination.mkdir(exist_ok=False)
+        except FileExistsError as error:
+            raise FileExistsError(
+                error.errno,
+                "candidate clustering output already exists",
+                str(destination),
+            ) from error
+        created_destination = True
+        manifest = source / "manifest.json"
+        if not manifest.is_file():
+            raise ValueError("staged candidate clustering manifest is missing")
+        staged = sorted(path for path in source.iterdir() if path.name != manifest.name)
+        if any(not path.is_file() for path in staged):
+            raise ValueError("staged candidate clustering output contains a directory")
+        for path in staged:
+            _move_staged_file(path, destination / path.name)
+        _fsync_directory(destination)
+        _move_staged_file(manifest, destination / manifest.name)
+        _fsync_directory(destination)
+        _fsync_directory(destination.parent)
+        source.rmdir()
+    except BaseException:
+        if created_destination:
+            shutil.rmtree(destination, ignore_errors=True)
+        raise
 
 
 def run_candidate_clustering_baseline(
