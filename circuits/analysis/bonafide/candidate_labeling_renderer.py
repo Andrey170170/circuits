@@ -96,6 +96,16 @@ _RUNTIME_MODULE_BINDINGS = {
     "publisher": publisher_module,
     "candidate_labeling_comparison": comparison_module,
 }
+_RECORDED_REVISION_FIELDS = {
+    "repo_root",
+    "git_commit",
+    "git_tree",
+    "tracked_worktree_clean",
+    "tracked_status_sha256",
+    "files",
+}
+_RECORDED_SOURCE_FIELDS = {"role", "path", "sha256"}
+_CLEAN_STATUS_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
 @dataclass(frozen=True)
@@ -122,6 +132,185 @@ def _git(repo_root: Path, *arguments: str) -> str:
         message = error.stderr.strip() or error.stdout.strip() or str(error)
         raise ValueError(f"unable to bind renderer revision: {message}") from error
     return completed.stdout.strip()
+
+
+def _git_object_bytes(repo_root: Path, object_id: str) -> bytes:
+    try:
+        completed = subprocess.run(
+            ["git", "cat-file", "blob", object_id],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        message = error.stderr.decode(errors="replace").strip() or str(error)
+        raise ValueError(f"unable to read recorded source object: {message}") from error
+    return completed.stdout
+
+
+def _is_object_id(value: Any, *, lengths: set[int]) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) in lengths
+        and value == value.lower()
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _module_path(module: Any, *, role: str, label: str) -> Path:
+    observed = getattr(module, "__file__", None)
+    if not isinstance(observed, str):
+        raise TypeError(f"{label} runtime module has no path: {role}")
+    return Path(observed)
+
+
+def _current_repository_root() -> Path:
+    inferred = Path(__file__).resolve().parents[3]
+    actual = Path(_git(inferred, "rev-parse", "--show-toplevel")).resolve()
+    if actual != inferred:
+        raise ValueError("candidate labeling renderer repository root drift")
+    return actual
+
+
+def _validate_recorded_revision_portably(
+    revision: Any,
+    *,
+    source_bindings: Mapping[str, str],
+    runtime_paths: Mapping[str, Path],
+    current_repo_root: Path,
+    label: str,
+) -> None:
+    """Validate recorded provenance through Git objects, not an old worktree."""
+
+    if not isinstance(revision, Mapping) or set(revision) != _RECORDED_REVISION_FIELDS:
+        raise TypeError(f"{label} recorded revision shape is invalid")
+    recorded_root = revision["repo_root"]
+    if (
+        not isinstance(recorded_root, str)
+        or not recorded_root
+        or not Path(recorded_root).is_absolute()
+    ):
+        raise TypeError(f"{label} recorded repository root is invalid")
+    commit = revision["git_commit"]
+    tree = revision["git_tree"]
+    if not _is_object_id(commit, lengths={40, 64}) or not _is_object_id(
+        tree, lengths={40, 64}
+    ):
+        raise TypeError(f"{label} recorded Git object identity is invalid")
+    if revision["tracked_worktree_clean"] is not True:
+        raise ValueError(f"{label} recorded worktree was not clean")
+    if revision["tracked_status_sha256"] != _CLEAN_STATUS_SHA256:
+        raise ValueError(f"{label} recorded clean-status hash drift")
+
+    records = revision["files"]
+    if not isinstance(records, list) or len(records) != len(source_bindings):
+        raise ValueError(f"{label} recorded source inventory drift")
+    expected_inventory = list(source_bindings.items())
+    observed_inventory: list[tuple[Any, Any]] = []
+    by_role: dict[str, Mapping[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, Mapping) or set(record) != _RECORDED_SOURCE_FIELDS:
+            raise TypeError(f"{label} recorded source entry shape is invalid")
+        role = record["role"]
+        relative = record["path"]
+        sha256 = record["sha256"]
+        if (
+            not isinstance(role, str)
+            or not isinstance(relative, str)
+            or not _is_object_id(sha256, lengths={64})
+        ):
+            raise TypeError(f"{label} recorded source entry is invalid")
+        observed_inventory.append((role, relative))
+        if role in by_role:
+            raise ValueError(f"{label} recorded source role is repeated: {role}")
+        by_role[role] = record
+    if observed_inventory != expected_inventory:
+        raise ValueError(f"{label} recorded role/path inventory drift")
+
+    current_repo_root = current_repo_root.resolve()
+    if Path(_git(current_repo_root, "rev-parse", "--show-toplevel")).resolve() != (
+        current_repo_root
+    ):
+        raise ValueError(f"{label} current repository root drift")
+    if _git(current_repo_root, "cat-file", "-t", commit) != "commit":
+        raise ValueError(f"{label} recorded commit object drift")
+    if _git(current_repo_root, "rev-parse", f"{commit}^{{tree}}") != tree:
+        raise ValueError(f"{label} recorded commit/tree mismatch")
+    if _git(current_repo_root, "cat-file", "-t", tree) != "tree":
+        raise ValueError(f"{label} recorded tree object drift")
+
+    for role, relative in source_bindings.items():
+        blob = _git(current_repo_root, "rev-parse", f"{commit}:{relative}")
+        if _git(current_repo_root, "cat-file", "-t", blob) != "blob":
+            raise ValueError(f"{label} recorded source is not a blob: {role}")
+        observed_sha256 = hashlib.sha256(
+            _git_object_bytes(current_repo_root, blob)
+        ).hexdigest()
+        if observed_sha256 != by_role[role]["sha256"]:
+            raise ValueError(f"{label} recorded source/blob mismatch: {role}")
+
+    if not set(runtime_paths).issubset(source_bindings):
+        raise ValueError(f"{label} runtime role inventory drift")
+    for role, path in runtime_paths.items():
+        expected_path = current_repo_root / source_bindings[role]
+        if path.resolve() != expected_path.resolve():
+            raise ValueError(
+                f"{label} runtime module came from another worktree: {role}"
+            )
+        if not path.is_file() or file_sha256(path) != by_role[role]["sha256"]:
+            raise ValueError(f"{label} current runtime source mismatch: {role}")
+
+
+def _comparison_runtime_paths() -> dict[str, Path]:
+    return {
+        "candidate_labeling_comparison": _module_path(
+            comparison_module,
+            role="candidate_labeling_comparison",
+            label="candidate labeling comparison",
+        ),
+        **{
+            role: _module_path(module, role=role, label="candidate labeling comparison")
+            for role, module in comparison_module._RUNTIME_MODULE_BINDINGS.items()
+        },
+    }
+
+
+def _labelability_runtime_paths() -> dict[str, Path]:
+    labelability_module = comparison_module.candidate_labelability_module
+    return {
+        "candidate_labelability_evaluation": _module_path(
+            labelability_module,
+            role="candidate_labelability_evaluation",
+            label="candidate labelability evaluation",
+        ),
+        **{
+            role: _module_path(
+                module, role=role, label="candidate labelability evaluation"
+            )
+            for role, module in labelability_module._RUNTIME_MODULE_BINDINGS.items()
+        },
+    }
+
+
+def _validate_comparison_revision(revision: Any, repo_root: Path) -> None:
+    _validate_recorded_revision_portably(
+        revision,
+        source_bindings=comparison_module._SOURCE_BINDINGS,
+        runtime_paths=_comparison_runtime_paths(),
+        current_repo_root=repo_root,
+        label="candidate labeling comparison",
+    )
+
+
+def _validate_labelability_revision(revision: Any, repo_root: Path) -> None:
+    labelability_module = comparison_module.candidate_labelability_module
+    _validate_recorded_revision_portably(
+        revision,
+        source_bindings=labelability_module._SOURCE_BINDINGS,
+        runtime_paths=_labelability_runtime_paths(),
+        current_repo_root=repo_root,
+        label="candidate labelability evaluation",
+    )
 
 
 def validate_candidate_labeling_renderer_runtime_paths(repo_root: Path) -> None:
@@ -758,6 +947,133 @@ def _write_bytes(path: Path, payload: bytes) -> None:
         os.fsync(handle.fileno())
 
 
+def _load_labelability_evaluation_portably(
+    path: Path, *, repo_root: Path
+) -> dict[str, Any]:
+    """Deep-validate evaluation inputs without its recorded worktree path."""
+
+    labelability_module = comparison_module.candidate_labelability_module
+    report = labelability_module.load_candidate_labelability_evaluation(
+        path, verify_sources=False
+    )
+    revision = report.get("code_revision")
+    _validate_labelability_revision(revision, repo_root)
+
+    input_record = report.get("source_input_bundle")
+    baseline_record = report.get("source_clustering_baseline")
+    input_manifest = comparison_module._validate_bound_manifest(
+        input_record, label="candidate labelability input bundle"
+    )
+    baseline_manifest = comparison_module._validate_bound_manifest(
+        baseline_record, label="candidate labelability clustering baseline"
+    )
+    assert isinstance(input_record, Mapping)
+    assert isinstance(baseline_record, Mapping)
+    bundle = comparison_module.load_candidate_cluster_input_bundle(
+        Path(str(input_record["manifest_path"])).resolve().parent
+    )
+    baseline = comparison_module.load_candidate_clustering_baseline(
+        Path(str(baseline_record["manifest_path"])).resolve().parent,
+        verify_source=True,
+    )
+    if (
+        bundle.manifest != input_manifest
+        or baseline.manifest != baseline_manifest
+        or baseline.manifest["source_input_bundle"]["manifest_sha256"]
+        != bundle.manifest["manifest_sha256"]
+    ):
+        raise ValueError("candidate labelability portable source binding drift")
+    recomputed = labelability_module.evaluate_loaded_candidate_labelability(
+        bundle, baseline
+    )
+    if report.get("evaluation") != recomputed:
+        raise ValueError("candidate labelability portable recomputation drift")
+    _validate_labelability_revision(revision, repo_root)
+    if (
+        labelability_module.load_candidate_labelability_evaluation(
+            path, verify_sources=False
+        )
+        != report
+    ):
+        raise ValueError("candidate labelability report changed during validation")
+    return report
+
+
+def _load_candidate_labeling_comparison_portably(
+    root: Path, *, repo_root: Path, tokenizer: Any | None = None
+) -> LoadedCandidateLabelingComparison:
+    """Reproduce deep comparison validation using recorded Git objects."""
+
+    comparison = load_candidate_labeling_comparison(root, verify_sources=False)
+    revision = comparison.manifest.get("code_revision")
+    _validate_comparison_revision(revision, repo_root)
+
+    input_record = comparison.manifest.get("source_input_bundle")
+    baseline_record = comparison.manifest.get("source_clustering_baseline")
+    evaluation_record = comparison.manifest.get("source_labelability_evaluation")
+    input_manifest = comparison_module._validate_bound_manifest(
+        input_record, label="candidate labeling input bundle"
+    )
+    baseline_manifest = comparison_module._validate_bound_manifest(
+        baseline_record, label="candidate labeling clustering baseline"
+    )
+    if not isinstance(evaluation_record, Mapping):
+        raise TypeError("candidate labeling evaluation binding is invalid")
+    assert isinstance(input_record, Mapping)
+    assert isinstance(baseline_record, Mapping)
+    bundle = comparison_module.load_candidate_cluster_input_bundle(
+        Path(str(input_record["manifest_path"])).resolve().parent
+    )
+    baseline = comparison_module.load_candidate_clustering_baseline(
+        Path(str(baseline_record["manifest_path"])).resolve().parent,
+        verify_source=True,
+    )
+    report_path = Path(str(evaluation_record["path"]))
+    report = _load_labelability_evaluation_portably(report_path, repo_root=repo_root)
+    if (
+        bundle.manifest != input_manifest
+        or baseline.manifest != baseline_manifest
+        or bundle.manifest["manifest_sha256"] != input_record.get("manifest_sha256")
+        or baseline.manifest["manifest_sha256"]
+        != baseline_record.get("manifest_sha256")
+        or report.get("manifest_sha256") != evaluation_record.get("manifest_sha256")
+        or report.get("schema_version") != evaluation_record.get("schema_version")
+        or file_sha256(report_path) != evaluation_record.get("file_sha256")
+    ):
+        raise ValueError("candidate labeling deep source binding drift")
+
+    if tokenizer is None:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            comparison_module.TOKENIZER_ID,
+            revision=comparison_module.TOKENIZER_REVISION,
+            local_files_only=True,
+        )
+    actual_tokenizer = comparison_module._validated_tokenizer_identity(tokenizer)
+    if dict(comparison.manifest["tokenizer"]) != actual_tokenizer:
+        raise ValueError("candidate labeling persisted tokenizer identity drift")
+    recomputed = comparison_module.build_candidate_labeling_comparison(
+        bundle=bundle,
+        baseline=baseline,
+        evaluation_report=report,
+        tokenizer=tokenizer,
+    )
+    persisted = (
+        dict(comparison.anchors),
+        list(comparison.generation_evidence),
+        list(comparison.scoring_evidence),
+        list(comparison.arm_handoff),
+    )
+    if recomputed != persisted:
+        raise ValueError("candidate labeling derived evidence recomputation drift")
+
+    _validate_comparison_revision(revision, repo_root)
+    if load_candidate_labeling_comparison(root, verify_sources=False) != comparison:
+        raise ValueError("candidate labeling comparison changed during validation")
+    return comparison
+
+
 def _comparison_binding(
     comparison: LoadedCandidateLabelingComparison,
 ) -> dict[str, Any]:
@@ -782,13 +1098,13 @@ def run_candidate_labeling_renderer(
     if output_root.exists():
         raise FileExistsError(f"refusing to replace renderer artifact: {output_root}")
     revision = collect_candidate_labeling_renderer_revision(repo_root)
-    comparison = load_candidate_labeling_comparison(
-        comparison_root, verify_sources=True
+    comparison = _load_candidate_labeling_comparison_portably(
+        comparison_root, repo_root=repo_root
     )
     selection, prompts, plan = build_candidate_labeling_renderer(comparison)
 
-    final_comparison = load_candidate_labeling_comparison(
-        comparison_root, verify_sources=True
+    final_comparison = _load_candidate_labeling_comparison_portably(
+        comparison_root, repo_root=repo_root
     )
     if (
         dict(final_comparison.manifest) != dict(comparison.manifest)
@@ -1332,8 +1648,8 @@ def load_candidate_labeling_renderer(
         if not isinstance(source, Mapping):
             raise TypeError("candidate labeling renderer source binding is invalid")
         source_manifest_path = Path(str(source["manifest_path"]))
-        comparison = load_candidate_labeling_comparison(
-            Path(str(source["path"])), verify_sources=True
+        comparison = _load_candidate_labeling_comparison_portably(
+            Path(str(source["path"])), repo_root=_current_repository_root()
         )
         if (
             comparison.manifest["manifest_sha256"] != source["manifest_sha256"]

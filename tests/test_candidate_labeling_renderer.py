@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ from circuits.analysis.bonafide.candidate_labeling_renderer import (
     MANIFEST_FILE,
     STAGE_PLAN_FILE,
     WITNESS_SELECTION_FILE,
+    _validate_recorded_revision_portably,
     build_candidate_labeling_renderer,
     build_generation_prompts,
     load_candidate_labeling_renderer,
@@ -23,6 +26,49 @@ from circuits.analysis.bonafide.candidate_labeling_renderer import (
     select_generation_witnesses,
 )
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
+
+
+def _git(repo: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _make_revision_fixture(
+    tmp_path: Path,
+) -> tuple[Path, dict[str, str], dict[str, object]]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    repo = tmp_path / "current-repository"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "candidate-renderer-test@example.invalid")
+    _git(repo, "config", "user.name", "Candidate Renderer Test")
+    bindings = {"runtime": "runtime.py", "protocol": "docs/protocol.md"}
+    (repo / "docs").mkdir()
+    (repo / "runtime.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (repo / "docs" / "protocol.md").write_text("frozen\n", encoding="utf-8")
+    _git(repo, "add", "--", *bindings.values())
+    _git(repo, "commit", "-m", "freeze sources")
+    revision: dict[str, object] = {
+        "repo_root": str((tmp_path / "deleted-recorded-worktree").resolve()),
+        "git_commit": _git(repo, "rev-parse", "HEAD"),
+        "git_tree": _git(repo, "rev-parse", "HEAD^{tree}"),
+        "tracked_worktree_clean": True,
+        "tracked_status_sha256": hashlib.sha256(b"").hexdigest(),
+        "files": [
+            {
+                "role": role,
+                "path": relative,
+                "sha256": file_sha256(repo / relative),
+            }
+            for role, relative in bindings.items()
+        ],
+    }
+    return repo, bindings, revision
 
 
 def _generation_row(cluster: int, index: int) -> dict:
@@ -263,6 +309,89 @@ def test_candidate_renderer_rejects_rank_vector_and_clipping_drift(
         )
 
 
+def test_portable_revision_uses_git_objects_after_recorded_worktree_is_gone(
+    tmp_path: Path,
+) -> None:
+    repo, bindings, revision = _make_revision_fixture(tmp_path)
+
+    _validate_recorded_revision_portably(
+        revision,
+        source_bindings=bindings,
+        runtime_paths={"runtime": repo / "runtime.py"},
+        current_repo_root=repo,
+        label="test revision",
+    )
+
+
+def test_portable_revision_rejects_runtime_blob_and_tree_drift(
+    tmp_path: Path,
+) -> None:
+    repo, bindings, revision = _make_revision_fixture(tmp_path)
+    (repo / "runtime.py").write_text("VALUE = 2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="current runtime source mismatch: runtime"):
+        _validate_recorded_revision_portably(
+            revision,
+            source_bindings=bindings,
+            runtime_paths={"runtime": repo / "runtime.py"},
+            current_repo_root=repo,
+            label="test revision",
+        )
+
+    (repo / "runtime.py").write_text("VALUE = 1\n", encoding="utf-8")
+    files = revision["files"]
+    assert isinstance(files, list)
+    files[0]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="recorded source/blob mismatch: runtime"):
+        _validate_recorded_revision_portably(
+            revision,
+            source_bindings=bindings,
+            runtime_paths={"runtime": repo / "runtime.py"},
+            current_repo_root=repo,
+            label="test revision",
+        )
+
+    _, _, revision = _make_revision_fixture(tmp_path / "tree-case")
+    revision["git_tree"] = "0" * 40
+    tree_repo = tmp_path / "tree-case" / "current-repository"
+    with pytest.raises(ValueError, match="recorded commit/tree mismatch"):
+        _validate_recorded_revision_portably(
+            revision,
+            source_bindings=bindings,
+            runtime_paths={"runtime": tree_repo / "runtime.py"},
+            current_repo_root=tree_repo,
+            label="test revision",
+        )
+
+
+def test_portable_revision_requires_exact_shape_and_ordered_inventory(
+    tmp_path: Path,
+) -> None:
+    repo, bindings, revision = _make_revision_fixture(tmp_path)
+    revision["unexpected"] = None
+    with pytest.raises(TypeError, match="revision shape"):
+        _validate_recorded_revision_portably(
+            revision,
+            source_bindings=bindings,
+            runtime_paths={"runtime": repo / "runtime.py"},
+            current_repo_root=repo,
+            label="test revision",
+        )
+
+    _, _, revision = _make_revision_fixture(tmp_path / "inventory-case")
+    inventory_repo = tmp_path / "inventory-case" / "current-repository"
+    files = revision["files"]
+    assert isinstance(files, list)
+    revision["files"] = list(reversed(files))
+    with pytest.raises(ValueError, match="role/path inventory drift"):
+        _validate_recorded_revision_portably(
+            revision,
+            source_bindings=bindings,
+            runtime_paths={"runtime": inventory_repo / "runtime.py"},
+            current_repo_root=inventory_repo,
+            label="test revision",
+        )
+
+
 def _refresh_manifest_file_binding(output: Path, filename: str) -> None:
     changed_path = output / filename
     manifest_path = output / MANIFEST_FILE
@@ -339,15 +468,20 @@ def test_renderer_publishes_no_overwrite_and_loader_detects_tampering(
         "collect_candidate_labeling_renderer_revision",
         lambda repo_root: revision,
     )
-    source_verifications: list[bool] = []
+    monkeypatch.setattr(
+        "circuits.analysis.bonafide.candidate_labeling_renderer."
+        "_current_repository_root",
+        lambda: tmp_path,
+    )
+    source_roots: list[Path] = []
 
-    def load_comparison(root, verify_sources=True):
-        source_verifications.append(verify_sources)
+    def load_comparison(root, *, repo_root, tokenizer=None):
+        source_roots.append(Path(repo_root))
         return comparison
 
     monkeypatch.setattr(
         "circuits.analysis.bonafide.candidate_labeling_renderer."
-        "load_candidate_labeling_comparison",
+        "_load_candidate_labeling_comparison_portably",
         load_comparison,
     )
     output = tmp_path / "renderer"
@@ -363,7 +497,7 @@ def test_renderer_publishes_no_overwrite_and_loader_detects_tampering(
         load_candidate_labeling_renderer(output, verify_sources=True).manifest
         == manifest
     )
-    assert source_verifications and all(source_verifications)
+    assert source_roots and all(path == tmp_path for path in source_roots)
     core = dict(manifest)
     assert core.pop("manifest_sha256") == canonical_sha256(core)
     with pytest.raises(FileExistsError, match="refusing to replace"):
