@@ -130,3 +130,9 @@ useful bounded evidence about candidate-specific contribution profiles, but the
 candidate view did not add the predeclared reproducible trajectory information
 beyond width-one attribution. Under the frozen execution plan, do not promote
 this design to the full 2,594-position matched top-five corpus.
+
+A later checksum-bound post-hoc analysis found a narrower positive result:
+the combined candidate-profile view provides above-null standalone trajectory
+signal, but did not demonstrate above-null width-one-missing rescue or useful
+calibrated backoff. This does not change the C2 decision. See
+`docs/CANDIDATE_UNION_C2_SALVAGE_RESULTS.md`.
