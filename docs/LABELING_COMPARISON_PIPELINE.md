@@ -266,3 +266,35 @@ full-run OpenAI guardrail leaves ample contingency. Historical telemetry is not 
 
 The Qwen pilot root retains the identical cluster selection and waits for its separately managed
 endpoint.
+
+### Width-one-aware v2 pilot
+
+Manual inspection of the first hosted pilot found a corpus-context confound: 11 of 12 Terra labels
+and all 12 Opus labels named hint, injection, security, or audit context even though that context
+is shared by every frozen exemplar and therefore is not cluster-discriminative. Several localized
+attribution peaks instead fell on generic reasoning transitions, factual lookup, verification, or
+named-entity continuation. Fluent JSON and model-reported confidence were consequently not treated
+as label quality.
+
+The additive `width_one_v2` prompt policy leaves the v1 recipes and artifacts unchanged. It:
+
+- states that each witness is an independent single-observed-target, width-one attribution trace;
+- records that contribution evidence is shallow and provides neither a non-degenerate contribution
+  profile nor a top-k target comparison;
+- treats hint/security/audit wording and step-by-step style alone as shared corpus background;
+  localized attribution on those spans may support only a corpus-bounded association, not
+  selectivity or generality without matched controls;
+- requires candidate outputs to separate localized evidence, background/confounds, and limitations;
+- gives the final summarizer the exact highlighted `generation` and `selection_scoring` witnesses,
+  with their profile and score hashes, while excluding `audit` witnesses;
+- permits an explicit `insufficient_evidence` result and raises summary output limits to 1,200
+  tokens;
+- writes a deterministic post-run quality bundle in which non-positive or nonfinite selection
+  scores and model-declared insufficiency fail closed, while every remaining label is
+  `review_required`, never automatically accepted;
+- records audit correlation separately for evaluation and never uses it to rewrite or accept a
+  label.
+
+The rerun uses explicit cluster IDs rather than recomputing a size-limited sample: primary
+`0, 12, 24, 38, 50, 62` and alternative `0, 17, 37, 54, 73, 94`. The v1 pilot tree remains an
+immutable comparison predecessor.

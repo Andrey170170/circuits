@@ -2566,3 +2566,26 @@ and `$0.025834` for Terra, or `$0.03697294` for the OpenAI path. A maximum-outpu
 all 150 ready clusters is about `$0.68`, so the forward full-run OpenAI guardrail is `$1`.
 
 The identically selected Qwen recipe remains endpoint-gated.
+
+### 19.2 Width-one-aware labeling v2
+
+Human review of the 12-cluster v1 outputs found that the hosted summarizers often named the shared
+hinting/security corpus condition instead of the localized attribution pattern. This does not
+invalidate the frozen clustering or trace corpus, but it prevents the v1 labels from serving as an
+accepted production bundle.
+
+The v2 comparison is therefore a new provenance cohort over the same explicit 12 cluster IDs. It
+does not reinterpret width-one evidence as the fuller contribution view used by upstream ADAG:
+each source artifact targets one observed response token, contribution evidence remains shallow,
+and there is no non-degenerate top-k target comparison. Candidate and summary prompts require
+localized attribution evidence, separate universal corpus context, and allow
+`insufficient_evidence`. Localized activity on hint/security spans may support a corpus-bounded
+association, but shared context alone cannot establish selectivity or generality. Summaries receive
+exact generation and selection-scoring witnesses but
+never audit witnesses. Profile and candidate-score hashes are recorded in the summary-stage
+manifest.
+
+The deterministic v2 quality report has no automatic acceptance state. A non-positive/nonfinite
+best selection correlation or model-declared insufficiency yields `insufficient_evidence`; every
+other label is `review_required`. Audit correlation is reported independently and cannot revise,
+accept, or reject the generated label. The original v1 artifacts and telemetry remain unchanged.

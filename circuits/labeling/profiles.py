@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import pandas as pd
 
@@ -23,7 +23,9 @@ class ClusterProfile:
     record: ActivationRecord
 
 
-def load_cluster_members(assignments_path: Path) -> dict[int, dict[tuple[int, int], list[int]]]:
+def load_cluster_members(
+    assignments_path: Path,
+) -> dict[int, dict[tuple[int, int], list[int]]]:
     frame = pd.read_parquet(
         assignments_path,
         columns=["layer", "neuron_index", "polarity", "assigned", "cluster_id"],
@@ -98,9 +100,7 @@ def build_cluster_profile(
         raise ValueError(
             f"cluster has no matched signed bases in trace {exemplar['trace_unit_id']}"
         )
-    activations = [
-        sum(values) / len(maps) for values in zip(*maps, strict=True)
-    ]
+    activations = [sum(values) / len(maps) for values in zip(*maps, strict=True)]
     return ClusterProfile(
         trace_unit_id=str(exemplar["trace_unit_id"]),
         family_partition=str(exemplar["family_partition"]),
@@ -133,10 +133,9 @@ def build_partition_profiles(
     ]
 
 
-def render_highlighted_profile(
-    profile: ClusterProfile, *, max_highlights: int = 16
+def render_highlighted_record(
+    record: ActivationRecord, *, max_highlights: int = 16
 ) -> str:
-    record = profile.record
     ranked = sorted(
         range(len(record.activations)),
         key=lambda index: (-abs(record.activations[index]), index),
@@ -154,6 +153,12 @@ def render_highlighted_profile(
         else:
             parts.append(token)
     return "".join(parts)
+
+
+def render_highlighted_profile(
+    profile: ClusterProfile, *, max_highlights: int = 16
+) -> str:
+    return render_highlighted_record(profile.record, max_highlights=max_highlights)
 
 
 def retokenize_for_simulator(
@@ -183,8 +188,7 @@ def retokenize_for_simulator(
             mapped.append(0.0)
             continue
         while (
-            source_index < len(source_spans)
-            and source_spans[source_index][1] <= start
+            source_index < len(source_spans) and source_spans[source_index][1] <= start
         ):
             source_index += 1
         numerator = 0.0

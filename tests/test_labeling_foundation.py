@@ -1,26 +1,59 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from circuits.labeling.config import load_recipe
+from circuits.labeling.config import LabelingRecipe, load_recipe
 from circuits.labeling.pricing import estimate_cost, load_price_snapshot
 from circuits.labeling.schema import Usage
 
 CONFIG_ROOT = Path("scripts/bonafide/configs/labeling")
 
 
-@pytest.mark.parametrize("name", ["qwen-only.json", "openai.json", "anthropic.json"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "qwen-only.json",
+        "openai.json",
+        "anthropic.json",
+        "qwen-only-width-one-v2.json",
+        "openai-width-one-v2.json",
+        "anthropic-width-one-v2.json",
+    ],
+)
 def test_comparison_recipes_are_valid(name: str) -> None:
     recipe = load_recipe(CONFIG_ROOT / name)
     assert recipe.candidate_samples == 5
     assert recipe.scorer.backend == "transluce_finetuned"
     assert recipe.scorer.model == "Transluce/llama_8b_simulator"
-    assert (
-        recipe.scorer.model_revision
-        == "63919a3fe41f88d91ef764213ae9018e1f8a578e"
-    )
+    assert recipe.scorer.model_revision == "63919a3fe41f88d91ef764213ae9018e1f8a578e"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "qwen-only-width-one-v2.json",
+        "openai-width-one-v2.json",
+        "anthropic-width-one-v2.json",
+    ],
+)
+def test_v2_recipes_enable_width_one_policy_and_safe_summary_budget(name: str) -> None:
+    recipe = load_recipe(CONFIG_ROOT / name)
+    assert recipe.prompt_policy == "width_one_v2"
+    assert recipe.recipe_id.endswith("width-one-v2")
+    assert recipe.cluster_summarizer.max_output_tokens >= 1200
+    for role in (recipe.candidate_generator, recipe.cluster_summarizer):
+        if role.provider in {"openai", "anthropic"} and role.reasoning:
+            assert role.temperature is None
+
+
+def test_v2_recipe_rejects_short_summary_budget() -> None:
+    raw = json.loads((CONFIG_ROOT / "openai-width-one-v2.json").read_text())
+    raw["cluster_summarizer"]["max_output_tokens"] = 1199
+    with pytest.raises(ValueError, match="at least 1200"):
+        LabelingRecipe.model_validate(raw)
 
 
 def test_recipes_keep_local_scorer_fixed() -> None:

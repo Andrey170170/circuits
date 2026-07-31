@@ -232,6 +232,7 @@ def test_retry_failed_archives_original_and_commits_live_response(
         / "cluster_summary"
         / "retries"
         / request.request_id
+        / "attempt-0001"
     )
     assert file_sha256(archive / "original-result.json") == original_result_sha256
     assert file_sha256(archive / "original-telemetry.json") == original_telemetry_sha256
@@ -260,6 +261,53 @@ def test_retry_failed_archives_original_and_commits_live_response(
         canonical_telemetry["logical_request_sha256"]
         == retry_manifest["retry"]["logical_request_sha256"]
     )
+
+
+class _InvalidBackend:
+    endpoint_identity = "fake://invalid-retry"
+
+    async def generate(self, request: GenerationRequest) -> GenerationResult:
+        return GenerationResult(
+            request_id=request.request_id,
+            provider_request_id="invalid-response",
+            provider=request.provider,
+            model_requested=request.model,
+            raw_text="{",
+            parse_status="invalid_json",
+        )
+
+
+def test_invalid_retry_is_versioned_and_does_not_replace_canonical(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request = _build_run(tmp_path)
+    result_path = tmp_path / "results/cluster_summary" / f"{request.request_id}.json"
+    original_hash = file_sha256(result_path)
+    monkeypatch.setattr(
+        "circuits.labeling.runtime.collect_code_revision",
+        lambda: {"git_commit": "test-commit", "git_dirty": False},
+    )
+    monkeypatch.setattr(
+        "circuits.labeling.runtime.create_backend", lambda config: _InvalidBackend()
+    )
+    for _ in range(2):
+        counts = asyncio.run(
+            retry_failed_generation(
+                run_root=tmp_path,
+                stage="cluster_summary",
+                request_ids={request.request_id},
+                max_output_tokens=600,
+            )
+        )
+        assert counts == {"planned": 1, "completed": 0, "failed": 1}
+        assert file_sha256(result_path) == original_hash
+    retry_root = (
+        tmp_path / "provider_batches/cluster_summary/retries" / request.request_id
+    )
+    assert sorted(path.name for path in retry_root.glob("attempt-*")) == [
+        "attempt-0001",
+        "attempt-0002",
+    ]
 
 
 def test_retry_failed_refuses_success_without_creating_backend(

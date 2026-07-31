@@ -20,11 +20,11 @@ from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.labeling.api import create_backend
 from circuits.labeling.config import LabelingRecipe, ModelRoleConfig, load_recipe
 from circuits.labeling.evidence import (
-    CANDIDATE_PROMPT_VERSION,
-    SUMMARY_PROMPT_VERSION,
-    evidence_identity,
     candidate_messages,
+    evidence_identity,
     load_frozen_bundle,
+    prompt_versions,
+    render_persisted_partition_witnesses,
     select_cluster_ids,
     summary_messages,
 )
@@ -35,6 +35,7 @@ from circuits.labeling.profiles import (
     load_cluster_members,
     render_highlighted_profile,
 )
+from circuits.labeling.provenance import validate_local_score_artifact
 from circuits.labeling.schema import (
     GenerationRequest,
     GenerationResult,
@@ -152,6 +153,31 @@ def allocate_cluster_limit(
     }
 
 
+def validate_explicit_cluster_selection(
+    states: Iterable[str],
+    explicit_clusters: dict[str, list[int]] | None,
+    cluster_limit: int | None,
+) -> None:
+    chosen = set(states)
+    explicit = set(explicit_clusters or {})
+    unselected = sorted(explicit - chosen)
+    if unselected:
+        raise ValueError(
+            "explicit clusters were provided for unselected states: "
+            + ", ".join(unselected)
+        )
+    if explicit and cluster_limit is not None:
+        raise ValueError(
+            "cluster limit cannot be combined with explicit cluster selections"
+        )
+    missing = sorted(chosen - explicit) if explicit else []
+    if missing:
+        raise ValueError(
+            "explicit cluster selection must cover every selected state; missing: "
+            + ", ".join(missing)
+        )
+
+
 def prepare_candidate_run(
     *,
     frozen_root: Path,
@@ -176,6 +202,7 @@ def prepare_candidate_run(
     chosen_states = list(dict.fromkeys(states))
     if not chosen_states:
         raise ValueError("at least one state is required")
+    validate_explicit_cluster_selection(chosen_states, explicit_clusters, cluster_limit)
     limits = allocate_cluster_limit(chosen_states, cluster_limit)
     selected: dict[str, list[int]] = {}
     for name in chosen_states:
@@ -259,8 +286,11 @@ def prepare_candidate_run(
                     for profile in partition_profiles["generation"]
                 }
                 messages, prompt_sha256 = candidate_messages(
-                    row, highlighted_sequences=highlighted
+                    row,
+                    highlighted_sequences=highlighted,
+                    prompt_policy=recipe.prompt_policy,
                 )
+                candidate_prompt_version, _ = prompt_versions(recipe.prompt_policy)
                 for sample_index in range(recipe.candidate_samples):
                     request_identity = {
                         "run_id": resolved_run_id,
@@ -290,7 +320,7 @@ def prepare_candidate_run(
                             temperature=role.temperature,
                             reasoning=role.reasoning,
                             provider_parameters=role.provider_parameters,
-                            prompt_template_version=CANDIDATE_PROMPT_VERSION,
+                            prompt_template_version=candidate_prompt_version,
                             prompt_sha256=prompt_sha256,
                             evidence_sha256=evidence_identity(row),
                             source_manifest_sha256=bundle.manifest["manifest_sha256"],
@@ -332,6 +362,13 @@ def prepare_candidate_run(
             "profile_files": profile_files,
             "holdout_opened": False,
         }
+        if recipe.prompt_policy == "width_one_v2":
+            manifest["evidence_limitations"] = {
+                "trace_scope": "single_target_width_one",
+                "contribution_evidence": "shallow",
+                "non_degenerate_contribution_comparison": False,
+                "top_k_target_comparison": False,
+            }
         manifest["manifest_sha256"] = canonical_sha256(manifest)
         atomic_write_json(staging / "manifest.json", manifest)
         output_root.parent.mkdir(parents=True, exist_ok=True)
@@ -390,6 +427,8 @@ def prepare_summary_stage(
     bundle = load_frozen_bundle(Path(manifest["source_bundle_path"]))
     role = recipe.cluster_summarizer
     requests: list[GenerationRequest] = []
+    v2_inputs: list[dict[str, Any]] = []
+    candidate_requests = load_stage_requests(run_root, "candidate_generation")
     for state, cluster_ids in manifest["selected_clusters"].items():
         for raw_cluster_id in cluster_ids:
             cluster_id = int(raw_cluster_id)
@@ -403,11 +442,105 @@ def prepare_summary_stage(
             if not score_path.is_file():
                 raise ValueError(f"candidate score is missing: {score_path}")
             score_value = json.loads(score_path.read_text(encoding="utf-8"))
-            scored_candidates = score_value["scores"]
-            row = bundle.states[state].evidence[cluster_id]
-            messages, prompt_sha256 = summary_messages(
-                row, scored_candidates=scored_candidates
+            parsed_candidates: dict[str, dict[str, Any]] = {}
+            for candidate_request in candidate_requests:
+                if (
+                    candidate_request.state != state
+                    or candidate_request.cluster_id != cluster_id
+                ):
+                    continue
+                result_path = (
+                    run_root
+                    / "results"
+                    / "candidate_generation"
+                    / f"{candidate_request.request_id}.json"
+                )
+                if not result_path.is_file():
+                    raise ValueError(f"candidate result is missing: {result_path}")
+                candidate_result = GenerationResult.model_validate_json(
+                    result_path.read_text(encoding="utf-8")
+                )
+                if candidate_result.request_id != candidate_request.request_id:
+                    raise ValueError(
+                        f"candidate result request ID mismatch: {result_path}"
+                    )
+                if (
+                    candidate_result.parse_status == "success"
+                    and isinstance(candidate_result.parsed, dict)
+                    and isinstance(candidate_result.parsed.get("description"), str)
+                    and candidate_result.parsed["description"].strip()
+                ):
+                    parsed_candidates[candidate_request.request_id] = dict(
+                        candidate_result.parsed
+                    )
+            scored_candidates = validate_local_score_artifact(
+                score_value,
+                recipe=recipe,
+                run_id=manifest["run_id"],
+                phase="candidate_selection",
+                state=state,
+                cluster_id=cluster_id,
+                expected_request_ids=set(parsed_candidates),
             )
+            if recipe.prompt_policy == "width_one_v2":
+                for scored in scored_candidates:
+                    request_id = scored["request_id"]
+                    if scored.get("candidate") != parsed_candidates[request_id]:
+                        raise ValueError(
+                            f"scored candidate payload mismatch: {state} cluster "
+                            f"{cluster_id} request {request_id}"
+                        )
+            row = bundle.states[state].evidence[cluster_id]
+            highlighted_witnesses: dict[str, str] | None = None
+            if recipe.prompt_policy == "width_one_v2":
+                profile_relative = (
+                    Path("profiles") / state / f"cluster-{cluster_id:04d}.json"
+                )
+                profile_path = run_root / profile_relative
+                profile_entry = next(
+                    (
+                        item
+                        for item in manifest["profile_files"]
+                        if item["path"] == profile_relative.as_posix()
+                    ),
+                    None,
+                )
+                if (
+                    profile_entry is None
+                    or file_sha256(profile_path) != profile_entry["sha256"]
+                ):
+                    raise ValueError(f"profile hash mismatch: {profile_path}")
+                profile_payload = json.loads(profile_path.read_text(encoding="utf-8"))
+                if profile_payload.get("evidence_sha256") != evidence_identity(row):
+                    raise ValueError(
+                        f"profile evidence identity mismatch: {profile_path}"
+                    )
+                highlighted_witnesses = {
+                    partition: render_persisted_partition_witnesses(
+                        row, profile_payload, partition=partition
+                    )
+                    for partition in ("generation", "selection_scoring")
+                }
+                v2_inputs.append(
+                    {
+                        "state": state,
+                        "cluster_id": cluster_id,
+                        "profile_path": profile_relative.as_posix(),
+                        "profile_sha256": profile_entry["sha256"],
+                        "candidate_score_path": score_path.relative_to(
+                            run_root
+                        ).as_posix(),
+                        "candidate_score_sha256": file_sha256(score_path),
+                        "witness_partitions": ["generation", "selection_scoring"],
+                    }
+                )
+            messages, prompt_sha256 = summary_messages(
+                row,
+                scored_candidates=scored_candidates,
+                prompt_policy=recipe.prompt_policy,
+                highlighted_witnesses=highlighted_witnesses,
+            )
+            _, summary_prompt_version = prompt_versions(recipe.prompt_policy)
             request_identity = {
                 "run_id": manifest["run_id"],
                 "recipe_id": recipe.recipe_id,
@@ -433,7 +566,7 @@ def prepare_summary_stage(
                     temperature=role.temperature,
                     reasoning=role.reasoning,
                     provider_parameters=role.provider_parameters,
-                    prompt_template_version=SUMMARY_PROMPT_VERSION,
+                    prompt_template_version=summary_prompt_version,
                     prompt_sha256=prompt_sha256,
                     evidence_sha256=evidence_identity(row),
                     source_manifest_sha256=manifest["source_manifest_sha256"],
@@ -457,6 +590,15 @@ def prepare_summary_stage(
             "transport": transport_override or role.transport,
         },
     }
+    if recipe.prompt_policy == "width_one_v2":
+        stage_manifest["evidence_inputs"] = v2_inputs
+        stage_manifest["evidence_limitations"] = {
+            "trace_scope": "single_target_width_one",
+            "contribution_evidence": "shallow",
+            "non_degenerate_contribution_comparison": False,
+            "top_k_target_comparison": False,
+            "excluded_witness_partitions": ["audit"],
+        }
     stage_manifest["manifest_sha256"] = canonical_sha256(stage_manifest)
     atomic_write_json(
         run_root / "stages" / "cluster_summary" / "manifest.json",
@@ -678,10 +820,16 @@ def _archive_failed_output(
     code_revision: dict[str, Any],
 ) -> tuple[Path, dict[str, Any]]:
     retry_parent = run_root / "provider_batches" / request.stage / "retries"
-    retry_dir = retry_parent / request.request_id
+    request_retry_root = retry_parent / request.request_id
+    request_retry_root.mkdir(parents=True, exist_ok=True)
+    attempts = sorted(request_retry_root.glob("attempt-[0-9][0-9][0-9][0-9]"))
+    attempt_number = len(attempts) + 1
+    retry_dir = request_retry_root / f"attempt-{attempt_number:04d}"
     if retry_dir.exists():
-        raise FileExistsError(f"retry archive already exists: {retry_dir}")
-    staging = retry_parent / f".{request.request_id}.tmp-{uuid.uuid4().hex}"
+        raise FileExistsError(f"retry attempt already exists: {retry_dir}")
+    staging = (
+        request_retry_root / f".attempt-{attempt_number:04d}.tmp-{uuid.uuid4().hex}"
+    )
     staging.mkdir(parents=True)
     try:
         original_result_path = staging / "original-result.json"
@@ -701,8 +849,9 @@ def _archive_failed_output(
             retry_request.model_dump(mode="json"),
         )
         retry_manifest: dict[str, Any] = {
-            "schema_version": "adag.labeling.retry.v1",
+            "schema_version": "adag.labeling.retry.v2",
             "request_id": request.request_id,
+            "attempt_number": attempt_number,
             "run_id": request.run_id,
             "stage": request.stage,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -738,7 +887,6 @@ def _archive_failed_output(
             retry_manifest,
             overwrite=False,
         )
-        retry_parent.mkdir(parents=True, exist_ok=True)
         os.replace(staging, retry_dir)
         return retry_dir, retry_manifest
     except BaseException:
@@ -784,11 +932,6 @@ async def retry_failed_generation(
             run_root=run_root,
             request=request,
         )
-        retry_dir = (
-            run_root / "provider_batches" / stage / "retries" / request.request_id
-        )
-        if retry_dir.exists():
-            raise FileExistsError(f"retry archive already exists: {retry_dir}")
         retry_requests[request.request_id] = request.model_copy(
             update={
                 "transport": "live",
@@ -827,10 +970,7 @@ async def retry_failed_generation(
         retry_telemetry_path = retry_dir / "retry-telemetry.json"
         atomic_write_json(retry_result_path, result.model_dump(mode="json"))
         atomic_write_json(retry_telemetry_path, telemetry.model_dump(mode="json"))
-        response_obtained = (
-            result.provider_request_id is not None
-            and result.parse_status != "provider_error"
-        )
+        response_obtained = result.provider_request_id is not None
         retry_manifest["retry"].update(
             {
                 "provider_request_id": result.provider_request_id,
@@ -851,7 +991,15 @@ async def retry_failed_generation(
             retry_manifest,
             overwrite=True,
         )
-        if not response_obtained:
+        if not response_obtained or result.parse_status != "success":
+            retry_manifest["status"] = (
+                "response_invalid" if response_obtained else "no_provider_response"
+            )
+            _write_retry_manifest(
+                retry_dir / "manifest.json",
+                retry_manifest,
+                overwrite=True,
+            )
             counts["failed"] += 1
             return
 
@@ -892,8 +1040,6 @@ async def retry_failed_generation(
             overwrite=True,
         )
         counts["completed"] += 1
-        if result.parse_status != "success":
-            counts["failed"] += 1
 
     await asyncio.gather(*(run_one(request) for request in requests))
     return counts

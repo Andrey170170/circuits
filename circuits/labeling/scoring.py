@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import resource
 import socket
@@ -11,7 +12,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from circuits.descriptions.types import ActivationRecord
-from circuits.descriptions.vllm_backend import FinetunedSimulator, score_attr_explanations
+from circuits.descriptions.vllm_backend import (
+    FinetunedSimulator,
+    score_attr_explanations,
+)
 from circuits.labeling.config import LabelingRecipe
 from circuits.labeling.io import atomic_write_json
 from circuits.labeling.profiles import retokenize_for_simulator
@@ -56,26 +60,27 @@ def _load_records(
 
 def _candidate_texts(
     run_root: Path, state: str, cluster_id: int
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, Any]]]:
     requests = load_stage_requests(run_root, "candidate_generation")
-    values: list[tuple[str, str]] = []
+    values: list[tuple[str, str, dict[str, Any]]] = []
     for request in requests:
         if request.state != state or request.cluster_id != cluster_id:
             continue
         path = (
-            run_root
-            / "results"
-            / "candidate_generation"
-            / f"{request.request_id}.json"
+            run_root / "results" / "candidate_generation" / f"{request.request_id}.json"
         )
         if not path.is_file():
             raise ValueError(f"candidate result is missing: {path}")
         result = GenerationResult.model_validate_json(path.read_text(encoding="utf-8"))
+        if result.request_id != request.request_id:
+            raise ValueError(f"candidate result request ID mismatch: {path}")
         if result.parse_status != "success" or result.parsed is None:
             continue
         description = result.parsed.get("description")
         if isinstance(description, str) and description.strip():
-            values.append((request.request_id, description.strip()))
+            values.append(
+                (request.request_id, description.strip(), dict(result.parsed))
+            )
     return values
 
 
@@ -91,12 +96,26 @@ def _summary_texts(
         if not path.is_file():
             raise ValueError(f"summary result is missing: {path}")
         result = GenerationResult.model_validate_json(path.read_text(encoding="utf-8"))
+        if result.request_id != request.request_id:
+            raise ValueError(f"summary result request ID mismatch: {path}")
         if result.parse_status != "success" or result.parsed is None:
             continue
         label = result.parsed.get("label")
         if isinstance(label, str) and label.strip():
             values.append((request.request_id, label.strip()))
     return values
+
+
+def correlation_sort_key(item: dict[str, Any]) -> tuple[float, str]:
+    value = item.get("correlation")
+    correlation = (
+        float(value)
+        if isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        else float("-inf")
+    )
+    return correlation, str(item.get("request_id", ""))
 
 
 def score_run(
@@ -118,9 +137,15 @@ def score_run(
         if states is None or state in states
     }
     partition = "selection_scoring" if phase == "candidate_selection" else "audit"
-    output_name = "candidate_selection" if phase == "candidate_selection" else "summary_audit"
+    output_name = (
+        "candidate_selection" if phase == "candidate_selection" else "summary_audit"
+    )
     started = time.monotonic()
-    counts = {"planned": sum(len(values) for values in selected.values()), "completed": 0, "skipped": 0}
+    counts = {
+        "planned": sum(len(values) for values in selected.values()),
+        "completed": 0,
+        "skipped": 0,
+    }
 
     import torch
 
@@ -150,9 +175,14 @@ def score_run(
                 if output.exists():
                     counts["skipped"] += 1
                     continue
-                texts = (
+                candidate_outputs = (
                     _candidate_texts(run_root, state, cluster_id)
                     if phase == "candidate_selection"
+                    else None
+                )
+                texts = (
+                    [(request_id, text) for request_id, text, _ in candidate_outputs]
+                    if candidate_outputs is not None
                     else _summary_texts(run_root, state, cluster_id)
                 )
                 if not texts:
@@ -184,15 +214,18 @@ def score_run(
                     }
                     for (request_id, text), score in zip(texts, scored, strict=True)
                 ]
-                values.sort(
-                    key=lambda item: (
-                        item["correlation"]
-                        if item["correlation"] is not None
-                        else float("-inf"),
-                        item["request_id"],
-                    ),
-                    reverse=True,
-                )
+                if (
+                    phase == "candidate_selection"
+                    and recipe.prompt_policy == "width_one_v2"
+                ):
+                    assert candidate_outputs is not None
+                    by_request = {
+                        request_id: parsed
+                        for request_id, _, parsed in candidate_outputs
+                    }
+                    for value in values:
+                        value["candidate"] = by_request[value["request_id"]]
+                values.sort(key=correlation_sort_key, reverse=True)
                 atomic_write_json(
                     output,
                     {

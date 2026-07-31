@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pandas as pd
-
 from circuits.descriptions.types import ActivationRecord
-from circuits.labeling.evidence import candidate_messages, select_cluster_ids
+from circuits.labeling.evidence import (
+    candidate_messages,
+    render_persisted_partition_witnesses,
+    select_cluster_ids,
+    summary_messages,
+)
 from circuits.labeling.profiles import retokenize_for_simulator
 
 
@@ -33,7 +36,17 @@ def _row() -> dict:
                 "cluster_projection": {"absolute_attribution_mass": 0.2},
                 "prompt": "prompt",
                 "response": "response",
-            }
+            },
+            {
+                "trace_unit_id": "trace-2",
+                "family_partition": "selection_scoring",
+                "response_position": 4,
+                "target_token_text": " y",
+                "condition": {"diversity": {"hint_types": ["metadata"]}},
+                "cluster_projection": {"absolute_attribution_mass": 0.3},
+                "prompt": "selection prompt",
+                "response": "selection response",
+            },
         ],
     }
 
@@ -53,10 +66,88 @@ def test_candidate_prompt_is_deterministic_and_partition_safe() -> None:
     assert "audit" not in rendered
 
 
-def test_evenly_spaced_cluster_selection_uses_ready_clusters() -> None:
-    state = SimpleNamespace(
-        name="primary", ready_cluster_ids=[0, 1, 2, 4, 7, 9]
+def test_width_one_prompts_separate_background_and_use_exact_allowed_witnesses() -> (
+    None
+):
+    candidate, _ = candidate_messages(
+        _row(),
+        highlighted_sequences={"trace-1": "GENERATION_EXACT"},
+        prompt_policy="width_one_v2",
     )
+    candidate_text = "\n".join(message.content for message in candidate)
+    assert "single-target, width-one" in candidate_text
+    assert "top-k target comparison" in candidate_text
+    assert "corpus-bounded association" in candidate_text
+    assert "localized_evidence" in candidate_text
+
+    profile_payload = {
+        "partitions": {
+            "generation": [
+                {
+                    "trace_unit_id": "trace-1",
+                    "family_partition": "generation",
+                    "record": {
+                        "tokens": ["GEN", " exact"],
+                        "token_ids": [1, 2],
+                        "activations": [2.0, 0.1],
+                    },
+                }
+            ],
+            "selection_scoring": [
+                {
+                    "trace_unit_id": "trace-2",
+                    "family_partition": "selection_scoring",
+                    "record": {
+                        "tokens": ["SELECT", " exact"],
+                        "token_ids": [3, 4],
+                        "activations": [3.0, 0.2],
+                    },
+                }
+            ],
+            "audit": [{"trace_unit_id": "AUDIT_MUST_NOT_APPEAR"}],
+        }
+    }
+    witnesses = {
+        partition: render_persisted_partition_witnesses(
+            _row(), profile_payload, partition=partition
+        )
+        for partition in ("generation", "selection_scoring")
+    }
+    summary, _ = summary_messages(
+        _row(),
+        scored_candidates=[
+            {
+                "text": "candidate",
+                "correlation": 0.2,
+                "candidate": {
+                    "description": "candidate",
+                    "localized_evidence": "STRUCTURED_LOCALIZED_EVIDENCE",
+                    "background_or_confound": "shared context",
+                    "limitations": "width one",
+                },
+            }
+        ],
+        prompt_policy="width_one_v2",
+        highlighted_witnesses=witnesses,
+    )
+    summary_text = "\n".join(message.content for message in summary)
+    assert "GEN" in summary_text
+    assert "SELECT" in summary_text
+    assert "AUDIT_MUST_NOT_APPEAR" not in summary_text
+    assert "STRUCTURED_LOCALIZED_EVIDENCE" in summary_text
+    assert "provisional_label" in summary_text
+
+
+def test_legacy_prompt_policy_is_the_default() -> None:
+    implicit = candidate_messages(_row(), highlighted_sequences={"trace-1": "same"})
+    explicit = candidate_messages(
+        _row(), highlighted_sequences={"trace-1": "same"}, prompt_policy="legacy_v1"
+    )
+    assert implicit == explicit
+
+
+def test_evenly_spaced_cluster_selection_uses_ready_clusters() -> None:
+    state = SimpleNamespace(name="primary", ready_cluster_ids=[0, 1, 2, 4, 7, 9])
     assert select_cluster_ids(state, limit=3) == [0, 2, 9]
 
 

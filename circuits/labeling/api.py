@@ -18,7 +18,9 @@ from circuits.labeling.schema import GenerationRequest, GenerationResult, Usage
 logger = logging.getLogger(__name__)
 
 
-def parse_json_output(text: str, stage: str) -> tuple[dict[str, Any] | None, str]:
+def parse_json_output(
+    text: str, stage: str, prompt_template_version: str | None = None
+) -> tuple[dict[str, Any] | None, str]:
     stripped = text.strip()
     if not stripped:
         return None, "empty"
@@ -44,11 +46,51 @@ def parse_json_output(text: str, stage: str) -> tuple[dict[str, Any] | None, str
     }[stage]
     if any(key not in value for key in required):
         return None, "invalid_json"
+    if prompt_template_version == "bonafide-width-one-cluster-candidate-v2":
+        fields = (
+            "description",
+            "localized_evidence",
+            "background_or_confound",
+            "limitations",
+        )
+        if set(value) != set(fields) or any(
+            not isinstance(value.get(field), str) or not value[field].strip()
+            for field in fields
+        ):
+            return None, "invalid_json"
+    if prompt_template_version == "bonafide-width-one-cluster-summary-v2":
+        fields = ("label", "rationale", "background_or_confound", "limitations")
+        confidence = value.get("confidence")
+        status = value.get("status")
+        expected_fields = {*fields, "confidence", "status"}
+        if (
+            set(value) != expected_fields
+            or any(
+                not isinstance(value.get(field), str) or not value[field].strip()
+                for field in fields
+            )
+            or isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not 0 <= confidence <= 1
+            or len(value["label"].split()) > 12
+            or status not in {"provisional_label", "insufficient_evidence"}
+            or (
+                status == "insufficient_evidence"
+                and value.get("label") != "insufficient_evidence"
+            )
+            or (
+                status == "provisional_label"
+                and value.get("label") == "insufficient_evidence"
+            )
+        ):
+            return None, "invalid_json"
     return value, "success"
 
 
 def _hash_text(text: str | None) -> str | None:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest() if text is not None else None
+    return (
+        hashlib.sha256(text.encode("utf-8")).hexdigest() if text is not None else None
+    )
 
 
 def _get(value: Any, name: str, default: Any = None) -> Any:
@@ -58,7 +100,16 @@ def _get(value: Any, name: str, default: Any = None) -> Any:
 
 
 def _integer(value: Any) -> int | None:
-    return int(value) if isinstance(value, int) and not isinstance(value, bool) else None
+    return (
+        int(value) if isinstance(value, int) and not isinstance(value, bool) else None
+    )
+
+
+def openai_stop_reason(raw: Any) -> str | None:
+    """Prefer the actionable reason attached to an incomplete response."""
+
+    incomplete_details = _get(raw, "incomplete_details", {})
+    return _get(incomplete_details, "reason") or _get(raw, "status")
 
 
 def openai_usage(raw: Any) -> Usage:
@@ -154,7 +205,9 @@ class OpenAIResponsesBackend(AsyncGenerationBackend):
         key_name = config.api_key_env or "OPENAI_API_KEY"
         api_key = os.environ.get(key_name)
         if not api_key:
-            raise ValueError(f"required API key environment variable is missing: {key_name}")
+            raise ValueError(
+                f"required API key environment variable is missing: {key_name}"
+            )
         self.client = AsyncOpenAI(api_key=api_key, timeout=config.timeout_seconds)
 
     @property
@@ -174,7 +227,9 @@ class OpenAIResponsesBackend(AsyncGenerationBackend):
             kwargs["reasoning"] = request.reasoning
         response = await self.client.responses.create(**kwargs)
         text = response.output_text or ""
-        parsed, status = parse_json_output(text, request.stage)
+        parsed, status = parse_json_output(
+            text, request.stage, request.prompt_template_version
+        )
         return GenerationResult(
             request_id=request.request_id,
             provider="openai",
@@ -186,7 +241,7 @@ class OpenAIResponsesBackend(AsyncGenerationBackend):
             parsed=parsed,
             parse_status=status,  # type: ignore[arg-type]
             usage=openai_usage(response.usage),
-            stop_reason=response.status,
+            stop_reason=openai_stop_reason(response),
         )
 
 
@@ -200,7 +255,9 @@ class AnthropicMessagesBackend(AsyncGenerationBackend):
         key_name = config.api_key_env or "ANTHROPIC_API_KEY"
         api_key = os.environ.get(key_name)
         if not api_key:
-            raise ValueError(f"required API key environment variable is missing: {key_name}")
+            raise ValueError(
+                f"required API key environment variable is missing: {key_name}"
+            )
         self.client = AsyncAnthropic(api_key=api_key, timeout=config.timeout_seconds)
 
     @property
@@ -233,7 +290,9 @@ class AnthropicMessagesBackend(AsyncGenerationBackend):
             for block in response.content
             if _get(block, "type") == "text"
         )
-        parsed, status = parse_json_output(text, request.stage)
+        parsed, status = parse_json_output(
+            text, request.stage, request.prompt_template_version
+        )
         return GenerationResult(
             request_id=request.request_id,
             provider="anthropic",
@@ -286,12 +345,15 @@ class OpenAICompatibleBackend(AsyncGenerationBackend):
         response = await self.client.chat.completions.create(**kwargs)
         choice = response.choices[0]
         text = choice.message.content or ""
-        parsed, status = parse_json_output(text, request.stage)
+        parsed, status = parse_json_output(
+            text, request.stage, request.prompt_template_version
+        )
         usage = response.usage
         prompt_tokens = _integer(_get(usage, "prompt_tokens"))
-        cached = _integer(
-            _get(_get(usage, "prompt_tokens_details", {}), "cached_tokens")
-        ) or 0
+        cached = (
+            _integer(_get(_get(usage, "prompt_tokens_details", {}), "cached_tokens"))
+            or 0
+        )
         completion_tokens = _integer(_get(usage, "completion_tokens"))
         normalized = Usage(
             input_tokens=prompt_tokens,
@@ -333,12 +395,30 @@ class FakeBackend(AsyncGenerationBackend):
                     f"{request.cluster_id}, sample {request.sample_index}."
                 )
             }
+            if (
+                request.prompt_template_version
+                == "bonafide-width-one-cluster-candidate-v2"
+            ):
+                value.update(
+                    localized_evidence="Deterministic highlighted-token evidence.",
+                    background_or_confound="Shared corpus context is not localized evidence.",
+                    limitations="Single-target width-one attribution only.",
+                )
         else:
             value = {
                 "label": f"cluster-{request.cluster_id}",
                 "rationale": "Deterministic fake summary for pipeline validation.",
                 "confidence": 0.5,
             }
+            if (
+                request.prompt_template_version
+                == "bonafide-width-one-cluster-summary-v2"
+            ):
+                value.update(
+                    status="provisional_label",
+                    background_or_confound="Shared corpus context is excluded.",
+                    limitations="Single-target width-one attribution only.",
+                )
         text = json.dumps(value, sort_keys=True)
         input_tokens = sum(len(message.content.split()) for message in request.messages)
         return GenerationResult(

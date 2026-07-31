@@ -1,0 +1,29 @@
+{
+  "schema_version": "adag.labeling.recipe.v1",
+  "recipe_id": "qwen-only-width-one-v2",
+  "description": "Width-one-aware local Qwen generation and summarization with the fixed Transluce scorer.",
+  "prompt_policy": "width_one_v2",
+  "candidate_samples": 5,
+  "candidate_generator": {
+    "provider": "openai_compatible", "model": "Qwen/Qwen3.6-35B-A3B", "transport": "live",
+    "api_key_env": "QWEN_API_KEY", "base_url_env": "QWEN_BASE_URL",
+    "max_output_tokens": 700, "temperature": 0.8, "reasoning": {"enabled": false},
+    "concurrency": 16, "timeout_seconds": 180,
+    "retry": {"max_attempts": 3, "initial_backoff_seconds": 1, "max_backoff_seconds": 15}
+  },
+  "scorer": {
+    "backend": "transluce_finetuned", "model": "Transluce/llama_8b_simulator",
+    "model_revision": "63919a3fe41f88d91ef764213ae9018e1f8a578e", "gpu_index": 0,
+    "source_tokenizer": "Qwen/Qwen3-4B-Instruct-2507",
+    "source_tokenizer_revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+    "aggregate": "polarity_aligned_mean", "alignment": "character_overlap"
+  },
+  "cluster_summarizer": {
+    "provider": "openai_compatible", "model": "Qwen/Qwen3.6-35B-A3B", "transport": "live",
+    "api_key_env": "QWEN_API_KEY", "base_url_env": "QWEN_BASE_URL",
+    "max_output_tokens": 1200, "temperature": 0, "reasoning": {"enabled": false},
+    "concurrency": 16, "timeout_seconds": 240,
+    "retry": {"max_attempts": 3, "initial_backoff_seconds": 1, "max_backoff_seconds": 15}
+  },
+  "price_snapshot": "prices-2026-07-30.json"
+}

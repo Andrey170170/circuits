@@ -7,7 +7,12 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
-from circuits.labeling.api import anthropic_usage, openai_usage, parse_json_output
+from circuits.labeling.api import (
+    anthropic_usage,
+    openai_stop_reason,
+    openai_usage,
+    parse_json_output,
+)
 from circuits.labeling.config import ModelRoleConfig
 from circuits.labeling.io import atomic_write_json, atomic_write_jsonl
 from circuits.labeling.schema import GenerationRequest, GenerationResult
@@ -63,7 +68,9 @@ def prepare_batch_input(
     if len({request.model for request in values}) != 1:
         raise ValueError("one native batch input may target only one model")
     if provider == "openai":
-        atomic_write_jsonl(destination, (openai_batch_line(request) for request in values))
+        atomic_write_jsonl(
+            destination, (openai_batch_line(request) for request in values)
+        )
     elif provider == "anthropic":
         atomic_write_json(
             destination,
@@ -131,7 +138,9 @@ def retrieve_batch(
     )
     api_key = os.environ.get(key_name)
     if not api_key:
-        raise ValueError(f"required API key environment variable is missing: {key_name}")
+        raise ValueError(
+            f"required API key environment variable is missing: {key_name}"
+        )
     if provider == "openai":
         from openai import OpenAI
 
@@ -165,7 +174,7 @@ def collect_openai_batch(
     requests: dict[str, GenerationRequest],
     *,
     key_env: str = "OPENAI_API_KEY",
-) -> tuple[dict[str, GenerationResult], str]:
+) -> tuple[dict[str, GenerationResult], dict[str, dict[str, Any]]]:
     from openai import OpenAI
 
     api_key = os.environ.get(key_env)
@@ -173,21 +182,61 @@ def collect_openai_batch(
         raise ValueError(f"required API key environment variable is missing: {key_env}")
     client = OpenAI(api_key=api_key)
     batch = client.batches.retrieve(batch_id)
-    if batch.status != "completed" or not batch.output_file_id:
+    if batch.status != "completed" or not (
+        batch.output_file_id or batch.error_file_id
+    ):
         raise ValueError(f"OpenAI batch is not collectable: status={batch.status!r}")
-    content = client.files.content(batch.output_file_id).text
     results: dict[str, GenerationResult] = {}
-    for line in content.splitlines():
-        if not line.strip():
+    raw_files: dict[str, dict[str, Any]] = {}
+    provider_files = (
+        ("output", batch.output_file_id),
+        ("error", batch.error_file_id),
+    )
+    for source, file_id in provider_files:
+        if not file_id:
             continue
-        row = json.loads(line)
-        request_id = row.get("custom_id")
-        if request_id not in requests:
-            raise ValueError(f"batch output contains unknown custom_id: {request_id!r}")
-        if request_id in results:
-            raise ValueError(f"batch output repeats custom_id: {request_id!r}")
-        results[request_id] = parse_openai_batch_row(row, requests[request_id])
-    return results, content
+        content = _openai_file_bytes(client.files.content(file_id))
+        raw_files[source] = {"file_id": file_id, "content": content}
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"OpenAI batch {source} file is not valid UTF-8: {file_id!r}"
+            ) from error
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"OpenAI batch {source} file has invalid JSON on line "
+                    f"{line_number}"
+                ) from error
+            request_id = row.get("custom_id")
+            if request_id not in requests:
+                raise ValueError(
+                    f"OpenAI batch {source} file contains unknown custom_id: "
+                    f"{request_id!r}"
+                )
+            if request_id in results:
+                raise ValueError(
+                    "OpenAI batch files repeat custom_id across their union: "
+                    f"{request_id!r}"
+                )
+            request = requests[request_id]
+            results[request_id] = (
+                parse_openai_batch_error_row(row, request)
+                if source == "error"
+                else parse_openai_batch_row(row, request)
+            )
+    missing = sorted(set(requests) - set(results))
+    if missing:
+        raise ValueError(
+            "OpenAI batch output/error file union omitted request results: "
+            + ", ".join(missing)
+        )
+    return results, raw_files
 
 
 def collect_anthropic_batch(
@@ -235,7 +284,9 @@ def parse_openai_batch_row(
         )
     body = response["body"]
     text = _openai_response_text(body)
-    parsed, status = parse_json_output(text, request.stage)
+    parsed, status = parse_json_output(
+        text, request.stage, request.prompt_template_version
+    )
     return GenerationResult(
         request_id=request.request_id,
         provider="openai",
@@ -247,7 +298,29 @@ def parse_openai_batch_row(
         parsed=parsed,
         parse_status=status,  # type: ignore[arg-type]
         usage=openai_usage(body.get("usage")),
-        stop_reason=body.get("status"),
+        stop_reason=openai_stop_reason(body),
+    )
+
+
+def parse_openai_batch_error_row(
+    row: dict[str, Any], request: GenerationRequest
+) -> GenerationResult:
+    """Represent every error-file row as an explicit failed request result."""
+
+    error = row.get("error")
+    response = row.get("response") or {}
+    detail = error or response.get("body") or row
+    error_type = "batch_request_error"
+    if isinstance(error, dict) and error.get("code"):
+        error_type = f"batch_request_error:{error['code']}"
+    return GenerationResult(
+        request_id=request.request_id,
+        provider_request_id=response.get("request_id"),
+        provider="openai",
+        model_requested=request.model,
+        parse_status="provider_error",
+        error_type=error_type,
+        error_message=json.dumps(detail, sort_keys=True)[:2000],
     )
 
 
@@ -266,9 +339,13 @@ def parse_anthropic_batch_result(
         )
     message = result.message
     text = "".join(
-        block.text for block in message.content if getattr(block, "type", None) == "text"
+        block.text
+        for block in message.content
+        if getattr(block, "type", None) == "text"
     )
-    parsed, status = parse_json_output(text, request.stage)
+    parsed, status = parse_json_output(
+        text, request.stage, request.prompt_template_version
+    )
     return GenerationResult(
         request_id=request.request_id,
         provider="anthropic",
@@ -299,3 +376,12 @@ def _sha256(text: str) -> str:
     import hashlib
 
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _openai_file_bytes(value: Any) -> bytes:
+    content = value.content
+    if isinstance(content, bytes):
+        return content
+    if isinstance(content, bytearray):
+        return bytes(content)
+    raise TypeError("OpenAI file content response did not contain bytes")

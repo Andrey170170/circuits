@@ -4,25 +4,24 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.labeling.io import atomic_write_json, atomic_write_jsonl
 from circuits.labeling.runtime import (
     allocate_cluster_limit,
     execute_live,
     resolve_local_snapshot,
+    validate_explicit_cluster_selection,
 )
 from circuits.labeling.schema import ChatMessage, GenerationRequest
+from scripts.bonafide.labeling_pipeline import build_parser
 
 
 def test_resolve_local_snapshot_uses_exact_revision(
     monkeypatch, tmp_path: Path
 ) -> None:
-    snapshot = (
-        tmp_path
-        / "models--Qwen--Example"
-        / "snapshots"
-        / "012345"
-    )
+    snapshot = tmp_path / "models--Qwen--Example" / "snapshots" / "012345"
     snapshot.mkdir(parents=True)
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
     assert resolve_local_snapshot("Qwen/Example", "012345") == snapshot
@@ -33,6 +32,37 @@ def test_cluster_limit_is_total_across_states() -> None:
         "primary": 6,
         "alternative": 6,
     }
+
+
+def test_prepare_cli_accepts_exact_cluster_sets() -> None:
+    args = build_parser().parse_args(
+        [
+            "prepare-candidates",
+            "--frozen-root",
+            "/frozen",
+            "--recipe",
+            "/recipe.json",
+            "--output-root",
+            "/output",
+            "--primary-clusters",
+            "0",
+            "12",
+            "24",
+            "--alternative-clusters",
+            "0",
+            "17",
+            "37",
+        ]
+    )
+    assert args.primary_clusters == [0, 12, 24]
+    assert args.alternative_clusters == [0, 17, 37]
+
+
+def test_explicit_cluster_selection_must_cover_every_selected_state() -> None:
+    with pytest.raises(ValueError, match="missing: alternative"):
+        validate_explicit_cluster_selection(
+            ["primary", "alternative"], {"primary": [0, 12]}, None
+        )
     assert allocate_cluster_limit(["primary", "alternative"], 3) == {
         "primary": 2,
         "alternative": 1,

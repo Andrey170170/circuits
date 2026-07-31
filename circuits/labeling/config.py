@@ -39,7 +39,9 @@ class ModelRoleConfig(StrictModel):
         if self.provider == "openai_compatible" and not (
             self.base_url or self.base_url_env
         ):
-            raise ValueError("openai_compatible providers require base_url or base_url_env")
+            raise ValueError(
+                "openai_compatible providers require base_url or base_url_env"
+            )
         return self
 
 
@@ -58,11 +60,34 @@ class LabelingRecipe(StrictModel):
     schema_version: Literal["adag.labeling.recipe.v1"] = "adag.labeling.recipe.v1"
     recipe_id: str
     description: str
+    prompt_policy: Literal["legacy_v1", "width_one_v2"] = "legacy_v1"
     candidate_samples: int = Field(default=5, ge=1, le=20)
     candidate_generator: ModelRoleConfig
     scorer: LocalScorerConfig = Field(default_factory=LocalScorerConfig)
     cluster_summarizer: ModelRoleConfig
     price_snapshot: str
+
+    @model_validator(mode="after")
+    def validate_width_one_policy(self) -> "LabelingRecipe":
+        if self.prompt_policy != "width_one_v2":
+            return self
+        if self.cluster_summarizer.max_output_tokens < 1200:
+            raise ValueError(
+                "width_one_v2 summaries require at least 1200 output tokens"
+            )
+        for name, role in (
+            ("candidate_generator", self.candidate_generator),
+            ("cluster_summarizer", self.cluster_summarizer),
+        ):
+            if (
+                role.provider in {"openai", "anthropic"}
+                and role.reasoning
+                and role.temperature is not None
+            ):
+                raise ValueError(
+                    f"width_one_v2 {name} cannot set temperature with provider reasoning"
+                )
+        return self
 
 
 def load_recipe(path: Path) -> LabelingRecipe:

@@ -54,6 +54,24 @@ def atomic_write_jsonl(
         raise
 
 
+def atomic_write_bytes(path: Path, value: bytes, *, overwrite: bool = False) -> None:
+    """Atomically preserve an opaque provider artifact without re-encoding it."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"destination already exists: {path}")
+    temporary = path.parent / f".{path.name}.tmp-{uuid.uuid4().hex}"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     try:

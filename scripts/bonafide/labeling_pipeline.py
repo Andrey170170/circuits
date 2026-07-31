@@ -13,6 +13,7 @@ from circuits.labeling.runtime import (
     prepare_candidate_run,
     prepare_summary_stage,
     retry_failed_generation,
+    validate_explicit_cluster_selection,
 )
 
 
@@ -31,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=("primary", "alternative"),
     )
     prepare.add_argument("--cluster-limit", type=int)
+    prepare.add_argument("--primary-clusters", nargs="+", type=int)
+    prepare.add_argument("--alternative-clusters", nargs="+", type=int)
     prepare.add_argument("--run-id")
     prepare.add_argument("--transport-override", choices=("live", "native_batch"))
     prepare.add_argument("--allow-dirty", action="store_true")
@@ -69,6 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--run-root", type=Path, required=True)
     summary.add_argument("--transport-override", choices=("live", "native_batch"))
 
+    quality = subparsers.add_parser("assess-quality")
+    quality.add_argument("--run-root", type=Path, required=True)
+
     for command in ("prepare-batch", "submit-batch", "batch-status", "collect-batch"):
         batch = subparsers.add_parser(command)
         batch.add_argument("--run-root", type=Path, required=True)
@@ -83,12 +89,24 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "prepare-candidates":
+        explicit_clusters = {
+            state: values
+            for state, values in (
+                ("primary", args.primary_clusters),
+                ("alternative", args.alternative_clusters),
+            )
+            if values is not None
+        }
+        validate_explicit_cluster_selection(
+            args.states, explicit_clusters or None, args.cluster_limit
+        )
         manifest = prepare_candidate_run(
             frozen_root=args.frozen_root,
             recipe_path=args.recipe,
             output_root=args.output_root,
             states=args.states,
             cluster_limit=args.cluster_limit,
+            explicit_clusters=explicit_clusters or None,
             run_id=args.run_id,
             transport_override=args.transport_override,
             allow_dirty=args.allow_dirty,
@@ -160,6 +178,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             value = collect_native_batch(args.run_root, args.stage)
         print(json.dumps(value, sort_keys=True))
+        return 0
+    if args.command == "assess-quality":
+        from circuits.labeling.quality import assess_width_one_quality
+
+        value = assess_width_one_quality(run_root=args.run_root)
+        print(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "counts": value["counts"],
+                    "manifest_sha256": value["manifest_sha256"],
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     stage_manifest = prepare_summary_stage(
         run_root=args.run_root,

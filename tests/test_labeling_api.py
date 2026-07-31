@@ -42,6 +42,36 @@ def test_json_parser_accepts_fenced_output_and_rejects_wrong_schema() -> None:
     assert parse_json_output('{"label": "x"}', "cluster_summary")[1] == "invalid_json"
 
 
+def test_width_one_parser_requires_explicit_limit_and_status_fields() -> None:
+    assert (
+        parse_json_output(
+            '{"description":"x"}',
+            "candidate_generation",
+            "bonafide-width-one-cluster-candidate-v2",
+        )[1]
+        == "invalid_json"
+    )
+    parsed, status = parse_json_output(
+        '{"label":"x","rationale":"r","confidence":0.3,'
+        '"background_or_confound":"b","limitations":"l",'
+        '"status":"provisional_label"}',
+        "cluster_summary",
+        "bonafide-width-one-cluster-summary-v2",
+    )
+    assert status == "success"
+    assert parsed is not None and parsed["status"] == "provisional_label"
+    assert (
+        parse_json_output(
+            '{"label":"","rationale":"r","confidence":0.3,'
+            '"background_or_confound":"b","limitations":"l",'
+            '"status":"provisional_label"}',
+            "cluster_summary",
+            "bonafide-width-one-cluster-summary-v2",
+        )[1]
+        == "invalid_json"
+    )
+
+
 def test_openai_batch_line_targets_responses() -> None:
     line = openai_batch_line(_request("openai"))
     assert line["custom_id"] == "request-1"
