@@ -13,7 +13,7 @@ from circuits.labeling.quality import (
 
 
 @pytest.mark.parametrize("correlation", [-0.1, 0.0, None, math.nan, math.inf])
-def test_nonpositive_or_nonfinite_best_candidate_is_insufficient(correlation) -> None:
+def test_nonpositive_or_nonfinite_final_label_is_insufficient(correlation) -> None:
     status, _ = conservative_quality_status(
         correlation, model_status="provisional_label", model_label="localized feature"
     )
@@ -34,6 +34,36 @@ def test_positive_selection_is_review_required_never_autoaccepted() -> None:
     status, reasons = conservative_quality_status(
         0.2, model_status="provisional_label", model_label="localized feature"
     )
+    assert status == "review_required"
+    assert reasons == []
+
+
+def test_negative_candidate_does_not_override_positive_final_label() -> None:
+    best_candidate_correlation = -0.9
+    status, reasons = conservative_quality_status(
+        0.2, model_status="provisional_label", model_label="rewritten label"
+    )
+    assert best_candidate_correlation < 0
+    assert status == "review_required"
+    assert reasons == []
+
+
+def test_positive_candidate_does_not_rescue_negative_final_label() -> None:
+    best_candidate_correlation = 0.9
+    status, reasons = conservative_quality_status(
+        -0.2, model_status="provisional_label", model_label="rewritten label"
+    )
+    assert best_candidate_correlation > 0
+    assert status == "insufficient_evidence"
+    assert reasons == ["final_label_correlation_not_positive"]
+
+
+@pytest.mark.parametrize("audit_correlation", [-0.9, 0.9])
+def test_audit_correlation_is_not_a_quality_input(audit_correlation: float) -> None:
+    status, reasons = conservative_quality_status(
+        0.2, model_status="provisional_label", model_label="localized feature"
+    )
+    assert math.isfinite(audit_correlation)
     assert status == "review_required"
     assert reasons == []
 
@@ -83,5 +113,5 @@ def test_quality_transaction_cleans_staging_on_error(
     monkeypatch.setattr("circuits.labeling.quality._write_quality_assessment", fail)
     with pytest.raises(RuntimeError, match="injected"):
         assess_width_one_quality(run_root=tmp_path)
-    assert not (tmp_path / "assessments" / "label_quality").exists()
-    assert not list((tmp_path / "assessments").glob(".label_quality.tmp-*"))
+    assert not (tmp_path / "assessments" / "label_quality_v2").exists()
+    assert not list((tmp_path / "assessments").glob(".label_quality_v2.tmp-*"))

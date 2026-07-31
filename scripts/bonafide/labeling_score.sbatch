@@ -24,7 +24,8 @@ REPO_ROOT="$(pwd -P)"
 
 : "${RUN_ROOT:?Set RUN_ROOT to one prepared labeling run root}"
 : "${LABELING_ENV:?Set LABELING_ENV to the frozen circuits labeling environment}"
-: "${PHASE:?Set PHASE to candidate_selection or summary_audit}"
+: "${PHASE:?Set PHASE to candidate_selection, summary_selection, or summary_audit}"
+LABELING_HF_CACHE="${LABELING_HF_CACHE:-/scratch/general/vast/${USER}/nlp_research_project/huggingface}"
 if [[ "$RUN_ROOT" != /* ]] || [[ ! -f "$RUN_ROOT/manifest.json" ]]; then
     echo "RUN_ROOT must be an absolute prepared labeling run." >&2
     exit 2
@@ -33,8 +34,14 @@ if [[ "$LABELING_ENV" != /* ]] || [[ ! -x "$LABELING_ENV/bin/python" ]]; then
     echo "LABELING_ENV must be an absolute Python environment." >&2
     exit 2
 fi
-if [[ "$PHASE" != "candidate_selection" ]] && [[ "$PHASE" != "summary_audit" ]]; then
-    echo "PHASE must be candidate_selection or summary_audit." >&2
+if [[ "$PHASE" != "candidate_selection" ]] && \
+    [[ "$PHASE" != "summary_selection" ]] && \
+    [[ "$PHASE" != "summary_audit" ]]; then
+    echo "PHASE must be candidate_selection, summary_selection, or summary_audit." >&2
+    exit 2
+fi
+if [[ "$LABELING_HF_CACHE" != /* ]] || [[ ! -d "$LABELING_HF_CACHE" ]]; then
+    echo "LABELING_HF_CACHE must be an absolute existing Hugging Face cache." >&2
     exit 2
 fi
 SHARED_ENV="/scratch/general/vast/${USER}/circuits/envs/circuits-py312"
@@ -44,6 +51,8 @@ if [[ "$LABELING_ENV" == "$SHARED_ENV" ]] && [[ "${ALLOW_SHARED_ENV:-0}" != "1" 
 fi
 
 export UV_PROJECT_ENVIRONMENT="$LABELING_ENV"
+export HF_HOME="$LABELING_HF_CACHE"
+export HF_HUB_CACHE="$LABELING_HF_CACHE"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 module load python/3.12.12 uv/0.11.14

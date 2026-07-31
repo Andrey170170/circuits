@@ -6,7 +6,7 @@
   "candidate_samples": 5,
   "candidate_generator": {
     "provider": "anthropic", "model": "claude-haiku-4-5-20251001", "transport": "native_batch",
-    "api_key_env": "ANTHROPIC_API_KEY", "max_output_tokens": 700, "temperature": 0.8,
+    "api_key_env": "ANTHROPIC_API_KEY", "max_output_tokens": 1400, "temperature": 0.8,
     "concurrency": 32, "timeout_seconds": 120,
     "retry": {"max_attempts": 4, "initial_backoff_seconds": 1, "max_backoff_seconds": 30}
   },
@@ -19,7 +19,7 @@
   },
   "cluster_summarizer": {
     "provider": "anthropic", "model": "claude-opus-5", "transport": "native_batch",
-    "api_key_env": "ANTHROPIC_API_KEY", "max_output_tokens": 1200,
+    "api_key_env": "ANTHROPIC_API_KEY", "max_output_tokens": 3200,
     "reasoning": {"type": "adaptive"}, "concurrency": 16, "timeout_seconds": 240,
     "retry": {"max_attempts": 4, "initial_backoff_seconds": 1, "max_backoff_seconds": 30}
   },

@@ -13,7 +13,10 @@ from typing import Any
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.labeling.config import LabelingRecipe
 from circuits.labeling.io import atomic_write_json
-from circuits.labeling.provenance import validate_local_score_artifact
+from circuits.labeling.provenance import (
+    validate_local_score_artifact,
+    validate_summary_score_binding,
+)
 from circuits.labeling.runtime import (
     collect_code_revision,
     load_run_manifest,
@@ -21,8 +24,8 @@ from circuits.labeling.runtime import (
 )
 from circuits.labeling.schema import GenerationResult
 
-QUALITY_SCHEMA = "adag.labeling.width-one-quality.v1"
-QUALITY_MANIFEST_SCHEMA = "adag.labeling.width-one-quality-manifest.v1"
+QUALITY_SCHEMA = "adag.labeling.width-one-quality.v2"
+QUALITY_MANIFEST_SCHEMA = "adag.labeling.width-one-quality-manifest.v2"
 
 
 def _finite_number(value: Any) -> float | None:
@@ -33,19 +36,15 @@ def _finite_number(value: Any) -> float | None:
 
 
 def conservative_quality_status(
-    best_candidate_correlation: Any,
+    final_label_correlation: Any,
     *,
     model_status: Any,
     model_label: Any,
 ) -> tuple[str, list[str]]:
     """Return a selection-only decision; audit results are intentionally absent."""
 
-    best = _finite_number(best_candidate_correlation)
+    final = _finite_number(final_label_correlation)
     reasons: list[str] = []
-    if best is None:
-        reasons.append("best_candidate_correlation_nonfinite")
-    elif best <= 0:
-        reasons.append("best_candidate_correlation_not_positive")
     if (
         model_status == "insufficient_evidence"
         or model_label == "insufficient_evidence"
@@ -53,6 +52,10 @@ def conservative_quality_status(
         reasons.append("model_reported_insufficient_evidence")
     elif model_status != "provisional_label":
         reasons.append("missing_valid_provisional_model_status")
+    elif final is None:
+        reasons.append("final_label_correlation_nonfinite")
+    elif final <= 0:
+        reasons.append("final_label_correlation_not_positive")
     return ("insufficient_evidence" if reasons else "review_required", reasons)
 
 
@@ -74,10 +77,10 @@ def assess_width_one_quality(*, run_root: Path) -> dict[str, Any]:
     recipe = LabelingRecipe.model_validate(run_manifest["recipe"])
     if recipe.prompt_policy != "width_one_v2":
         raise ValueError("quality assessment is defined only for width_one_v2 runs")
-    assessment_root = run_root / "assessments" / "label_quality"
+    assessment_root = run_root / "assessments" / "label_quality_v2"
     if assessment_root.exists():
         raise FileExistsError(f"quality assessment already exists: {assessment_root}")
-    staging_root = assessment_root.parent / f".label_quality.tmp-{uuid.uuid4().hex}"
+    staging_root = assessment_root.parent / f".label_quality_v2.tmp-{uuid.uuid4().hex}"
     staging_root.mkdir(parents=True)
     try:
         value = _write_quality_assessment(
@@ -137,6 +140,13 @@ def _write_quality_assessment(
             summary_path = (
                 run_root / "results" / "cluster_summary" / f"{request.request_id}.json"
             )
+            selection_path = (
+                run_root
+                / "scores"
+                / "summary_selection"
+                / state
+                / f"cluster-{cluster_id:04d}.json"
+            )
             audit_path = (
                 run_root
                 / "scores"
@@ -147,6 +157,7 @@ def _write_quality_assessment(
             for label, path in (
                 ("candidate selection", candidate_path),
                 ("summary result", summary_path),
+                ("summary selection", selection_path),
                 ("summary audit", audit_path),
             ):
                 if not path.is_file():
@@ -170,8 +181,10 @@ def _write_quality_assessment(
             )
             if summary.request_id != request.request_id:
                 raise ValueError(f"summary result request ID mismatch: {summary_path}")
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
             audit = json.loads(audit_path.read_text(encoding="utf-8"))
             expected_candidate_ids: set[str] = set()
+            skipped_candidate_ids: set[str] = set()
             for candidate_request in candidate_requests:
                 if (
                     candidate_request.state != state
@@ -199,38 +212,145 @@ def _write_quality_assessment(
                     and isinstance(candidate_result.parsed.get("description"), str)
                     and candidate_result.parsed["description"].strip()
                 ):
-                    expected_candidate_ids.add(candidate_request.request_id)
-            candidate_scores = validate_local_score_artifact(
-                candidate,
+                    if (
+                        candidate_result.parsed["description"].strip()
+                        == "insufficient_evidence"
+                    ):
+                        skipped_candidate_ids.add(candidate_request.request_id)
+                    else:
+                        expected_candidate_ids.add(candidate_request.request_id)
+            artifact_skipped_ids = {
+                item.get("request_id") for item in candidate.get("skipped", [])
+            }
+            if artifact_skipped_ids == skipped_candidate_ids:
+                candidate_scores = validate_local_score_artifact(
+                    candidate,
+                    recipe=recipe,
+                    run_id=run_manifest["run_id"],
+                    phase="candidate_selection",
+                    state=state,
+                    cluster_id=cluster_id,
+                    expected_request_ids=expected_candidate_ids,
+                    expected_skipped_request_ids=skipped_candidate_ids,
+                )
+                candidate_artifact_mode = "control_flow_skips"
+            elif not artifact_skipped_ids:
+                candidate_scores = validate_local_score_artifact(
+                    candidate,
+                    recipe=recipe,
+                    run_id=run_manifest["run_id"],
+                    phase="candidate_selection",
+                    state=state,
+                    cluster_id=cluster_id,
+                    expected_request_ids=expected_candidate_ids | skipped_candidate_ids,
+                )
+                candidate_scores = [
+                    score
+                    for score in candidate_scores
+                    if score.get("request_id") not in skipped_candidate_ids
+                ]
+                candidate_artifact_mode = "legacy_scored_controls_excluded"
+            else:
+                raise ValueError(
+                    f"candidate control-flow provenance mismatch: {state} "
+                    f"cluster {cluster_id}"
+                )
+            parsed = summary.parsed if summary.parse_status == "success" else None
+            model_status = parsed.get("status") if isinstance(parsed, dict) else None
+            model_label = parsed.get("label") if isinstance(parsed, dict) else None
+            if not isinstance(model_label, str) or not model_label.strip():
+                raise ValueError(
+                    f"summary result has no label to assess: {summary_path}"
+                )
+            model_label = model_label.strip()
+            is_insufficient = (
+                model_status == "insufficient_evidence"
+                or model_label == "insufficient_evidence"
+            )
+            summary_relative = summary_path.relative_to(run_root).as_posix()
+            summary_sha256 = file_sha256(summary_path)
+            final_score = validate_summary_score_binding(
+                selection,
                 recipe=recipe,
                 run_id=run_manifest["run_id"],
-                phase="candidate_selection",
+                phase="summary_selection",
                 state=state,
                 cluster_id=cluster_id,
-                expected_request_ids=expected_candidate_ids,
+                request_id=request.request_id,
+                expected_text=model_label,
+                source_result_path=summary_relative,
+                source_result_sha256=summary_sha256,
+                skip_reason=(
+                    "model_reported_insufficient_evidence" if is_insufficient else None
+                ),
             )
-            audit_scores = validate_local_score_artifact(
-                audit,
-                recipe=recipe,
-                run_id=run_manifest["run_id"],
-                phase="summary_audit",
-                state=state,
-                cluster_id=cluster_id,
-                expected_request_ids={request.request_id},
-            )
+            audit_skipped_ids = {
+                item.get("request_id") for item in audit.get("skipped", [])
+            }
+            if audit_skipped_ids:
+                if not is_insufficient:
+                    raise ValueError(
+                        f"audit unexpectedly skips a provisional label: {audit_path}"
+                    )
+                audit_score = validate_summary_score_binding(
+                    audit,
+                    recipe=recipe,
+                    run_id=run_manifest["run_id"],
+                    phase="summary_audit",
+                    state=state,
+                    cluster_id=cluster_id,
+                    request_id=request.request_id,
+                    expected_text=model_label,
+                    source_result_path=summary_relative,
+                    source_result_sha256=summary_sha256,
+                    skip_reason="model_reported_insufficient_evidence",
+                )
+                audit_artifact_mode = "control_flow_skip"
+            else:
+                audit_scores = validate_local_score_artifact(
+                    audit,
+                    recipe=recipe,
+                    run_id=run_manifest["run_id"],
+                    phase="summary_audit",
+                    state=state,
+                    cluster_id=cluster_id,
+                    expected_request_ids={request.request_id},
+                )
+                raw_audit_score = audit_scores[0]
+                if raw_audit_score.get("source_result_sha256") is not None:
+                    audit_score = validate_summary_score_binding(
+                        audit,
+                        recipe=recipe,
+                        run_id=run_manifest["run_id"],
+                        phase="summary_audit",
+                        state=state,
+                        cluster_id=cluster_id,
+                        request_id=request.request_id,
+                        expected_text=model_label,
+                        source_result_path=summary_relative,
+                        source_result_sha256=summary_sha256,
+                    )
+                    audit_artifact_mode = "exact_result_bound"
+                else:
+                    audit_score = None if is_insufficient else raw_audit_score
+                    audit_artifact_mode = (
+                        "legacy_scored_control_excluded"
+                        if is_insufficient
+                        else "legacy_unbound_diagnostic"
+                    )
 
             best_score = best_finite_score(candidate_scores)
             best_raw = best_score.get("correlation") if best_score else None
             best_correlation = _finite_number(best_raw)
-            parsed = summary.parsed if summary.parse_status == "success" else None
-            model_status = parsed.get("status") if isinstance(parsed, dict) else None
-            model_label = parsed.get("label") if isinstance(parsed, dict) else None
+            final_raw = final_score.get("correlation") if final_score else None
+            final_correlation = _finite_number(final_raw)
             status, reasons = conservative_quality_status(
-                best_raw, model_status=model_status, model_label=model_label
+                final_raw, model_status=model_status, model_label=model_label
             )
             counts[status] += 1
-            audit_score = audit_scores[0]
-            audit_correlation = _finite_number(audit_score.get("correlation"))
+            audit_correlation = _finite_number(
+                audit_score.get("correlation") if audit_score else None
+            )
             relative = Path(state) / f"cluster-{cluster_id:04d}.json"
             output = assessment_root / relative
             value: dict[str, Any] = {
@@ -250,17 +370,47 @@ def _write_quality_assessment(
                     "prompt_sha256": request.prompt_sha256,
                 },
                 "selection_decision_input": {
+                    "request_id": (
+                        final_score.get("request_id")
+                        if final_score
+                        else request.request_id
+                    ),
+                    "final_label_correlation": final_raw,
+                    "final_label_rsquared": (
+                        final_score.get("rsquared") if final_score else None
+                    ),
+                    "finite": final_correlation is not None,
+                    "not_scored_reason": (
+                        "model_reported_insufficient_evidence"
+                        if is_insufficient
+                        else None
+                    ),
+                },
+                "candidate_selection_diagnostic": {
                     "best_candidate_request_id": (
                         best_score.get("request_id") if best_score else None
                     ),
                     "best_candidate_correlation": best_raw,
                     "finite": best_correlation is not None,
+                    "artifact_mode": candidate_artifact_mode,
                 },
                 "audit_evaluation": {
-                    "request_id": audit_score.get("request_id"),
-                    "correlation": audit_score.get("correlation"),
-                    "rsquared": audit_score.get("rsquared"),
+                    "request_id": (
+                        audit_score.get("request_id")
+                        if audit_score
+                        else request.request_id
+                    ),
+                    "correlation": (
+                        audit_score.get("correlation") if audit_score else None
+                    ),
+                    "rsquared": audit_score.get("rsquared") if audit_score else None,
                     "finite": audit_correlation is not None,
+                    "not_scored_reason": (
+                        "model_reported_insufficient_evidence"
+                        if is_insufficient
+                        else None
+                    ),
+                    "artifact_mode": audit_artifact_mode,
                     "gates_label_decision": False,
                     "interpretation": "separate held-out evaluation; never acceptance or rewrite evidence",
                 },
@@ -281,7 +431,11 @@ def _write_quality_assessment(
                     "summary_result_path": summary_path.relative_to(
                         run_root
                     ).as_posix(),
-                    "summary_result_sha256": file_sha256(summary_path),
+                    "summary_result_sha256": summary_sha256,
+                    "summary_selection_score_path": selection_path.relative_to(
+                        run_root
+                    ).as_posix(),
+                    "summary_selection_score_sha256": file_sha256(selection_path),
                     "audit_score_path": audit_path.relative_to(run_root).as_posix(),
                     "audit_score_sha256": file_sha256(audit_path),
                 },
@@ -304,7 +458,8 @@ def _write_quality_assessment(
         "source_run_manifest_sha256": run_manifest["manifest_sha256"],
         "assessor_code_revision": collect_code_revision(),
         "decision_policy": {
-            "best_candidate_nonfinite_or_not_positive": "insufficient_evidence",
+            "final_label_nonfinite_or_not_positive": "insufficient_evidence",
+            "best_candidate_correlation": "diagnostic_only",
             "model_status_insufficient": "insufficient_evidence",
             "otherwise": "review_required",
             "automatic_acceptance": False,

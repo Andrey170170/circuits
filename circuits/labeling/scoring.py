@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
+from circuits.analysis.bonafide.canonical import file_sha256
 from circuits.descriptions.types import ActivationRecord
 from circuits.descriptions.vllm_backend import (
     FinetunedSimulator,
@@ -84,11 +85,11 @@ def _candidate_texts(
     return values
 
 
-def _summary_texts(
+def _summary_outputs(
     run_root: Path, state: str, cluster_id: int
-) -> list[tuple[str, str]]:
+) -> list[dict[str, Any]]:
     requests = load_stage_requests(run_root, "cluster_summary")
-    values: list[tuple[str, str]] = []
+    values: list[dict[str, Any]] = []
     for request in requests:
         if request.state != state or request.cluster_id != cluster_id:
             continue
@@ -102,8 +103,21 @@ def _summary_texts(
             continue
         label = result.parsed.get("label")
         if isinstance(label, str) and label.strip():
-            values.append((request.request_id, label.strip()))
+            relative = path.relative_to(run_root).as_posix()
+            values.append(
+                {
+                    "request_id": request.request_id,
+                    "text": label.strip(),
+                    "status": result.parsed.get("status"),
+                    "source_result_path": relative,
+                    "source_result_sha256": file_sha256(path),
+                }
+            )
     return values
+
+
+def _is_insufficient_evidence(*, text: str, status: Any = None) -> bool:
+    return text.strip() == "insufficient_evidence" or status == "insufficient_evidence"
 
 
 def correlation_sort_key(item: dict[str, Any]) -> tuple[float, str]:
@@ -121,12 +135,14 @@ def correlation_sort_key(item: dict[str, Any]) -> tuple[float, str]:
 def score_run(
     *,
     run_root: Path,
-    phase: Literal["candidate_selection", "summary_audit"],
+    phase: Literal["candidate_selection", "summary_selection", "summary_audit"],
     states: set[str] | None = None,
     cluster_ids: set[int] | None = None,
 ) -> dict[str, int]:
     manifest = load_run_manifest(run_root)
     recipe = LabelingRecipe.model_validate(manifest["recipe"])
+    if phase == "summary_selection" and recipe.prompt_policy != "width_one_v2":
+        raise ValueError("summary_selection is defined only for width_one_v2 runs")
     selected = {
         state: [
             int(cluster_id)
@@ -136,15 +152,40 @@ def score_run(
         for state, values in manifest["selected_clusters"].items()
         if states is None or state in states
     }
-    partition = "selection_scoring" if phase == "candidate_selection" else "audit"
-    output_name = (
-        "candidate_selection" if phase == "candidate_selection" else "summary_audit"
+    if phase == "summary_audit" and recipe.prompt_policy == "width_one_v2":
+        missing_selection = [
+            run_root
+            / "scores"
+            / "summary_selection"
+            / state
+            / f"cluster-{cluster_id:04d}.json"
+            for state, ids in selected.items()
+            for cluster_id in ids
+            if not (
+                run_root
+                / "scores"
+                / "summary_selection"
+                / state
+                / f"cluster-{cluster_id:04d}.json"
+            ).is_file()
+        ]
+        if missing_selection:
+            raise ValueError(
+                "width_one_v2 summary_audit requires completed summary_selection; "
+                f"missing {missing_selection[0]}"
+            )
+    partition = (
+        "selection_scoring"
+        if phase in {"candidate_selection", "summary_selection"}
+        else "audit"
     )
+    output_name = phase
     started = time.monotonic()
     counts = {
         "planned": sum(len(values) for values in selected.values()),
         "completed": 0,
         "skipped": 0,
+        "inputs_not_scored": 0,
     }
 
     import torch
@@ -180,39 +221,80 @@ def score_run(
                     if phase == "candidate_selection"
                     else None
                 )
-                texts = (
-                    [(request_id, text) for request_id, text, _ in candidate_outputs]
-                    if candidate_outputs is not None
-                    else _summary_texts(run_root, state, cluster_id)
+                summary_outputs = (
+                    _summary_outputs(run_root, state, cluster_id)
+                    if phase != "candidate_selection"
+                    else None
                 )
-                if not texts:
+                skipped_inputs: list[dict[str, Any]] = []
+                if candidate_outputs is not None:
+                    scoreable_candidates = candidate_outputs
+                    if recipe.prompt_policy == "width_one_v2":
+                        scoreable_candidates = []
+                        for request_id, text, parsed in candidate_outputs:
+                            if _is_insufficient_evidence(text=text):
+                                skipped_inputs.append(
+                                    {
+                                        "request_id": request_id,
+                                        "text": text,
+                                        "reason": "candidate_reported_insufficient_evidence",
+                                        "candidate": parsed,
+                                    }
+                                )
+                            else:
+                                scoreable_candidates.append((request_id, text, parsed))
+                    texts = [
+                        {"request_id": request_id, "text": text}
+                        for request_id, text, _ in scoreable_candidates
+                    ]
+                else:
+                    assert summary_outputs is not None
+                    scoreable_summaries = summary_outputs
+                    if recipe.prompt_policy == "width_one_v2":
+                        scoreable_summaries = []
+                        for item in summary_outputs:
+                            if _is_insufficient_evidence(
+                                text=item["text"], status=item["status"]
+                            ):
+                                skipped_inputs.append(
+                                    {
+                                        **item,
+                                        "reason": "model_reported_insufficient_evidence",
+                                    }
+                                )
+                            else:
+                                scoreable_summaries.append(item)
+                    texts = scoreable_summaries
+                if not texts and not skipped_inputs:
                     raise ValueError(
                         f"no parsed texts to score for {state} cluster {cluster_id}"
                     )
-                records, alignment = _load_records(
-                    run_root,
-                    state=state,
-                    cluster_id=cluster_id,
-                    partition=partition,
-                    simulator_tokenizer=simulator.tokenizer,
-                )
-                explanations = [text for _, text in texts]
-                scored = score_attr_explanations(
-                    simulator,
-                    explanations,
-                    records,
-                    "pos",
-                    use_raw_activations=True,
-                    keep_only_top_predictions=False,
-                )
+                alignment: list[dict[str, Any]] = []
+                scored = []
+                if texts:
+                    records, alignment = _load_records(
+                        run_root,
+                        state=state,
+                        cluster_id=cluster_id,
+                        partition=partition,
+                        simulator_tokenizer=simulator.tokenizer,
+                    )
+                    explanations = [item["text"] for item in texts]
+                    scored = score_attr_explanations(
+                        simulator,
+                        explanations,
+                        records,
+                        "pos",
+                        use_raw_activations=True,
+                        keep_only_top_predictions=False,
+                    )
                 values = [
                     {
-                        "request_id": request_id,
-                        "text": text,
+                        **item,
                         "correlation": score.score,
                         "rsquared": score.rsquared,
                     }
-                    for (request_id, text), score in zip(texts, scored, strict=True)
+                    for item, score in zip(texts, scored, strict=True)
                 ]
                 if (
                     phase == "candidate_selection"
@@ -238,9 +320,11 @@ def score_run(
                         "simulator": recipe.scorer.model_dump(mode="json"),
                         "alignment_diagnostics": alignment,
                         "scores": values,
+                        "skipped": skipped_inputs,
                     },
                 )
                 counts["completed"] += 1
+                counts["inputs_not_scored"] += len(skipped_inputs)
     finally:
         simulator.cleanup()
 

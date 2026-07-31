@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     scoring.add_argument(
         "--phase",
         required=True,
-        choices=("candidate_selection", "summary_audit"),
+        choices=("candidate_selection", "summary_selection", "summary_audit"),
     )
     scoring.add_argument("--states", nargs="+", choices=("primary", "alternative"))
     scoring.add_argument("--cluster-id", action="append", type=int, dest="cluster_ids")
@@ -74,6 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     quality = subparsers.add_parser("assess-quality")
     quality.add_argument("--run-root", type=Path, required=True)
+
+    telemetry = subparsers.add_parser("summarize-telemetry")
+    telemetry.add_argument("--run-root", type=Path, required=True)
 
     for command in ("prepare-batch", "submit-batch", "batch-status", "collect-batch"):
         batch = subparsers.add_parser(command)
@@ -193,6 +196,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sort_keys=True,
             )
         )
+        return 0
+    if args.command == "summarize-telemetry":
+        from circuits.labeling.telemetry import summarize_telemetry
+
+        print(json.dumps(summarize_telemetry(run_root=args.run_root), sort_keys=True))
         return 0
     stage_manifest = prepare_summary_stage(
         run_root=args.run_root,

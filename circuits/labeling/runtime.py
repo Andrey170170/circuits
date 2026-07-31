@@ -473,6 +473,12 @@ def prepare_summary_stage(
                     parsed_candidates[candidate_request.request_id] = dict(
                         candidate_result.parsed
                     )
+            skipped_candidate_ids = {
+                request_id
+                for request_id, parsed in parsed_candidates.items()
+                if recipe.prompt_policy == "width_one_v2"
+                and parsed["description"].strip() == "insufficient_evidence"
+            }
             scored_candidates = validate_local_score_artifact(
                 score_value,
                 recipe=recipe,
@@ -480,7 +486,8 @@ def prepare_summary_stage(
                 phase="candidate_selection",
                 state=state,
                 cluster_id=cluster_id,
-                expected_request_ids=set(parsed_candidates),
+                expected_request_ids=set(parsed_candidates) - skipped_candidate_ids,
+                expected_skipped_request_ids=skipped_candidate_ids,
             )
             if recipe.prompt_policy == "width_one_v2":
                 for scored in scored_candidates:
@@ -490,6 +497,29 @@ def prepare_summary_stage(
                             f"scored candidate payload mismatch: {state} cluster "
                             f"{cluster_id} request {request_id}"
                         )
+                skipped_by_request = {
+                    item["request_id"]: item for item in score_value.get("skipped", [])
+                }
+                for request_id in sorted(skipped_candidate_ids):
+                    skipped = skipped_by_request[request_id]
+                    if (
+                        skipped.get("reason")
+                        != "candidate_reported_insufficient_evidence"
+                        or skipped.get("text") != "insufficient_evidence"
+                        or skipped.get("candidate") != parsed_candidates[request_id]
+                    ):
+                        raise ValueError(
+                            f"skipped candidate payload mismatch: {state} cluster "
+                            f"{cluster_id} request {request_id}"
+                        )
+                    scored_candidates.append(
+                        {
+                            **skipped,
+                            "correlation": None,
+                            "rsquared": None,
+                            "score_status": "not_scored_control_flow",
+                        }
+                    )
             row = bundle.states[state].evidence[cluster_id]
             highlighted_witnesses: dict[str, str] | None = None
             if recipe.prompt_policy == "width_one_v2":
