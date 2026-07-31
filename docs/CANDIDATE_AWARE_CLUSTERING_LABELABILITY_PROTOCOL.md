@@ -82,6 +82,16 @@ Build four views:
    the same primary universe, minimum two co-supported targets/responses/families, positive 32-NN,
    and `union_max` rules as the scientific states; do not percentile-calibrate `S`.
 
+For a co-occurring basis pair in one target, `W` similarity is cosine over only source-token
+coordinates supported by both bases; `C` similarity is cosine of their two five-channel vectors.
+A missing pairwise coordinate is excluded, never filled with zero. A zero or nonfinite restricted
+norm makes that target/pair/view invalid. The recurring-pair similarity is the weighted mean of
+valid target-local cosines using `w_t = 1/F * 1/R_f * 1/T_r`, where `F` is generation-family count,
+`R_f` is response count in the target's family, and `T_r` is generation-target count in its
+response. Only a strictly positive finite recurring mean enters kNN; zero and negative values are
+discarded after recurrence gates. These are the existing `TargetProfileBlock`,
+`PairEvidenceAccumulator`, and `mean_similarity_matrix` missing-support semantics.
+
 The primary matched universe contains only bases eligible in both `W` and `C`. Candidate-union
 bases outside that universe are reported as an expanded-coverage diagnostic and cannot make the
 primary comparison pass.
@@ -130,6 +140,10 @@ the null is ineffective and no directional result can pass. This preserves topol
 candidate set, layer/polarity composition, and local vector-magnitude distribution while breaking
 signed-basis-to-competitive-direction identity.
 
+Assign mass deciles by sorting each target/layer/polarity group on `(L2 mass,
+signed_basis_index)`. For zero-based ordinal rank `q` among `n` bases, set
+`decile = min(9, floor(10*q/n))`; signed-basis index deterministically breaks equal-mass ties.
+
 For replicate `r=0..99`, derive the RNG seed as the unsigned big-endian integer in the first eight
 bytes of SHA-256 over the protocol file SHA-256 text, a NUL byte, `direction-null-v1`, a NUL byte,
 and the eight-byte big-endian replicate index. All 100 refits must be numerically valid. Define the
@@ -154,8 +168,12 @@ Report for every state and resolution:
 - labeling-support counts under the frozen family partitions;
 - selection and audit candidate-direction coherence.
 
-For each fitted cluster, L2-normalize every supported five-channel generation basis-target vector,
-average them under hierarchical occurrence weights, then L2-normalize that generation centroid.
+For each fitted cluster, L2-normalize every supported five-channel generation basis-target vector.
+Within a target, average those unit vectors equally across assigned supported bases. Average
+nonempty target means equally within response, nonempty response means equally within family, and
+nonempty family means equally across generation families, then L2-normalize the result. Empty
+target/response/family levels are omitted and their counts are reported; a zero final norm makes
+that cluster centroid unavailable.
 For a selection or audit occurrence, the primary score is cosine to its assigned-cluster centroid
 minus the maximum cosine to any other nonempty cluster centroid. Compute the hierarchical mean
 first within target, response, and family; comparisons between states use only occurrences
@@ -180,11 +198,26 @@ least `0.60/0.45` for a scientific state. Candidate clustering passes the functi
 4. exceeds `S` and the candidate-direction-null 95th percentile; and
 5. for `F`, reduces width-one input-profile coherence by no more than `0.05`.
 
+For each partition, the primary gate uses one occurrence intersection scoreable under `W`, `C`,
+`F`, and `S`, including available generation centroids for all four assignments. On that fixed
+intersection define `lift_XW = coherence(X) - coherence(W)` and
+`lift_XS = coherence(X) - coherence(S)` for `X` in `{C,F}`. Requirement 1 and the max-statistic null
+apply to `lift_XW`; “exceeds S” means `lift_XS > 0` independently on selection and audit. Report the
+intersection's target, response, family, basis-occurrence, and hierarchical-weight coverage.
+
 As secondary structural guardrails, require at least 95% assignment among the primary eligible
 universe, largest cluster fraction at most 15%, mean/minimum seed ARI at least `0.72/0.70`,
 modularity at least `0.20`, within-cluster affinity enrichment at least `1.25`, and at least 80%
 of clusters with the frozen minimum labeling support. Failure remains visible; thresholds are not
 relaxed after outcomes.
+
+Compute cluster-size metrics with `cluster_size_metrics` and graph metrics with
+`sparse_graph_partition_metrics` from
+`circuits/analysis/bonafide/clustering_evaluation.py`. The evaluated graph is the zero-diagonal,
+positive, symmetric kNN affinity restricted to assigned bases; spectral self-loops are excluded.
+Modularity is observed internal undirected edge-weight fraction minus the degree-volume-null
+internal fraction. Affinity enrichment is their ratio. The input manifest binds that module's file
+SHA-256 and report schema; no alternative formula may satisfy these gates.
 
 For each partition and state comparison, compute 10,000 paired family-block bootstrap replicates
 from the eight fixed family effects. Every family must have common scoreable observations or that
