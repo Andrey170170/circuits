@@ -1,9 +1,9 @@
 # Contribution-aware same-position candidate tracing
 
-Status: C0 and C1 complete and production topology semantics frozen. CPU fixtures,
+Status: C0, C1, and C2 are complete and production topology semantics are frozen. CPU fixtures,
 observed-token parity, candidate-policy smokes, the ten-target C0 comparison, the two-pass C0
-rerun, and the 32-target C1 policy/resource gate pass. C2 and a matched corpus remain unexecuted
-and unauthorized.
+rerun, and the 32-target C1 policy/resource gate pass. C2 fails its frozen scientific-utility
+gate, so a matched top-five corpus remains unauthorized.
 
 The scientific and launch contract remains Section 10 of
 `plans/2026-07-26-adag-bonafide-downstream-execution-plan.md`.
@@ -168,8 +168,11 @@ full candidate rank and every centered matrix had the maximum possible contrasti
 10. Measure total and per-candidate runtime, HBM, RSS, graph/union size, storage, numerical health,
     observed-token rank, and realized width. Complete.
 11. Freeze and explicitly review the C2 scientific-utility cohort, feature contract, weighting,
-    resource plan, and launch before execution.
+    resource plan, and launch before execution. Complete.
+12. Run C2 and apply the frozen non-degeneracy and trajectory-utility gates. Complete: the
+    candidate profiles are non-degenerate under the primary effective-rank convention, but the
+    multiview next-bin MRR is lower than width one and the utility gate fails. See
+    `docs/CANDIDATE_UNION_C2_RESULTS.md`.
 
-C2 is now the next gate. C1 authorizes its planning, not an automatic launch. A matched
-2,594-position corpus remains blocked until C2 and all Section 10.7 gates plus explicit Slurm
-review pass.
+The matched 2,594-position corpus remains blocked. C2 does not provide the required scientific
+utility evidence, and no full-corpus manifest or Slurm launch is authorized.
