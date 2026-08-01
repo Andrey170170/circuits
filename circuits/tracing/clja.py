@@ -17,6 +17,10 @@ from circuits.tracing.attribution import (
     _get_neuron_attr_and_contrib_ig,
     _get_neuron_attr_and_contrib_with_stop_grad_on_mlps,
 )
+from circuits.tracing.candidates import (
+    CandidateLogitAxis,
+    reduce_candidate_contributions,
+)
 from circuits.tracing.grad import (
     layerwise_revert_stop_nonlinear_grad,
     layerwise_stop_nonlinear_grad,
@@ -113,6 +117,14 @@ class CLJAProbeSelection:
     effective_end_layer: int
 
 
+@dataclass(frozen=True)
+class FrozenGraphTopology:
+    """Exact candidate-union topology to rescore without selection or pruning."""
+
+    mlp_nodes: frozenset[NeuronIdx]
+    edges: frozenset[tuple[NeuronIdx, NeuronIdx]]
+
+
 def _selected_probe_occurrences(
     mlp_final_attributions: torch.Tensor,
     neuron_cfg: dict[int, list[list[int]]],
@@ -140,9 +152,7 @@ def _selected_probe_occurrences(
         [item[2] for item in occurrence_ids], device=device, dtype=torch.long
     )
     attribution_values = (
-        mlp_final_attributions[
-            layer_indices, 0, token_indices, neuron_indices, 0
-        ]
+        mlp_final_attributions[layer_indices, 0, token_indices, neuron_indices, 0]
         .detach()
         .float()
         .cpu()
@@ -174,6 +184,8 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     attention_masks: list[list[int]] | torch.Tensor | None = None,
     focus_positions: list[int] | None = None,
     focus_logits: list[list[int]] | list[int] | None = None,
+    candidate_axis: CandidateLogitAxis | None = None,
+    frozen_topology: FrozenGraphTopology | None = None,
     instrumentation: TraceInstrumentation | None = None,
     probe_only: bool = False,
 ) -> (
@@ -232,9 +244,32 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
 
     if disable_stop_grad:
         if any([use_relp_grad, use_stop_grad_on_mlps]):
-            print("warning: stop grad is disabled but some stop grad configurations are used")
+            print(
+                "warning: stop grad is disabled but some stop grad configurations are used"
+            )
 
-    if focus_positions is None:
+    objective_weights: tuple[float, ...] | None = None
+    contribution_tgt_tokens = tgt_tokens
+    if candidate_axis is not None:
+        if focus_positions is not None or focus_logits is not None:
+            raise ValueError(
+                "candidate_axis cannot be combined with legacy focus positions/logits"
+            )
+        if len(cis) != len(candidate_axis.token_ids_by_batch):
+            raise ValueError("candidate axis batch width must match input batch width")
+        if tgt_tokens != [candidate_axis.prediction_position]:
+            raise ValueError(
+                "candidate traces require one shared scientific target position"
+            )
+        focus_positions = [
+            candidate_axis.prediction_position
+        ] * candidate_axis.candidate_count
+        focus_logits = [
+            list(token_ids) for token_ids in candidate_axis.token_ids_by_batch
+        ]
+        contribution_tgt_tokens = list(focus_positions)
+        objective_weights = candidate_axis.objective_weights
+    elif focus_positions is None:
         focus_positions = tgt_tokens
 
     if focus_logits is None and not focus_last_residual:
@@ -305,6 +340,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 ablation_mode=ablation_mode,
                 disable_stop_grad=disable_stop_grad,
                 center_logits=center_logits,
+                objective_weights=objective_weights,
                 verbose=verbose,
             )
         else:
@@ -324,12 +360,17 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 attention_masks=attn_mask_final,
                 disable_stop_grad=disable_stop_grad,
                 center_logits=center_logits,
+                objective_weights=objective_weights,
                 verbose=verbose,
                 ig_steps=ig_steps,
             )
 
-    mlp_final_attributions = mlp_final_attributions.unsqueeze(-1)  # shape: (L, B, T, D_ff, 1)
-    embed_final_attributions = embed_final_attributions.unsqueeze(-1)  # shape: (B, T, 1)
+    mlp_final_attributions = mlp_final_attributions.unsqueeze(
+        -1
+    )  # shape: (L, B, T, D_ff, 1)
+    embed_final_attributions = embed_final_attributions.unsqueeze(
+        -1
+    )  # shape: (B, T, 1)
     if verbose:
         print("collected attributions for mlp", mlp_final_attributions.shape)
         print("collected attributions for embed", embed_final_attributions.shape)
@@ -342,32 +383,65 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     # compute per-batch item absolute attribution thresholds
     absolute_attribution_threshold = None
     if percentage_threshold is not None:
-        absolute_attribution_threshold = goal_value * percentage_threshold
-
-    # before calculating anything, we get important neurons globally (same as original)
-    with instrumentation_stage(instrumentation, "important_mask_selection"):
-        global_important_neurons_mask = _get_global_important_neurons_mask(
-            keep_tokens=keep_tokens,
-            start_layer=start_layer,
-            end_layer=end_layer,
-            mlp_final_attributions=mlp_final_attributions,
-            node_attribution_threshold=node_attribution_threshold,
-            topk_neurons=topk_neurons,
-            absolute_attribution_threshold=absolute_attribution_threshold,
-            batch_aggregation=batch_aggregation,
-            verbose=verbose,
+        threshold_goal = (
+            goal_value.abs()
+            if candidate_axis is not None
+            and candidate_axis.use_absolute_goal_for_percentage_threshold
+            else goal_value
         )
+        absolute_attribution_threshold = threshold_goal * percentage_threshold
+
+    # Before calculating anything, either select important neurons normally or
+    # rescore the exact MLP-node union frozen by independent candidate traces.
+    with instrumentation_stage(instrumentation, "important_mask_selection"):
+        if frozen_topology is None:
+            global_important_neurons_mask = _get_global_important_neurons_mask(
+                keep_tokens=keep_tokens,
+                start_layer=start_layer,
+                end_layer=end_layer,
+                mlp_final_attributions=mlp_final_attributions,
+                node_attribution_threshold=node_attribution_threshold,
+                topk_neurons=topk_neurons,
+                absolute_attribution_threshold=absolute_attribution_threshold,
+                batch_aggregation=batch_aggregation,
+                verbose=verbose,
+            )
+        else:
+            global_important_neurons_mask = torch.zeros(
+                (
+                    mlp_final_attributions.shape[0],
+                    mlp_final_attributions.shape[2],
+                    mlp_final_attributions.shape[3],
+                ),
+                device=mlp_final_attributions.device,
+                dtype=torch.bool,
+            )
+            keep_token_set = set(keep_tokens)
+            for node in frozen_topology.mlp_nodes:
+                if not 0 <= node.layer < model.config.num_hidden_layers:
+                    raise ValueError(f"frozen MLP node has invalid layer: {node}")
+                if node.token not in keep_token_set:
+                    raise ValueError(f"frozen MLP node has invalid token: {node}")
+                if not 0 <= node.neuron < mlp_final_attributions.shape[3]:
+                    raise ValueError(f"frozen MLP node has invalid neuron: {node}")
+                global_important_neurons_mask[node.layer, node.token, node.neuron] = (
+                    True
+                )
     if verbose:
         print("global important neurons mask", global_important_neurons_mask.shape)
         print("TOTAL NEURONS", global_important_neurons_mask.sum().item())
         print(f"GOAL VALUE {goal_value.item():.5f}")
         print(f"EMBED SUM {embed_final_attributions.sum().item():.5f}")
         for layer in range(len(model.model.layers)):
-            print(f"LAYER {layer} ATTR {mlp_final_attributions[layer].sum().item():.5f}")
+            print(
+                f"LAYER {layer} ATTR {mlp_final_attributions[layer].sum().item():.5f}"
+            )
         if percentage_threshold is not None:
             print(f"PERCENTAGE THRESHOLD {percentage_threshold:.2%}")
         if absolute_attribution_threshold is not None:
-            print(f"ABSOLUTE ATTRIBUTION THRESHOLD {absolute_attribution_threshold.item():.5f}")
+            print(
+                f"ABSOLUTE ATTRIBUTION THRESHOLD {absolute_attribution_threshold.item():.5f}"
+            )
 
     # get important neurons for each layer (same as original)
     neuron_cfg: dict[int, list[list[int]]] = {
@@ -405,7 +479,12 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     # if we only want to return the important neurons, we can do that now
     if return_only_important_neurons:
         model = revert_stop_nonlinear_grad(model)
-        return mlp_final_attributions, embed_final_attributions, mlp_final_acts, embed_final_acts
+        return (
+            mlp_final_attributions,
+            embed_final_attributions,
+            mlp_final_acts,
+            embed_final_acts,
+        )
 
     # get attributions and contributions for important neurons (same as original)
     if not skip_attr_contrib:
@@ -413,37 +492,41 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             instrumentation.timer_start() if instrumentation is not None else None
         )
         if ig_steps is None:
-            attr, contrib, embed_grad_contrib, neuron_tags = _get_neuron_attr_and_contrib(
-                model,
-                neuron_cfg,
-                input_ids,
-                src_tokens,
-                tgt_tokens,
-                focus_positions,
-                focus_logits,
-                attn_mask_final,
-                disable_stop_grad=disable_stop_grad,
-                center_logits=center_logits,
-                neuron_chunk_size=50,
-                verbose=verbose,
+            attr, contrib, embed_grad_contrib, neuron_tags = (
+                _get_neuron_attr_and_contrib(
+                    model,
+                    neuron_cfg,
+                    input_ids,
+                    src_tokens,
+                    contribution_tgt_tokens,
+                    focus_positions,
+                    focus_logits,
+                    attn_mask_final,
+                    disable_stop_grad=disable_stop_grad,
+                    center_logits=center_logits,
+                    neuron_chunk_size=50,
+                    verbose=verbose,
+                )
             )
 
         else:
-            attr, contrib, embed_grad_contrib, neuron_tags = _get_neuron_attr_and_contrib_ig(
-                model,
-                neuron_cfg,
-                input_ids,
-                src_tokens,
-                tgt_tokens,
-                focus_positions,
-                focus_logits,
-                attn_mask_final,
-                disable_stop_grad=disable_stop_grad,
-                center_logits=center_logits,
-                ig_steps=ig_steps,
-                ig_mode=ig_mode,
-                neuron_chunk_size=20,  # Smaller chunk size for IG
-                verbose=verbose,
+            attr, contrib, embed_grad_contrib, neuron_tags = (
+                _get_neuron_attr_and_contrib_ig(
+                    model,
+                    neuron_cfg,
+                    input_ids,
+                    src_tokens,
+                    contribution_tgt_tokens,
+                    focus_positions,
+                    focus_logits,
+                    attn_mask_final,
+                    disable_stop_grad=disable_stop_grad,
+                    center_logits=center_logits,
+                    ig_steps=ig_steps,
+                    ig_mode=ig_mode,
+                    neuron_chunk_size=20,  # Smaller chunk size for IG
+                    verbose=verbose,
+                )
             )
 
         if instrumentation is not None and selected_attr_started is not None:
@@ -453,8 +536,12 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             )
 
         if verbose:
-            print("collecting attributions for", attr.shape)  # shape: (neurons, batch, src)
-            print("collecting contributions for", contrib.shape)  # shape: (neurons, batch, tgt)
+            print(
+                "collecting attributions for", attr.shape
+            )  # shape: (neurons, batch, src)
+            print(
+                "collecting contributions for", contrib.shape
+            )  # shape: (neurons, batch, tgt)
             print(
                 "collecting embed contributions for", embed_grad_contrib.shape
             )  # shape: (src, batch, tgt)
@@ -467,9 +554,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             neuron_attr_map[neuron_idx] = attr[neuron_count].cpu()
             neuron_contrib_map[neuron_idx] = contrib[neuron_count].cpu()
         for src_token in src_tokens:
-            neuron_contrib_map[NeuronIdx(layer=-1, token=src_token, neuron=0)] = embed_grad_contrib[
-                src_token
-            ].cpu()
+            neuron_contrib_map[NeuronIdx(layer=-1, token=src_token, neuron=0)] = (
+                embed_grad_contrib[src_token].cpu()
+            )
 
         del attr, contrib, embed_grad_contrib
 
@@ -488,7 +575,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             neuron_cfg,
             input_ids,
             src_tokens,
-            tgt_tokens,
+            contribution_tgt_tokens,
             focus_positions,
             focus_logits,
             attn_mask_final,
@@ -506,12 +593,12 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         neuron_attr_map_with_stop_grad_on_mlps: dict[NeuronIdx, torch.Tensor] = {}
         neuron_contrib_map_with_stop_grad_on_mlps: dict[NeuronIdx, torch.Tensor] = {}
         for neuron_count, neuron_idx in enumerate(neuron_tags_with_stop_grad_on_mlps):
-            neuron_attr_map_with_stop_grad_on_mlps[neuron_idx] = attr_with_stop_grad_on_mlps[
-                neuron_count
-            ].cpu()
-            neuron_contrib_map_with_stop_grad_on_mlps[neuron_idx] = contrib_with_stop_grad_on_mlps[
-                neuron_count
-            ].cpu()
+            neuron_attr_map_with_stop_grad_on_mlps[neuron_idx] = (
+                attr_with_stop_grad_on_mlps[neuron_count].cpu()
+            )
+            neuron_contrib_map_with_stop_grad_on_mlps[neuron_idx] = (
+                contrib_with_stop_grad_on_mlps[neuron_count].cpu()
+            )
         for src_token in src_tokens:
             neuron_contrib_map_with_stop_grad_on_mlps[
                 NeuronIdx(layer=-1, token=src_token, neuron=0)
@@ -551,7 +638,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             topk=topk,
             keep_tokens=keep_tokens,
             src_tokens=src_tokens,  # the token positions to trace from
-            tgt_tokens=tgt_tokens,  # the token positions to trace to
+            tgt_tokens=contribution_tgt_tokens,
             focus_positions=focus_positions,  # the logits to include
             focus_logits=focus_logits,  # the token vocab ids to trace logits
             start_layer=start_layer,
@@ -567,6 +654,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             use_stop_grad_on_mlps=use_stop_grad_on_mlps,
             neuron_attr_map_with_stop_grad_on_mlps=neuron_attr_map_with_stop_grad_on_mlps,
             neuron_contrib_map_with_stop_grad_on_mlps=neuron_contrib_map_with_stop_grad_on_mlps,
+            candidate_objective_weights=objective_weights,
+            frozen_edges=(
+                frozen_topology.edges if frozen_topology is not None else None
+            ),
             instrumentation=instrumentation,
         )
 
@@ -585,6 +676,8 @@ def get_all_pairs_cl_ja_effects_with_attributions(
     attention_masks: list[list[int]] | torch.Tensor | None = None,
     focus_positions: list[int] | None = None,
     focus_logits: list[list[int]] | list[int] | None = None,
+    candidate_axis: CandidateLogitAxis | None = None,
+    frozen_topology: FrozenGraphTopology | None = None,
     instrumentation: TraceInstrumentation | None = None,
     probe_only: bool = False,
 ) -> (
@@ -611,6 +704,8 @@ def get_all_pairs_cl_ja_effects_with_attributions(
             attention_masks=attention_masks,
             focus_positions=focus_positions,
             focus_logits=focus_logits,
+            candidate_axis=candidate_axis,
+            frozen_topology=frozen_topology,
             instrumentation=instrumentation,
             probe_only=False,
         )
@@ -628,6 +723,8 @@ def get_all_pairs_cl_ja_effects_with_attributions(
             attention_masks=attention_masks,
             focus_positions=focus_positions,
             focus_logits=focus_logits,
+            candidate_axis=candidate_axis,
+            frozen_topology=frozen_topology,
             instrumentation=instrumentation,
             probe_only=True,
         )
@@ -663,7 +760,9 @@ def _get_cl_ja_based_edges(
     keep_tokens: List[int] | None = None,  # the token positions to trace circuits
     src_tokens: List[int] | None = None,  # the token positions to trace from
     tgt_tokens: List[int] | None = None,  # the token positions to trace to
-    focus_positions: List[int] | None = None,  # the token positions to consider the logits effect
+    focus_positions: (
+        List[int] | None
+    ) = None,  # the token positions to consider the logits effect
     focus_logits: List[int] | None = None,  # the token vocab ids to trace logits
     return_cross_edges_only: bool = True,  # only return cross tgt -> src token edges only
     return_absolute: bool = False,
@@ -685,6 +784,8 @@ def _get_cl_ja_based_edges(
     use_stop_grad_on_mlps: bool = False,
     neuron_attr_map_with_stop_grad_on_mlps=None,
     neuron_contrib_map_with_stop_grad_on_mlps=None,
+    candidate_objective_weights: tuple[float, ...] | None = None,
+    frozen_edges: frozenset[tuple[NeuronIdx, NeuronIdx]] | None = None,
     # IG params
     ig_steps: int | None = None,
     ig_mode: Literal["ig-inputs", "conductance"] = "ig-inputs",
@@ -698,6 +799,19 @@ def _get_cl_ja_based_edges(
     """
     nodes: list[Node] = []
     edges: list[Edge] = []
+
+    def retain_edge(
+        source: NeuronIdx,
+        target: NeuronIdx,
+        weight: torch.Tensor,
+    ) -> bool:
+        if frozen_edges is not None:
+            return (source, target) in frozen_edges
+        if edge_threshold is not None and weight.abs().max() < edge_threshold:
+            return False
+        if parent_threshold is not None and weight.abs().max() < parent_threshold:
+            return False
+        return True
 
     # caching activations
     if verbose:
@@ -727,6 +841,29 @@ def _get_cl_ja_based_edges(
     D = model.config.hidden_size
     B = neurons_LBTI[0].size(0)
     neurons_LBTI[0].size(1)
+    objective_weight_tensor: torch.Tensor | None = None
+    if candidate_objective_weights is not None:
+        if len(candidate_objective_weights) != len(focus_positions):
+            raise ValueError(
+                "candidate objective weight width must match candidate count"
+            )
+        objective_weight_tensor = torch.tensor(
+            candidate_objective_weights,
+            device=device,
+            dtype=neurons_LBTI[0].dtype,
+        )
+
+    def joint_target_attribution(
+        target_attribution: torch.Tensor,
+    ) -> torch.Tensor:
+        """Reduce a raw candidate contribution vector to the joint objective."""
+
+        if objective_weight_tensor is None:
+            return target_attribution
+        return reduce_candidate_contributions(
+            target_attribution,
+            objective_weight_tensor,
+        )
 
     # creating final logits nodes
     logit_nodes_before = len(nodes)
@@ -753,12 +890,18 @@ def _get_cl_ja_based_edges(
                 focus_logits_target[batch_idx].item(),
             )
             if logit_id not in neuron_attr_map:
-                neuron_attr_map[logit_id] = torch.zeros((B, len(src_tokens)), device=device)
+                neuron_attr_map[logit_id] = torch.zeros(
+                    (B, len(src_tokens)), device=device
+                )
             if logit_id not in neuron_contrib_map:
-                neuron_contrib_map[logit_id] = torch.zeros((B, len(tgt_tokens)), device=device)
+                neuron_contrib_map[logit_id] = torch.zeros(
+                    (B, len(tgt_tokens)), device=device
+                )
 
             # contrib = logit of this tgt token
-            neuron_contrib_map[logit_id][batch_idx, target_idx] += logits_BV[batch_idx, batch_idx]
+            neuron_contrib_map[logit_id][batch_idx, target_idx] += logits_BV[
+                batch_idx, batch_idx
+            ]
 
             # attr = sum of contribs from src tokens
             for src_token in src_tokens:
@@ -776,6 +919,10 @@ def _get_cl_ja_based_edges(
             final_attribution = torch.stack(
                 [torch.diagflat(logits_BV[b]) for b in range(logits_BV.shape[0])]
             )[:, idx, :]
+            if objective_weight_tensor is not None:
+                final_attribution = (
+                    final_attribution * objective_weight_tensor[target_idx]
+                )
             nodes.append(
                 Node(
                     layer=L,
@@ -783,8 +930,12 @@ def _get_cl_ja_based_edges(
                     neuron=neuron_idx,
                     activation=logits_BV[:, idx].float().cpu(),
                     final_attribution=final_attribution.float().cpu(),
-                    attr_map=neuron_attr_map.get((L, target_token_pos_idx, neuron_idx), None),
-                    contrib_map=neuron_contrib_map.get((L, target_token_pos_idx, neuron_idx), None),
+                    attr_map=neuron_attr_map.get(
+                        (L, target_token_pos_idx, neuron_idx), None
+                    ),
+                    contrib_map=neuron_contrib_map.get(
+                        (L, target_token_pos_idx, neuron_idx), None
+                    ),
                 )
             )
 
@@ -799,7 +950,9 @@ def _get_cl_ja_based_edges(
                 # skip incoming from last layer
                 if return_nodes_only or source_key[0] == L:
                     continue
-                target_key = NeuronIdx(layer=L, token=target_token_pos_idx, neuron=neuron_idx)
+                target_key = NeuronIdx(
+                    layer=L, token=target_token_pos_idx, neuron=neuron_idx
+                )
 
                 # Move source_contrib to device if needed
                 if source_contrib.device.type == "cpu":
@@ -814,13 +967,14 @@ def _get_cl_ja_based_edges(
                 source_key = NeuronIdx(
                     layer=source_key[0],
                     token=source_key[1],
-                    neuron=tokens[idx][source_key[1]] if source_key[0] == -1 else source_key[2],
+                    neuron=(
+                        tokens[idx][source_key[1]]
+                        if source_key[0] == -1
+                        else source_key[2]
+                    ),
                 )
 
-                # thresholding
-                if edge_threshold is not None and edge_weight.abs().max() < edge_threshold:
-                    continue
-                if parent_threshold is not None and edge_weight.abs().max() < parent_threshold:
+                if not retain_edge(source_key, target_key, edge_weight):
                     continue
 
                 edges.append(
@@ -850,16 +1004,22 @@ def _get_cl_ja_based_edges(
         instrumentation.timer_start() if instrumentation is not None else None
     )
     for layer in range(max(start_layer, 0), end_layer):
-        important_positions = global_important_neurons_mask[layer].nonzero(as_tuple=False)
+        important_positions = global_important_neurons_mask[layer].nonzero(
+            as_tuple=False
+        )
         for pos_neuron in important_positions:
             token_pos, neuron_idx = pos_neuron.tolist()
             if token_pos in keep_tokens:
                 neuron_key = NeuronIdx(layer=layer, token=token_pos, neuron=neuron_idx)
-                activation = neurons_LBTI[layer][:, token_pos, neuron_idx]  # shape: (batch,)
+                activation = neurons_LBTI[layer][
+                    :, token_pos, neuron_idx
+                ]  # shape: (batch,)
                 # get attribution scores (already on CPU from earlier)
                 attr_map = neuron_attr_map.get(neuron_key, None)
                 contrib_map = neuron_contrib_map.get(neuron_key, None)
-                final_attribution = mlp_final_attributions[layer, :, token_pos, neuron_idx, :]
+                final_attribution = mlp_final_attributions[
+                    layer, :, token_pos, neuron_idx, :
+                ]
                 nodes.append(
                     Node(
                         layer=layer,
@@ -893,7 +1053,9 @@ def _get_cl_ja_based_edges(
     if verbose:
         print("Creating embedding nodes and all outgoing edges...")
     for src_token in src_tokens:
-        final_attributions = embed_final_attributions[:, src_token, :]  # (batch, logits)
+        final_attributions = embed_final_attributions[
+            :, src_token, :
+        ]  # (batch, logits)
         for token_type in set([tokens[t][src_token] for t in range(len(tokens))]):
             relevant_idxs = [
                 batch_idx
@@ -952,21 +1114,27 @@ def _get_cl_ja_based_edges(
 
                 # Move target_attr to device for computation
                 target_attr_device = (
-                    target_attr.to(device) if target_attr.device.type == "cpu" else target_attr
+                    target_attr.to(device)
+                    if target_attr.device.type == "cpu"
+                    else target_attr
                 )
 
                 # Move target_attribution to device if needed
-                if target_attribution is not None and target_attribution.device.type == "cpu":
+                if (
+                    target_attribution is not None
+                    and target_attribution.device.type == "cpu"
+                ):
                     target_attribution = target_attribution.to(device)
+                if target_attribution is not None:
+                    target_attribution = joint_target_attribution(target_attribution)
 
                 # Use adaptive epsilon for numerical stability (matching CLSO approach)
                 eps = target_activation.abs().mean() * 1e-6
-                edge_weight = target_attr_device[:, src_token] / (target_activation + eps)
+                edge_weight = target_attr_device[:, src_token] / (
+                    target_activation + eps
+                )
                 edge_weight = torch.where(mask, edge_weight, 0)
-                # thresholding
-                if edge_threshold is not None and edge_weight.abs().max() < edge_threshold:
-                    continue
-                if parent_threshold is not None and edge_weight.abs().max() < parent_threshold:
+                if not retain_edge(source_key, target_key, edge_weight):
                     continue
 
                 edges.append(
@@ -975,7 +1143,10 @@ def _get_cl_ja_based_edges(
                         tgt=target_key,
                         weight=edge_weight.detach().float().cpu(),
                         final_attribution=(
-                            (edge_weight[:, None] * target_attribution).detach().float().cpu()
+                            (edge_weight[:, None] * target_attribution)
+                            .detach()
+                            .float()
+                            .cpu()
                             if target_attribution is not None
                             else None
                         ),
@@ -1037,18 +1208,42 @@ def _get_cl_ja_based_edges(
             if not global_important_neurons_mask[src_layer].any():
                 continue
 
+            frozen_pair_edges = None
+            if frozen_edges is not None:
+                frozen_pair_edges = {
+                    edge
+                    for edge in frozen_edges
+                    if edge[0].layer == src_layer and edge[1].layer == tgt_layer
+                }
+                if not frozen_pair_edges:
+                    continue
+
             # get the fixed neuron lists
-            src_positions = global_important_neurons_mask[src_layer].nonzero(as_tuple=False)
+            src_positions = global_important_neurons_mask[src_layer].nonzero(
+                as_tuple=False
+            )
             src_neuron_list = [
                 (pos[0].item(), pos[1].item())
                 for pos in src_positions
                 if pos[0].item() in keep_tokens
+                and (
+                    frozen_pair_edges is None
+                    or NeuronIdx(src_layer, pos[0].item(), pos[1].item())
+                    in {edge[0] for edge in frozen_pair_edges}
+                )
             ]
-            tgt_positions = global_important_neurons_mask[tgt_layer].nonzero(as_tuple=False)
+            tgt_positions = global_important_neurons_mask[tgt_layer].nonzero(
+                as_tuple=False
+            )
             tgt_neuron_list = [
                 (pos[0].item(), pos[1].item())
                 for pos in tgt_positions
                 if pos[0].item() in keep_tokens
+                and (
+                    frozen_pair_edges is None
+                    or NeuronIdx(tgt_layer, pos[0].item(), pos[1].item())
+                    in {edge[1] for edge in frozen_pair_edges}
+                )
             ]
 
             if verbose:
@@ -1119,29 +1314,38 @@ def _get_cl_ja_based_edges(
                 for j, (tgt_token, tgt_neuron) in enumerate(tgt_neuron_list):
                     edge_weight = relative_attribution[:, i, j]  # shape: (batch,)
 
-                    # thresholding
-                    if edge_threshold is not None and edge_weight.abs().max() < edge_threshold:
-                        continue
-                    if parent_threshold is not None and edge_weight.abs().max() < parent_threshold:
-                        continue
-
                     target_attribution = neuron_contrib_map.get(
                         (tgt_layer, tgt_token, tgt_neuron), None
                     )  # shape: (B, logits)
 
                     # Move target_attribution to device if needed
-                    if target_attribution is not None and target_attribution.device.type == "cpu":
+                    if (
+                        target_attribution is not None
+                        and target_attribution.device.type == "cpu"
+                    ):
                         target_attribution = target_attribution.to(device)
+                    if target_attribution is not None:
+                        target_attribution = joint_target_attribution(
+                            target_attribution
+                        )
 
-                    src_key = NeuronIdx(layer=src_layer, token=src_token, neuron=src_neuron)
-                    tgt_key = NeuronIdx(layer=tgt_layer, token=tgt_token, neuron=tgt_neuron)
+                    src_key = NeuronIdx(
+                        layer=src_layer, token=src_token, neuron=src_neuron
+                    )
+                    tgt_key = NeuronIdx(
+                        layer=tgt_layer, token=tgt_token, neuron=tgt_neuron
+                    )
+                    if not retain_edge(src_key, tgt_key, edge_weight):
+                        continue
 
                     edges.append(
                         Edge(
                             src=src_key,
                             tgt=tgt_key,
                             weight=edge_weight.detach().float().cpu(),
-                            final_attribution=(edge_weight[:, None] * target_attribution)
+                            final_attribution=(
+                                edge_weight[:, None] * target_attribution
+                            )
                             .detach()
                             .float()
                             .cpu(),
@@ -1251,12 +1455,12 @@ def _compute_cl_ja_layer_jacobian(
 
     handles = []
     if not disable_stop_grad:
-        src_handle = model.model.layers[src_layer].mlp.mlp.down_proj.register_forward_hook(
-            make_hook(src_layer)
-        )
-        tgt_handle = model.model.layers[tgt_layer].mlp.mlp.down_proj.register_forward_hook(
-            make_hook(tgt_layer)
-        )
+        src_handle = model.model.layers[
+            src_layer
+        ].mlp.mlp.down_proj.register_forward_hook(make_hook(src_layer))
+        tgt_handle = model.model.layers[
+            tgt_layer
+        ].mlp.mlp.down_proj.register_forward_hook(make_hook(tgt_layer))
     else:
         src_handle = model.model.layers[src_layer].mlp.down_proj.register_forward_hook(
             make_hook(src_layer)
@@ -1455,10 +1659,14 @@ def _compute_cl_ja_layer_jacobian_ig(
     if ig_mode == "ig-inputs":
         # Riemann sum in IG (ignore step 0)
         # Average gradients across steps (move back to device for computation)
-        grads_avg = torch.stack(grads_steps[1:]).mean(dim=0).to(device)  # (batch, n_src, n_tgt)
+        grads_avg = (
+            torch.stack(grads_steps[1:]).mean(dim=0).to(device)
+        )  # (batch, n_src, n_tgt)
 
         # Compute activation differences
-        src_acts_diff = (src_acts_steps[-1] - src_acts_steps[0]).to(device)  # (batch, n_src)
+        src_acts_diff = (src_acts_steps[-1] - src_acts_steps[0]).to(
+            device
+        )  # (batch, n_src)
         tgt_acts_final = src_acts_steps[-1].to(device)  # (batch, n_tgt)
 
         # Apply IG formula: averaged_gradient * src_activation_diff
@@ -1472,7 +1680,9 @@ def _compute_cl_ja_layer_jacobian_ig(
 
     elif ig_mode == "conductance":
         # Stack all steps (excluding step 0) and move to device
-        grads_all = torch.stack(grads_steps[1:]).to(device)  # (steps, batch, n_src, n_tgt)
+        grads_all = torch.stack(grads_steps[1:]).to(
+            device
+        )  # (steps, batch, n_src, n_tgt)
 
         # Compute step-wise differences in activations
         src_acts_all = torch.stack(src_acts_steps).to(device)  # (steps+1, batch, n_src)
@@ -1481,7 +1691,9 @@ def _compute_cl_ja_layer_jacobian_ig(
 
         # Apply conductance: sum over steps of (gradient * src_activation_diff)
         # Shape: (steps, batch, n_src, n_tgt) * (steps, batch, n_src, 1) -> sum over steps
-        jvps = (grads_all * src_acts_diffs[:, :, :, None]).sum(dim=0)  # (batch, n_src, n_tgt)
+        jvps = (grads_all * src_acts_diffs[:, :, :, None]).sum(
+            dim=0
+        )  # (batch, n_src, n_tgt)
 
         # Normalize by target activations (use final activations)
         tgt_acts_final = tgt_acts_steps[-1].to(device)  # (batch, n_tgt)

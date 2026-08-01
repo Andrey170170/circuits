@@ -10,6 +10,7 @@ dependencies = [
     "neurondb",
     "user_modeling",
     "anthropic>=0.72.0",
+    "openai>=2.11.0",
     "wandb>=0.19.6",
     "jupyter>=1.0.0",
     "statsmodels>=0.14.0",

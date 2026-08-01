@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=bonafide-adag-bench
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/slurm-%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -73,7 +73,10 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 GPU_MONITOR=/uufs/chpc.utah.edu/sys/installdir/chpcscripts/gpu/gpu-monitor.sh
 monitor_pid=""
 if [[ -x "$GPU_MONITOR" ]]; then
-    "$GPU_MONITOR" &
+    (
+        cd "${REPO_ROOT}/logs"
+        exec "$GPU_MONITOR"
+    ) &
     monitor_pid=$!
 fi
 cleanup() {

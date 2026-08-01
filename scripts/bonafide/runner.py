@@ -24,11 +24,16 @@ from typing import Any, Mapping
 import torch
 from circuits.tracing.artifact import (
     save_compact_trace,
+    validate_topk_trace_data,
     validate_compact_trace_integrity,
 )
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.instrumentation import TraceInstrumentation
-from circuits.tracing.trace import CircuitData, trace_teacher_forced_response
+from circuits.tracing.trace import (
+    CircuitData,
+    TopKPositionTrace,
+    trace_teacher_forced_response,
+)
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from scripts.bonafide.manifest import SCHEMA_VERSION, resolve_pretrained_source
@@ -43,9 +48,9 @@ WARMUP_MODE = "first_wave_item_full_trace_discard"
 
 
 def _canonical_json(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def _sha256(value: Any) -> str:
@@ -79,7 +84,9 @@ def normalized_trace_warmup(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(prefixes, list) or any(
         not isinstance(prefix, str) or not prefix for prefix in prefixes
     ):
-        raise ValueError("run config trace_warmup.wave_id_prefixes must be non-empty strings")
+        raise ValueError(
+            "run config trace_warmup.wave_id_prefixes must be non-empty strings"
+        )
     if enabled and not prefixes:
         raise ValueError("enabled trace_warmup requires at least one wave_id_prefix")
     if len(set(prefixes)) != len(prefixes):
@@ -95,7 +102,9 @@ def trace_warmup_applies(policy: Mapping[str, Any], wave_id: str) -> bool:
 
 def validate_run_config(config: Mapping[str, Any]) -> None:
     if config.get("schema_version") != RUN_CONFIG_SCHEMA:
-        raise ValueError(f"Unsupported run config schema: {config.get('schema_version')!r}")
+        raise ValueError(
+            f"Unsupported run config schema: {config.get('schema_version')!r}"
+        )
     model = config.get("model")
     if not isinstance(model, Mapping):
         raise ValueError("run config requires a model object")
@@ -127,7 +136,9 @@ def validate_target_selection(item: Mapping[str, Any]) -> None:
     width = _require_manifest_int(selection.get("width"), "width")
     if width != len(positions):
         raise ValueError("target selection width does not match response positions")
-    response_length = _require_manifest_int(item.get("response_token_count"), "response length")
+    response_length = _require_manifest_int(
+        item.get("response_token_count"), "response length"
+    )
     if response_length < 1:
         raise ValueError("target sampling response length must be positive")
     for position in positions:
@@ -149,8 +160,12 @@ def validate_target_selection(item: Mapping[str, Any]) -> None:
     )
     if sampled_position != position:
         raise ValueError("target sampling position does not match selected position")
-    stratum_index = _require_manifest_int(sampling.get("stratum_index"), "stratum_index")
-    stratum_count = _require_manifest_int(sampling.get("stratum_count"), "stratum_count")
+    stratum_index = _require_manifest_int(
+        sampling.get("stratum_index"), "stratum_index"
+    )
+    stratum_count = _require_manifest_int(
+        sampling.get("stratum_count"), "stratum_count"
+    )
     start = _require_manifest_int(sampling.get("stratum_start"), "stratum_start")
     end = _require_manifest_int(
         sampling.get("stratum_end_exclusive"), "stratum_end_exclusive"
@@ -232,14 +247,18 @@ def validate_wave_sampling_design(
     expected_common = {
         field: design.get(field) for field in ("design", "seed", "sampler")
     }
-    if any(not isinstance(value, str) or not value for value in expected_common.values()):
+    if any(
+        not isinstance(value, str) or not value for value in expected_common.values()
+    ):
         raise ValueError("sampling_design design, seed, and sampler must be non-empty")
     seen_strata: set[int] = set()
     sampled_example_ids: set[str] = set()
     for item in items:
         validate_target_selection(item)
         if item["response_token_count"] != population_size:
-            raise ValueError("sampled item population size disagrees with sampling_design")
+            raise ValueError(
+                "sampled item population size disagrees with sampling_design"
+            )
         example_id = item["example"]["example_id"]
         if example_id == reference_id:
             raise ValueError("sampled item cannot be the excluded reference example")
@@ -249,7 +268,9 @@ def validate_wave_sampling_design(
             if sampling.get(field) != expected:
                 raise ValueError(f"sampled item {field} disagrees with sampling_design")
         if sampling.get("stratum_count") != stratum_count:
-            raise ValueError("sampled item stratum_count disagrees with sampling_design")
+            raise ValueError(
+                "sampled item stratum_count disagrees with sampling_design"
+            )
         seen_strata.add(sampling["stratum_index"])
     if len(sampled_example_ids) != 1:
         raise ValueError("sampled wave must contain exactly one response example")
@@ -283,7 +304,10 @@ def collect_code_revision(repo_root: Path) -> dict[str, Any]:
         "scripts/bonafide",
     )
     source_paths = sorted(
-        [*repo_root.glob("circuits/**/*.py"), *repo_root.glob("scripts/bonafide/**/*.py")]
+        [
+            *repo_root.glob("circuits/**/*.py"),
+            *repo_root.glob("scripts/bonafide/**/*.py"),
+        ]
     )
     digest = hashlib.sha256()
     for path in source_paths:
@@ -366,11 +390,17 @@ def collect_runtime_environment() -> dict[str, Any]:
 
 def select_wave(manifest: Mapping[str, Any], wave_id: str) -> dict[str, Any]:
     if manifest.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(f"Unsupported benchmark manifest: {manifest.get('schema_version')!r}")
-    matches = [wave for wave in manifest.get("waves", []) if wave.get("wave_id") == wave_id]
+        raise ValueError(
+            f"Unsupported benchmark manifest: {manifest.get('schema_version')!r}"
+        )
+    matches = [
+        wave for wave in manifest.get("waves", []) if wave.get("wave_id") == wave_id
+    ]
     if len(matches) != 1:
         available = [wave.get("wave_id") for wave in manifest.get("waves", [])]
-        raise ValueError(f"Wave {wave_id!r} not found exactly once; available: {available}")
+        raise ValueError(
+            f"Wave {wave_id!r} not found exactly once; available: {available}"
+        )
     return matches[0]
 
 
@@ -399,9 +429,7 @@ def runtime_artifact_identity(
             {
                 "source_artifact_id": warmup_source_item["artifact_id"],
                 "source_work_item_sha256": _sha256(warmup_source_item),
-                "source_target_selection": dict(
-                    warmup_source_item["target_selection"]
-                ),
+                "source_target_selection": dict(warmup_source_item["target_selection"]),
             }
         )
     identity = {
@@ -451,7 +479,9 @@ def validate_runtime_trace_against_item(
             f"{actual_positions!r} != {expected_positions!r}"
         )
     if len(trace.target_logits) != 1:
-        raise ValueError("runtime trace must contain exactly one target-logit batch item")
+        raise ValueError(
+            "runtime trace must contain exactly one target-logit batch item"
+        )
     actual_token_ids = [int(value) for value in trace.target_logits[0]]
     provenance_token_ids = [
         provenance.get("token_id") for provenance in trace.target_provenance
@@ -470,6 +500,73 @@ def validate_runtime_trace_against_item(
         raise ValueError(
             "runtime final target token ID does not match manifest: "
             f"{actual_final!r} != {expected_final_token_id}"
+        )
+
+
+def validate_runtime_topk_trace_against_item(
+    trace: TopKPositionTrace,
+    item: Mapping[str, Any],
+    trace_family: Mapping[str, Any],
+) -> None:
+    """Ensure a live candidate-axis trace matches its frozen work item."""
+
+    validate_topk_trace_data(trace)
+    validate_target_selection(item)
+    positions = item["target_selection"]["response_token_positions"]
+    if len(positions) != 1:
+        raise ValueError("runtime top-k trace requires one response target position")
+    expected_position = int(positions[0])
+    if trace.shared_response_position != expected_position:
+        raise ValueError("runtime top-k response position does not match manifest")
+
+    data = trace.circuit_data
+    expected_response_count = int(item["response_token_count"])
+    if data.trace_metadata.get("response_token_count") != expected_response_count:
+        raise ValueError("runtime top-k response token count does not match manifest")
+    expected_observed_token_id = int(item["target_selection"]["final_target_token_id"])
+    if data.target_logits != [[expected_observed_token_id]]:
+        raise ValueError("runtime top-k observed token does not match manifest")
+    if trace.candidate_selection.observed_token_id != expected_observed_token_id:
+        raise ValueError(
+            "runtime candidate selection observed token does not match manifest"
+        )
+    if trace.candidate_selection.policy_id == "specified_token":
+        expected_candidate = item.get("specified_candidate_token_id")
+        if (
+            len(trace.candidate_selection.candidates) != 1
+            or trace.candidate_selection.candidates[0].token_id != expected_candidate
+        ):
+            raise ValueError(
+                "runtime specified candidate does not match frozen work item"
+            )
+
+    expected_fields = {
+        "trace_family_id": trace.trace_family_id,
+        "candidate_policy_id": trace.candidate_selection.policy_id,
+        "candidate_policy_version": trace.candidate_selection.policy_version,
+        "joint_objective_id": trace.joint_objective.objective_id,
+        "joint_objective_version": trace.joint_objective.objective_version,
+    }
+    for field, actual in expected_fields.items():
+        if trace_family.get(field) != actual:
+            raise ValueError(
+                f"runtime top-k {field} does not match frozen trace family"
+            )
+    if trace.candidate_selection.policy_id == "model_top5_plus_observed":
+        if (
+            trace_family.get("candidate_count_min") != 5
+            or trace_family.get("candidate_count_max") != 6
+            or trace_family.get("candidate_count_rule")
+            != "5_if_observed_in_model_top5_else_6"
+            or trace.candidate_count not in {5, 6}
+        ):
+            raise ValueError(
+                "runtime top-k candidate count does not match the frozen "
+                "model_top5_plus_observed trace family"
+            )
+    elif trace_family.get("candidate_count") != trace.candidate_count:
+        raise ValueError(
+            "runtime top-k candidate_count does not match frozen trace family"
         )
 
 
@@ -536,7 +633,9 @@ def _torch_dtype(name: str) -> torch.dtype:
     try:
         return choices[name]
     except KeyError as error:
-        raise ValueError(f"Unsupported dtype {name!r}; choose one of {sorted(choices)}") from error
+        raise ValueError(
+            f"Unsupported dtype {name!r}; choose one of {sorted(choices)}"
+        ) from error
 
 
 def _load_model_and_tokenizer(config: Mapping[str, Any]):
@@ -549,7 +648,9 @@ def _load_model_and_tokenizer(config: Mapping[str, Any]):
         model_id=model_id,
         revision=revision,
         local_files_only=local_files_only,
-        explicit_path=Path(os.path.expandvars(explicit_path)) if explicit_path else None,
+        explicit_path=(
+            Path(os.path.expandvars(explicit_path)) if explicit_path else None
+        ),
     )
     tokenizer = AutoTokenizer.from_pretrained(
         pretrained_source,
@@ -604,9 +705,9 @@ def _base_record(
         "response_token_count": item["response_token_count"],
         "target_count": selection["width"],
         "target_response_positions": selection["response_token_positions"],
-        "target_sampling": dict(selection["sampling"])
-        if "sampling" in selection
-        else None,
+        "target_sampling": (
+            dict(selection["sampling"]) if "sampling" in selection else None
+        ),
         "batch_size": 1,
         "objective": item["objective"],
         "model_load_seconds": model_load_seconds,
@@ -740,9 +841,13 @@ def run_wave(
     code_revision = dict(_code_revision or collect_code_revision(repo_root))
     runtime_environment = dict(_runtime_environment or collect_runtime_environment())
     if manifest["tokenizer"]["model_id"] != model_config["model_id"]:
-        raise ValueError("manifest tokenizer model_id does not match run config model_id")
+        raise ValueError(
+            "manifest tokenizer model_id does not match run config model_id"
+        )
     if manifest["tokenizer"]["revision"] != model_config["revision"]:
-        raise ValueError("manifest tokenizer revision does not match run config revision")
+        raise ValueError(
+            "manifest tokenizer revision does not match run config revision"
+        )
 
     items = wave_items
     if only_artifact_id:
@@ -855,7 +960,9 @@ def run_wave(
     max_trace_seconds = limits.get("max_trace_seconds")
     min_cuda_headroom_bytes = int(limits.get("min_cuda_headroom_bytes", 0))
     stop_on_oom = bool(limits.get("stop_on_oom", True))
-    for planned_index, (item, artifact_id, identity, artifact_path) in enumerate(planned):
+    for planned_index, (item, artifact_id, identity, artifact_path) in enumerate(
+        planned
+    ):
         base = _base_record(
             wave_id=wave_id,
             item=item,
@@ -906,18 +1013,18 @@ def run_wave(
                 "trace_wall_seconds": trace_elapsed,
                 "cuda_allocated_before_bytes": allocated_before,
                 "cuda_reserved_before_bytes": reserved_before,
-                "cuda_allocated_after_trace_bytes": torch.cuda.memory_allocated()
-                if uses_cuda
-                else 0,
-                "cuda_reserved_after_trace_bytes": torch.cuda.memory_reserved()
-                if uses_cuda
-                else 0,
-                "cuda_peak_allocated_bytes": torch.cuda.max_memory_allocated()
-                if uses_cuda
-                else 0,
-                "cuda_peak_reserved_bytes": torch.cuda.max_memory_reserved()
-                if uses_cuda
-                else 0,
+                "cuda_allocated_after_trace_bytes": (
+                    torch.cuda.memory_allocated() if uses_cuda else 0
+                ),
+                "cuda_reserved_after_trace_bytes": (
+                    torch.cuda.memory_reserved() if uses_cuda else 0
+                ),
+                "cuda_peak_allocated_bytes": (
+                    torch.cuda.max_memory_allocated() if uses_cuda else 0
+                ),
+                "cuda_peak_reserved_bytes": (
+                    torch.cuda.max_memory_reserved() if uses_cuda else 0
+                ),
                 "cuda_headroom_after_peak_bytes": (
                     gpu_info["total_memory_bytes"] - torch.cuda.max_memory_reserved()
                     if uses_cuda and gpu_info is not None
@@ -973,18 +1080,18 @@ def run_wave(
                 "total_unit_wall_seconds": elapsed,
                 "cuda_allocated_before_bytes": allocated_before,
                 "cuda_reserved_before_bytes": reserved_before,
-                "cuda_allocated_after_trace_bytes": torch.cuda.memory_allocated()
-                if uses_cuda
-                else 0,
-                "cuda_reserved_after_trace_bytes": torch.cuda.memory_reserved()
-                if uses_cuda
-                else 0,
-                "cuda_peak_allocated_bytes": torch.cuda.max_memory_allocated()
-                if uses_cuda
-                else 0,
-                "cuda_peak_reserved_bytes": torch.cuda.max_memory_reserved()
-                if uses_cuda
-                else 0,
+                "cuda_allocated_after_trace_bytes": (
+                    torch.cuda.memory_allocated() if uses_cuda else 0
+                ),
+                "cuda_reserved_after_trace_bytes": (
+                    torch.cuda.memory_reserved() if uses_cuda else 0
+                ),
+                "cuda_peak_allocated_bytes": (
+                    torch.cuda.max_memory_allocated() if uses_cuda else 0
+                ),
+                "cuda_peak_reserved_bytes": (
+                    torch.cuda.max_memory_reserved() if uses_cuda else 0
+                ),
                 "cuda_headroom_after_peak_bytes": (
                     gpu_info["total_memory_bytes"] - torch.cuda.max_memory_reserved()
                     if uses_cuda and gpu_info is not None
@@ -1022,9 +1129,9 @@ def run_wave(
         stop_reason = wave_stop_reason(
             record,
             uses_cuda=uses_cuda,
-            max_trace_seconds=float(max_trace_seconds)
-            if max_trace_seconds is not None
-            else None,
+            max_trace_seconds=(
+                float(max_trace_seconds) if max_trace_seconds is not None else None
+            ),
             min_cuda_headroom_bytes=min_cuda_headroom_bytes,
             stop_on_oom=stop_on_oom,
         )
@@ -1155,7 +1262,11 @@ def run_compound_shard(
     selected = _compound_item_lookup(manifest, refs)
     warmup_policy = normalized_trace_warmup(config)
     warmup_waves = sorted(
-        {wave_id for wave_id, _ in selected if trace_warmup_applies(warmup_policy, wave_id)}
+        {
+            wave_id
+            for wave_id, _ in selected
+            if trace_warmup_applies(warmup_policy, wave_id)
+        }
     )
     if warmup_waves:
         raise ValueError(
@@ -1186,9 +1297,13 @@ def run_compound_shard(
         return preflight
     source_config = execution_plan["sources"]["trace_run_config"]
     if _sha256(config) != source_config.get("canonical_sha256"):
-        raise ValueError("execution plan tracing-config identity disagrees with loaded config")
+        raise ValueError(
+            "execution plan tracing-config identity disagrees with loaded config"
+        )
     if _sha256(manifest) != source_manifest.get("canonical_sha256"):
-        raise ValueError("execution plan manifest identity disagrees with loaded manifest")
+        raise ValueError(
+            "execution plan manifest identity disagrees with loaded manifest"
+        )
     _ensure_execution_cohort(
         artifact_root=artifact_root,
         plan_sha256=execution_plan["plan_sha256"],
@@ -1283,8 +1398,13 @@ def run_compound_shard(
             raise
         results.extend(records)
         completed_count += sum(record.get("status") == "complete" for record in records)
-        skipped_count += sum(record.get("status") == "skipped_complete" for record in records)
-        stop = next((record for record in records if record.get("status") == "wave_stopped"), None)
+        skipped_count += sum(
+            record.get("status") == "skipped_complete" for record in records
+        )
+        stop = next(
+            (record for record in records if record.get("status") == "wave_stopped"),
+            None,
+        )
         if stop is not None:
             shard_stop = {
                 "record_type": "compound_task",
@@ -1317,7 +1437,9 @@ def run_compound_shard(
                 "stop_reason": "failed_item_without_stop_gate",
                 "completed_item_count": completed_count,
                 "skipped_item_count": skipped_count,
-                "remaining_item_count": expected_count - completed_count - skipped_count,
+                "remaining_item_count": expected_count
+                - completed_count
+                - skipped_count,
                 "error_type": failed.get("error_type"),
                 "error": failed.get("error"),
             }
@@ -1360,12 +1482,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     selector = parser.add_mutually_exclusive_group(required=True)
     selector.add_argument("--wave", help="One exact wave_id; no later wave is implied")
-    selector.add_argument("--execution-plan", type=Path, help="Validated compound execution plan")
+    selector.add_argument(
+        "--execution-plan", type=Path, help="Validated compound execution plan"
+    )
     parser.add_argument("--execution-task-index", type=int)
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--summary-jsonl", type=Path)
     parser.add_argument("--only-artifact-id")
-    parser.add_argument("--dry-run", action="store_true", help="Validate and list work without a model")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Validate and list work without a model"
+    )
     return parser.parse_args()
 
 
@@ -1373,7 +1499,9 @@ def main() -> None:
     args = parse_args()
     config = load_json(args.config)
     manifest = load_json(args.manifest)
-    artifact_root = args.artifact_root or Path(config.get("artifact_root", "results/bonafide"))
+    artifact_root = args.artifact_root or Path(
+        config.get("artifact_root", "results/bonafide")
+    )
     if args.execution_plan is not None:
         if args.execution_task_index is None:
             raise ValueError("--execution-plan requires --execution-task-index")

@@ -1,0 +1,267 @@
+{
+  "balance": {
+    "candidate_count_counts": {
+      "5": 235,
+      "6": 10
+    },
+    "case_count": 245,
+    "family_count": 34,
+    "response_count": 35,
+    "role_counts": {
+      "broad_discovery": 168,
+      "dense_discovery": 77
+    }
+  },
+  "case_count": 245,
+  "cohort_id": "qwen3-4b-instruct-topk-c2-v1",
+  "expected_trace_count": 1235,
+  "manifests": [
+    {
+      "label": "independent-candidate-0",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c2_independent_candidate_0_v1.json",
+      "sha256": "e4c4aab6189276282f4455ecea632eb8d3d999c58d97cff93e02a4e533801109",
+      "trace_family_id": "bonafide.c2.independent-candidate-0.v1",
+      "waves": [
+        {
+          "wave_id": "c2-independent-candidate-0-dense-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-0-dense-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-0-dense-02",
+          "work_item_count": 21
+        },
+        {
+          "wave_id": "c2-independent-candidate-0-broad-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-0-broad-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-0-broad-02",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-0-broad-03",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-0-broad-04",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-0-broad-05",
+          "work_item_count": 28
+        }
+      ],
+      "work_item_count": 245
+    },
+    {
+      "label": "independent-candidate-1",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c2_independent_candidate_1_v1.json",
+      "sha256": "aee5608cd0cb0a6908fdff1a6fadeb82ea38e968873e9d40b29c2bd33861f1ab",
+      "trace_family_id": "bonafide.c2.independent-candidate-1.v1",
+      "waves": [
+        {
+          "wave_id": "c2-independent-candidate-1-dense-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-1-dense-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-1-dense-02",
+          "work_item_count": 21
+        },
+        {
+          "wave_id": "c2-independent-candidate-1-broad-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-1-broad-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-1-broad-02",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-1-broad-03",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-1-broad-04",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-1-broad-05",
+          "work_item_count": 28
+        }
+      ],
+      "work_item_count": 245
+    },
+    {
+      "label": "independent-candidate-2",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c2_independent_candidate_2_v1.json",
+      "sha256": "37ac0280d2d4b3674083afdb0a3d83315a252b067bdfbb5c3bbe559b00d3623e",
+      "trace_family_id": "bonafide.c2.independent-candidate-2.v1",
+      "waves": [
+        {
+          "wave_id": "c2-independent-candidate-2-dense-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-2-dense-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-2-dense-02",
+          "work_item_count": 21
+        },
+        {
+          "wave_id": "c2-independent-candidate-2-broad-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-2-broad-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-2-broad-02",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-2-broad-03",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-2-broad-04",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-2-broad-05",
+          "work_item_count": 28
+        }
+      ],
+      "work_item_count": 245
+    },
+    {
+      "label": "independent-candidate-3",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c2_independent_candidate_3_v1.json",
+      "sha256": "a7d7fec84cd22f95796179b613250cd7e209cca7cdd58ae197702a4397aa7ac2",
+      "trace_family_id": "bonafide.c2.independent-candidate-3.v1",
+      "waves": [
+        {
+          "wave_id": "c2-independent-candidate-3-dense-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-3-dense-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-3-dense-02",
+          "work_item_count": 21
+        },
+        {
+          "wave_id": "c2-independent-candidate-3-broad-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-3-broad-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-3-broad-02",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-3-broad-03",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-3-broad-04",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-3-broad-05",
+          "work_item_count": 28
+        }
+      ],
+      "work_item_count": 245
+    },
+    {
+      "label": "independent-candidate-4",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c2_independent_candidate_4_v1.json",
+      "sha256": "240caeb6cd5815443e70cf4eee04eff10521179eb8ef0d7b6f2d1a4cc14a9d35",
+      "trace_family_id": "bonafide.c2.independent-candidate-4.v1",
+      "waves": [
+        {
+          "wave_id": "c2-independent-candidate-4-dense-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-4-dense-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-4-dense-02",
+          "work_item_count": 21
+        },
+        {
+          "wave_id": "c2-independent-candidate-4-broad-00",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-4-broad-01",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-4-broad-02",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-4-broad-03",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-4-broad-04",
+          "work_item_count": 28
+        },
+        {
+          "wave_id": "c2-independent-candidate-4-broad-05",
+          "work_item_count": 28
+        }
+      ],
+      "work_item_count": 245
+    },
+    {
+      "label": "independent-candidate-5",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/manifests/qwen3_4b_instruct_topk_c2_independent_candidate_5_v1.json",
+      "sha256": "d4b024f7852d8b670e578f86a3afb38f80d69211b0de46607ba0b0b5d7a9ebc9",
+      "trace_family_id": "bonafide.c2.independent-candidate-5.v1",
+      "waves": [
+        {
+          "wave_id": "c2-independent-candidate-5-dense-00",
+          "work_item_count": 6
+        },
+        {
+          "wave_id": "c2-independent-candidate-5-broad-00",
+          "work_item_count": 4
+        }
+      ],
+      "work_item_count": 10
+    }
+  ],
+  "rank_screen_path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/top5-c2-v1/selection-evidence/topk-rank-screen-c2-pool490-8cd58e0.json",
+  "rank_screen_sha256": "0d1d37e5487ae0f5674e67a0f4bbf2cbd29a39d55646381e220c1ccc73c520c9",
+  "schema_version": "bonafide-topk-c2-launch-bundle/v1",
+  "selection_path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/top5-trace-v1/scripts/bonafide/selections/qwen3_4b_instruct_topk_c2_cohort_v1.json",
+  "selection_sha256": "67cd4b2d5bf2fe2558b2abe55060b75d098856ccdb71be1df771b2278ca869b1"
+}

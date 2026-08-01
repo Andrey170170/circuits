@@ -16,7 +16,17 @@ import torch
 from circuits.tracing.clja import (
     ADAGConfig,
     CLJAProbeSelection,
+    FrozenGraphTopology,
     get_all_pairs_cl_ja_effects_with_attributions,
+)
+from circuits.tracing.candidates import (
+    CandidateLogitAxis,
+    CandidatePolicyId,
+    CandidateSelection,
+    JointLogitObjective,
+    JointObjectiveId,
+    build_joint_objective,
+    select_candidate_logits,
 )
 from circuits.tracing.instrumentation import (
     TraceInstrumentation,
@@ -41,7 +51,9 @@ class CircuitData:
     k: int
     config: ADAGConfig
     model_id: str = ""
-    traced_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    traced_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     target_logit_values: list[list[float]] = field(default_factory=list)
     target_provenance: list[dict[str, object]] = field(default_factory=list)
     trace_metadata: dict[str, object] = field(default_factory=dict)
@@ -75,8 +87,12 @@ class CircuitData:
                     return f"{parts[0]}___{int(parts[1]) + offset}"
                 return label
 
-            df_node["label"] = df_node["label"].apply(lambda l: reindex_label(l, global_offset))
-            df_edge["label"] = df_edge["label"].apply(lambda l: reindex_label(l, global_offset))
+            df_node["label"] = df_node["label"].apply(
+                lambda l: reindex_label(l, global_offset)
+            )
+            df_edge["label"] = df_edge["label"].apply(
+                lambda l: reindex_label(l, global_offset)
+            )
 
             all_df_node.append(df_node)
             all_df_edge.append(df_edge)
@@ -89,7 +105,9 @@ class CircuitData:
             attention_masks=[am for shard in shards for am in shard.attention_masks],
             labels=[l for shard in shards for l in shard.labels],
             target_logits=[tl for shard in shards for tl in shard.target_logits],
-            target_logit_probs=[tp for shard in shards for tp in shard.target_logit_probs],
+            target_logit_probs=[
+                tp for shard in shards for tp in shard.target_logit_probs
+            ],
             k=shards[0].k,
             config=shards[0].config,
             model_id=shards[0].model_id,
@@ -125,6 +143,38 @@ class CircuitData:
             return pickle.load(f)
 
 
+TOPK_TRACE_FAMILY_ID = "bonafide.topk-position.v1"
+TOPK_CONTRIBUTION_SCHEMA_ID = "adag.candidate-contribution.raw-logit.v1"
+
+
+@dataclass(frozen=True)
+class TopKPositionTrace:
+    """One response target with a distinct same-position candidate-logit axis."""
+
+    circuit_data: CircuitData
+    trace_family_id: str
+    shared_response_position: int
+    shared_prediction_position: int
+    candidate_selection: CandidateSelection
+    joint_objective: JointLogitObjective
+    candidate_contribution_schema: dict[str, object]
+
+    @property
+    def candidate_count(self) -> int:
+        return len(self.candidate_selection.candidates)
+
+    def contract_dict(self) -> dict[str, object]:
+        return {
+            "trace_family_id": self.trace_family_id,
+            "shared_response_position": self.shared_response_position,
+            "shared_prediction_position": self.shared_prediction_position,
+            "candidate_count": self.candidate_count,
+            "candidate_selection": self.candidate_selection.to_dict(),
+            "joint_objective": self.joint_objective.to_dict(),
+            "candidate_contribution_schema": self.candidate_contribution_schema,
+        }
+
+
 PROBE_SCHEMA_VERSION = "adag.teacher-forced-probe.v1"
 PROBE_OCCURRENCE_SCHEMA_VERSION = "adag.selected-neuron-occurrences.v1"
 PROBE_FEATURE_BASIS_SCHEMA_VERSION = "adag.selected-neuron-feature-basis.v1"
@@ -152,9 +202,7 @@ def _model_config_for_hash(model: PreTrainedModel) -> dict[str, object]:
         "_name_or_path": getattr(model.config, "_name_or_path", None),
         "_commit_hash": getattr(model.config, "_commit_hash", None),
         "model_type": getattr(model.config, "model_type", None),
-        "_attn_implementation": getattr(
-            model.config, "_attn_implementation", None
-        ),
+        "_attn_implementation": getattr(model.config, "_attn_implementation", None),
     }
 
 
@@ -195,7 +243,9 @@ def validate_teacher_forced_probe_result(
 ) -> dict[str, object]:
     """Fail closed on malformed or scientifically ambiguous probe output."""
 
-    value = probe.to_dict() if isinstance(probe, TeacherForcedProbeResult) else dict(probe)
+    value = (
+        probe.to_dict() if isinstance(probe, TeacherForcedProbeResult) else dict(probe)
+    )
     if value.get("schema_version") != PROBE_SCHEMA_VERSION:
         raise ValueError(f"unsupported probe schema: {value.get('schema_version')!r}")
     provenance = value.get("target_provenance")
@@ -220,7 +270,9 @@ def validate_teacher_forced_probe_result(
     ):
         numeric = provenance[field_name]
         if isinstance(numeric, bool) or not isinstance(numeric, int) or numeric < 0:
-            raise ValueError(f"probe target {field_name} must be a non-negative integer")
+            raise ValueError(
+                f"probe target {field_name} must be a non-negative integer"
+            )
     if not isinstance(provenance["token_text"], str):
         raise ValueError("probe target token_text must be a string")
     for field_name in ("logit", "probability"):
@@ -312,7 +364,9 @@ def validate_teacher_forced_probe_result(
         raise ValueError("probe instrumentation stages must be an object")
     leaked = forbidden_stages.intersection(stages)
     if leaked:
-        raise ValueError(f"probe contains forbidden post-selection stages: {sorted(leaked)}")
+        raise ValueError(
+            f"probe contains forbidden post-selection stages: {sorted(leaked)}"
+        )
 
     adag_config = value.get("adag_config")
     if not isinstance(adag_config, Mapping) or not isinstance(
@@ -363,9 +417,10 @@ def validate_teacher_forced_probe_result(
         raise ValueError("probe input-token metadata is inconsistent")
     if provenance["absolute_token_position"] != prefix_count + response_position:
         raise ValueError("probe absolute target position is inconsistent")
-    if provenance["prediction_token_position"] != provenance[
-        "absolute_token_position"
-    ] - 1:
+    if (
+        provenance["prediction_token_position"]
+        != provenance["absolute_token_position"] - 1
+    ):
         raise ValueError("probe prediction target position is inconsistent")
     if metadata["effective_end_layer"] < max(metadata["effective_start_layer"], 0):
         raise ValueError("probe effective layer bounds are inconsistent")
@@ -374,9 +429,10 @@ def validate_teacher_forced_probe_result(
     if not isinstance(model_identity, Mapping):
         raise ValueError("probe model_identity must be an object")
     for field_name in ("model_id", "revision", "hash_semantics"):
-        if not isinstance(model_identity.get(field_name), str) or not model_identity[
-            field_name
-        ]:
+        if (
+            not isinstance(model_identity.get(field_name), str)
+            or not model_identity[field_name]
+        ):
             raise ValueError(f"probe model_identity.{field_name} is required")
     _validate_sha256(
         model_identity.get("model_config_sha256"),
@@ -532,7 +588,9 @@ def tokenize_teacher_forced_response(
         )
     if assistant_suffix:
         if full_ids[-len(assistant_suffix) :] != assistant_suffix:
-            raise ValueError("chat template assistant suffix changed for non-empty content")
+            raise ValueError(
+                "chat template assistant suffix changed for non-empty content"
+            )
         response_ids = full_ids[len(prefix_ids) : -len(assistant_suffix)]
     else:
         response_ids = full_ids[len(prefix_ids) :]
@@ -591,7 +649,9 @@ def prepare_teacher_forced_input(
 
     included_response_count = target_response_positions[-1] + 1
     input_ids = prefix_ids + response_ids[:included_response_count]
-    target_token_ids = [response_ids[position] for position in target_response_positions]
+    target_token_ids = [
+        response_ids[position] for position in target_response_positions
+    ]
     target_prediction_positions = [
         len(prefix_ids) + position - 1 for position in target_response_positions
     ]
@@ -604,7 +664,9 @@ def prepare_teacher_forced_input(
         selected_response_positions=list(target_response_positions),
         target_prediction_positions=target_prediction_positions,
         target_token_ids=target_token_ids,
-        target_token_texts=[tokenizer.decode([token_id]) for token_id in target_token_ids],
+        target_token_texts=[
+            tokenizer.decode([token_id]) for token_id in target_token_ids
+        ],
     )
 
 
@@ -625,8 +687,26 @@ def _teacher_forced_target_scores(
     ):
         position_logits = logits[prediction_position]
         target_logits.append(float(position_logits[token_id].item()))
-        target_probs.append(float(torch.softmax(position_logits, dim=-1)[token_id].item()))
+        target_probs.append(
+            float(torch.softmax(position_logits, dim=-1)[token_id].item())
+        )
     return target_logits, target_probs
+
+
+def _teacher_forced_position_logits(
+    model: PreTrainedModel,
+    prepared: TeacherForcedInput,
+) -> torch.Tensor:
+    """Return the full distribution for one prepared prediction position."""
+
+    if len(prepared.target_prediction_positions) != 1:
+        raise ValueError("candidate tracing requires exactly one response target")
+    device = next(model.parameters()).device
+    input_ids = torch.tensor([prepared.input_ids], device=device)
+    attention_mask = torch.tensor([prepared.attention_mask], device=device)
+    with torch.no_grad():
+        logits = model(input_ids=input_ids, attention_mask=attention_mask).logits[0]
+    return logits[prepared.target_prediction_positions[0]].detach()
 
 
 def _teacher_forced_target_provenance(
@@ -701,7 +781,9 @@ def probe_teacher_forced_response(
             system_prompt=system_prompt,
         )
     with instrumentation_stage(recorder, "target_scoring"):
-        target_logit_values, target_probs = _teacher_forced_target_scores(model, prepared)
+        target_logit_values, target_probs = _teacher_forced_target_scores(
+            model, prepared
+        )
     declared_model_config = _model_config_for_hash(model)
     pre_probe_model_config_sha256 = _stable_json_hash(declared_model_config)
     clja_error: BaseException | None = None
@@ -732,9 +814,7 @@ def probe_teacher_forced_response(
         )
         if post_probe_model_config_sha256 != pre_probe_model_config_sha256:
             if clja_error is not None:
-                recorder.set_counter(
-                    "probe_model_config_leak_during_failed_clja", True
-                )
+                recorder.set_counter("probe_model_config_leak_during_failed_clja", True)
                 clja_error.add_note(
                     "ADAG probe also leaked model.config state while failing; "
                     "the resident model must not be reused"
@@ -914,7 +994,9 @@ def prepare_cis(
     if true_answers is None:
         true_answers = [None] * len(questions)
     res = [
-        prepare_ci(model, tokenizer, q, sr, k, system_prompt, ta, use_chat_format, verbose)
+        prepare_ci(
+            model, tokenizer, q, sr, k, system_prompt, ta, use_chat_format, verbose
+        )
         for q, sr, ta in zip(questions, seed_responses, true_answers)
     ]
     cis = [r[0] for r in res]
@@ -980,7 +1062,9 @@ def prepare_ci_with_rollout(
     # generate additional tokens
     input_ids = torch.tensor([token_ids], device=next(model.parameters()).device)
     with torch.no_grad():
-        output_ids = model.generate(input_ids, max_new_tokens=max_new_tokens, do_sample=False)
+        output_ids = model.generate(
+            input_ids, max_new_tokens=max_new_tokens, do_sample=False
+        )
     rollout_token_ids = output_ids[0].tolist()[len(token_ids) :]
 
     if len(rollout_token_ids) != max_new_tokens:
@@ -1008,7 +1092,9 @@ def prepare_cis_with_rollout(
     if seed_responses is None:
         seed_responses = [None] * len(questions)
     cis = [
-        prepare_ci_with_rollout(model, tokenizer, q, seed_response, max_new_tokens, verbose)
+        prepare_ci_with_rollout(
+            model, tokenizer, q, seed_response, max_new_tokens, verbose
+        )
         for q, seed_response in zip(questions, seed_responses)
     ]
     max_length = max(len(ci) for ci in cis)
@@ -1066,7 +1152,9 @@ def prepare_cis_with_rollout(
         logits = model(input_ids, attention_mask=attn_mask).logits
     for batch_i in range(len(new_cis)):
         probs_for_ci: list[float] = []
-        for tgt_pos, focus_tok in zip(all_tgt_tokens[batch_i], all_focus_tokens[batch_i]):
+        for tgt_pos, focus_tok in zip(
+            all_tgt_tokens[batch_i], all_focus_tokens[batch_i]
+        ):
             token_probs = torch.softmax(logits[batch_i, tgt_pos], dim=-1)
             probs_for_ci.append(token_probs[focus_tok].item())
         all_focus_probs.append(probs_for_ci)
@@ -1190,6 +1278,203 @@ def trace_teacher_forced_response(
     )
 
 
+def trace_teacher_forced_candidates(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    prompt: str,
+    response: str,
+    target_response_position: int,
+    config: ADAGConfig,
+    *,
+    candidate_policy_id: CandidatePolicyId,
+    candidate_count: int,
+    specified_candidate_token_id: int | None = None,
+    joint_objective_id: JointObjectiveId = "raw_logit_sum",
+    trace_family_id: str = TOPK_TRACE_FAMILY_ID,
+    label: str = "teacher_forced_topk",
+    system_prompt: str | None = None,
+    ignore_bos: bool = False,
+    instrumentation: TraceInstrumentation | None = None,
+    frozen_topology: FrozenGraphTopology | None = None,
+    frozen_topology_sha256: str | None = None,
+) -> TopKPositionTrace:
+    """Trace several candidate logits at one teacher-forced response position.
+
+    The response target remains singular. Candidate logits form a separate
+    output-contribution axis and share one prediction position.
+    """
+
+    if config.center_logits:
+        raise ValueError(
+            "candidate tracing requires an objective with explicit centering; "
+            "ADAGConfig.center_logits is not a named candidate objective"
+        )
+    if not isinstance(trace_family_id, str) or not trace_family_id:
+        raise ValueError("trace_family_id must be a non-empty string")
+    if frozen_topology is not None:
+        if candidate_policy_id != "specified_token" or candidate_count != 1:
+            raise ValueError(
+                "frozen-topology refinement requires one specified candidate"
+            )
+        if (
+            not isinstance(frozen_topology_sha256, str)
+            or len(frozen_topology_sha256) != 64
+        ):
+            raise ValueError(
+                "frozen-topology refinement requires a SHA-256 topology identity"
+            )
+
+    with instrumentation_stage(instrumentation, "prepare_input"):
+        prepared = prepare_teacher_forced_input(
+            tokenizer,
+            prompt,
+            response,
+            [target_response_position],
+            system_prompt=system_prompt,
+        )
+    with instrumentation_stage(instrumentation, "candidate_scoring"):
+        position_logits = _teacher_forced_position_logits(model, prepared)
+        selection = select_candidate_logits(
+            position_logits,
+            observed_token_id=prepared.target_token_ids[0],
+            policy_id=candidate_policy_id,
+            candidate_count=candidate_count,
+            decode_token=lambda token_id: tokenizer.decode([token_id]),
+            specified_token_id=specified_candidate_token_id,
+        )
+        objective = build_joint_objective(joint_objective_id, selection.candidates)
+        realized_candidate_count = len(selection.candidates)
+        observed_token_id = prepared.target_token_ids[0]
+        observed_logit = float(
+            position_logits[observed_token_id].detach().float().cpu().item()
+        )
+        observed_probability = float(
+            torch.softmax(position_logits.float(), dim=-1)[observed_token_id]
+            .detach()
+            .cpu()
+            .item()
+        )
+
+    candidate_axis = CandidateLogitAxis(
+        prediction_position=prepared.target_prediction_positions[0],
+        token_ids_by_batch=(
+            tuple(candidate.token_id for candidate in selection.candidates),
+        ),
+        objective_weights=objective.candidate_weights,
+        use_absolute_goal_for_percentage_threshold=(
+            objective.percentage_threshold_reference
+            == "absolute_joint_objective_magnitude"
+        ),
+    )
+    with instrumentation_stage(instrumentation, "clja_total"):
+        nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(
+            model=model,
+            tokenizer=tokenizer,
+            cis=[prepared.input_ids],
+            config=config,
+            attention_masks=[prepared.attention_mask],
+            candidate_axis=candidate_axis,
+            frozen_topology=frozen_topology,
+            src_tokens=list(range(len(prepared.input_ids) - 1)),
+            tgt_tokens=[prepared.target_prediction_positions[0]],
+            instrumentation=instrumentation,
+        )
+    if instrumentation is not None:
+        instrumentation.set_counter("raw_node_count", len(nodes))
+        instrumentation.set_counter("raw_edge_count", len(edges))
+        instrumentation.set_counter("candidate_count", realized_candidate_count)
+    with instrumentation_stage(instrumentation, "dataframe_conversion"):
+        df_node, df_edge = convert_circuit_to_dataframes(
+            [nodes],
+            [edges],
+            [label],
+            [[0]],
+            bs=1,
+            ignore_bos=ignore_bos,
+            percentage_threshold=(
+                None if frozen_topology is not None else config.percentage_threshold
+            ),
+            preserve_zero_attribution=frozen_topology is not None,
+        )
+    if instrumentation is not None:
+        instrumentation.set_counter("final_dataframe_node_count", len(df_node))
+        instrumentation.set_counter("final_dataframe_edge_count", len(df_edge))
+
+    target_provenance = _teacher_forced_target_provenance(
+        prepared, [observed_logit], [observed_probability]
+    )
+    contribution_schema: dict[str, object] = {
+        "schema_id": TOPK_CONTRIBUTION_SCHEMA_ID,
+        "axis": "candidate_index",
+        "width": realized_candidate_count,
+        "semantics": "gradient_times_activation_for_each_raw_candidate_logit",
+        "scalar_graph_attribution_semantics": "named_joint_objective",
+    }
+    contract = {
+        "trace_family_id": trace_family_id,
+        "shared_response_position": target_response_position,
+        "shared_prediction_position": prepared.target_prediction_positions[0],
+        "candidate_count": realized_candidate_count,
+        "candidate_selection": selection.to_dict(),
+        "joint_objective": objective.to_dict(),
+        "candidate_contribution_schema": contribution_schema,
+    }
+    trace_metadata: dict[str, object] = {
+        "trace_mode": (
+            "teacher_forced_candidate_union_refinement"
+            if frozen_topology is not None
+            else "teacher_forced_topk_position"
+        ),
+        "prompt": prompt,
+        "prompt_sha256": _stable_text_hash(prompt),
+        "response": response,
+        "response_sha256": _stable_text_hash(response),
+        "system_prompt": system_prompt,
+        "system_prompt_sha256": _stable_text_hash(system_prompt),
+        "assistant_prefix_token_count": prepared.assistant_prefix_token_count,
+        "response_token_count": prepared.response_token_count,
+        "included_response_token_count": prepared.included_response_token_count,
+        "input_token_count": len(prepared.input_ids),
+        "chat_template_sha256": _stable_text_hash(get_chat_template(tokenizer)),
+        "candidate_trace_contract": contract,
+    }
+    if frozen_topology is not None:
+        trace_metadata["frozen_topology"] = {
+            "sha256": frozen_topology_sha256,
+            "mlp_node_count": len(frozen_topology.mlp_nodes),
+            "edge_count": len(frozen_topology.edges),
+            "selection_semantics": "exact_independent_candidate_union",
+            "measurement_semantics": "candidate_specific_fixed_topology_rescore",
+        }
+    if instrumentation is not None:
+        trace_metadata["instrumentation"] = instrumentation.snapshot()
+    circuit_data = CircuitData(
+        df_node=df_node,
+        df_edge=df_edge,
+        cis=[prepared.input_ids],
+        attention_masks=[prepared.attention_mask],
+        labels=[label],
+        target_logits=[[observed_token_id]],
+        target_logit_probs=[[observed_probability]],
+        target_logit_values=[[observed_logit]],
+        target_provenance=target_provenance,
+        trace_metadata=trace_metadata,
+        benchmark_only=False,
+        k=1,
+        config=config,
+        model_id=model.config._name_or_path,
+    )
+    return TopKPositionTrace(
+        circuit_data=circuit_data,
+        trace_family_id=trace_family_id,
+        shared_response_position=target_response_position,
+        shared_prediction_position=prepared.target_prediction_positions[0],
+        candidate_selection=selection,
+        joint_objective=objective,
+        candidate_contribution_schema=contribution_schema,
+    )
+
+
 def compute_circuits(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
@@ -1210,7 +1495,9 @@ def compute_circuits(
     prompts = prompts if isinstance(prompts, list) else [prompts]
     if seed_responses is None:
         seed_responses = [None] * len(prompts)
-    seed_responses = seed_responses if isinstance(seed_responses, list) else [seed_responses]
+    seed_responses = (
+        seed_responses if isinstance(seed_responses, list) else [seed_responses]
+    )
 
     # storage
     all_nodes, all_edges, all_labels, all_focus, all_starts = [], [], [], [], []
@@ -1220,26 +1507,34 @@ def compute_circuits(
 
     for i in tqdm(range(0, len(prompts), bs), desc="Processing batches"):
         if use_rollout:
-            cis, attention_masks, focus_tokens, focus_probs, tgt_tokens, keep_pos, starts = (
-                prepare_cis_with_rollout(
-                    model,
-                    tokenizer,
-                    prompts[i : i + bs],
-                    seed_responses[i : i + bs],
-                    max_new_tokens=max_new_tokens,
-                    verbose=config.verbose,
-                )
-            )
-        else:
-            cis, attention_masks, focus_tokens, focus_probs, keep_pos, starts = prepare_cis(
+            (
+                cis,
+                attention_masks,
+                focus_tokens,
+                focus_probs,
+                tgt_tokens,
+                keep_pos,
+                starts,
+            ) = prepare_cis_with_rollout(
                 model,
                 tokenizer,
                 prompts[i : i + bs],
                 seed_responses[i : i + bs],
-                k=k,
-                system_prompt=system_prompt,
-                true_answers=true_answers,
+                max_new_tokens=max_new_tokens,
                 verbose=config.verbose,
+            )
+        else:
+            cis, attention_masks, focus_tokens, focus_probs, keep_pos, starts = (
+                prepare_cis(
+                    model,
+                    tokenizer,
+                    prompts[i : i + bs],
+                    seed_responses[i : i + bs],
+                    k=k,
+                    system_prompt=system_prompt,
+                    true_answers=true_answers,
+                    verbose=config.verbose,
+                )
             )
         nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(
             model=model,
@@ -1249,7 +1544,9 @@ def compute_circuits(
             attention_masks=attention_masks,
             focus_logits=focus_tokens,
             src_tokens=keep_pos,
-            tgt_tokens=[max(keep_pos) for _ in range(k)] if not use_rollout else tgt_tokens,
+            tgt_tokens=(
+                [max(keep_pos) for _ in range(k)] if not use_rollout else tgt_tokens
+            ),
         )
         all_nodes.append(nodes)
         all_edges.append(edges)
@@ -1285,7 +1582,10 @@ def compute_cohens_d_loo(vals_x: list[float], all_vals: list[float]) -> float:
     std_x = np.std(vals_x, ddof=1) if len(vals_x) > 1 else 0
     std_y = np.std(vals_y, ddof=1) if len(vals_y) > 1 else 0
     s = (
-        np.sqrt(((len(vals_x) - 1) * std_x + (len(vals_y) - 1) * std_y) / (len(all_vals) - 2))
+        np.sqrt(
+            ((len(vals_x) - 1) * std_x + (len(vals_y) - 1) * std_y)
+            / (len(all_vals) - 2)
+        )
         if len(all_vals) > 2
         else 0
     )
@@ -1300,6 +1600,7 @@ def convert_circuit_to_dataframes(
     bs: int = 4,
     ignore_bos: bool = False,
     percentage_threshold: float | None = None,
+    preserve_zero_attribution: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Process CLSO graph data into a clean dataframe.
@@ -1381,14 +1682,19 @@ def convert_circuit_to_dataframes(
     df_edge = pd.concat(dfs_edge)
     # drop nodes below threshold per-item (with batching, neurons important in
     # any batch item get traced for all items, so we need per-item filtering here)
-    if percentage_threshold is not None:
+    if preserve_zero_attribution:
+        pass
+    elif percentage_threshold is not None:
         # Only apply threshold to MLP neurons, not embedding (layer -1) or final layer nodes
         max_layer = df_node["layer"].max()
         is_exempt = (df_node["layer"] < 0) | (df_node["layer"] == max_layer)
-        df_node = df_node[is_exempt | (df_node.attribution.abs() >= percentage_threshold)]
+        df_node = df_node[
+            is_exempt | (df_node.attribution.abs() >= percentage_threshold)
+        ]
     else:
         df_node = df_node[df_node.attribution != 0]
-    df_edge = df_edge[df_edge.attribution != 0].dropna(subset=["attribution"])
+    if not preserve_zero_attribution:
+        df_edge = df_edge[df_edge.attribution != 0].dropna(subset=["attribution"])
 
     # prune edges whose src or tgt node was removed
     surviving_nodes = set(

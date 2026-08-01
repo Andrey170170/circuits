@@ -3,6 +3,7 @@ Core functionality for computing gradient-based attributions in language models,
 modifications to the backward pass in grad.py.
 """
 
+from collections.abc import Sequence
 from typing import Literal
 
 import torch
@@ -27,6 +28,7 @@ def _get_grad_attributions_from_logits(
     ablation_mode: Literal["zero", "mean", "activations"] = "zero",
     disable_stop_grad: bool = False,
     center_logits: bool = False,
+    objective_weights: Sequence[float] | None = None,
     alpha: float | None = None,
     verbose: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx], torch.Tensor]:
@@ -99,6 +101,13 @@ def _get_grad_attributions_from_logits(
         # optionally subtract the mean of all logits
         if center_logits:
             selected_logits -= logits.mean(dim=-1)
+        if objective_weights is not None:
+            if len(objective_weights) != selected_logits.shape[-1]:
+                raise ValueError(
+                    "objective weight width must match selected-logit width"
+                )
+            weights = selected_logits.new_tensor(objective_weights)
+            selected_logits = selected_logits * weights
         if verbose:
             print("selected_logits", selected_logits)
         goal = selected_logits.sum()  # only grab the associated logits for each batch item
@@ -170,6 +179,7 @@ def _get_ig_attributions_from_logits(
     attention_masks: list[list[int]] | None = None,
     disable_stop_grad: bool = False,
     center_logits: bool = False,
+    objective_weights: Sequence[float] | None = None,
     ig_steps: int = 10,
     ig_mode: Literal["ig-inputs", "conductance"] = "ig-inputs",
     verbose: bool = False,
@@ -202,6 +212,7 @@ def _get_ig_attributions_from_logits(
             ablation_mode="zero",
             disable_stop_grad=disable_stop_grad,
             center_logits=center_logits,
+            objective_weights=objective_weights,
             verbose=verbose,
             alpha=alpha,
         )
