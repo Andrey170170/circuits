@@ -114,10 +114,40 @@ width-five observed-rank channel is checked as a structural zero. A post-publica
 recomputed the entire artifact from the bound input, clustering, labelability, and tokenizer
 sources and reproduced the manifest and row counts.
 
-This artifact is deliberately not launchable. It retains all supported generation witnesses and
-sets `renderer_frozen=false`; a separate committed renderer must freeze a bounded, identical
-witness subset for both arms, six-significant-digit prompt formatting, typed output parsing, and
-the Opus/Terra request plan before any paid API call.
+The provider-neutral evidence artifact itself remains deliberately non-launchable and retains all
+supported generation witnesses. The separate renderer was frozen at revision `38d83d4` and
+published under:
+
+```text
+/scratch/general/vast/$USER/circuits/results/bonafide/downstream/
+candidate-aware-clustering-c2-v1/labeling-renderer-v1
+```
+
+Its manifest SHA-256 is
+`a0c49b86fc8fc53710aee8c6e88709da1391cdb8fa3fce255aac7ef62032c13c`. It selects exactly eight
+generation witnesses for each W64 anchor using width-only greedy diversity over family, response,
+phase, and observed-token identity, with width salience and case ID as deterministic tie-breakers.
+The identical 96 witness occurrences and order feed both arms. Arm 1 contains no candidate slots or
+signature; arm 2 adds exactly five rank slots and the unclipped rank-aligned signature rendered to
+six significant digits.
+
+The renderer contains 24 logical prompts and a provider/model-unresolved stage plan for 120 Opus
+semantic samples, 24 Opus rewrites, and 24 Terra conservative controls. Rewriters may see only the
+original generation prompt and its five generation-only Opus samples; controls see only the
+original generation prompt. Selection/audit evidence, automatic scores, and held-out measurements
+are forbidden inputs to every generation stage. The manifest records `calls_made=false`.
+
+A post-publication deep reload reproduced the comparison manifest
+`227cde5658f1381963b94df192b8e86e1188ca13e28c334003a5a100d3496b55`, all `601/530/24`
+comparison rows, the 24 rendered prompts, and the `120/24/24` request plan. Cross-snapshot
+validation uses the recorded Git commit, tree, and blobs and requires the current comparison and
+labelability runtime bytes to match those recorded sources before deterministic recomputation; it
+does not depend on the older scratch worktree remaining present.
+
+The 24 serialized prompt payloads contain 1,170,746 characters. The frozen Qwen tokenizer gives a
+provider-independent proxy of 383,583 input tokens total (12,780--18,944 per logical prompt).
+Provider/model IDs, output-token ceilings, request files, and endpoints remain unresolved pending
+the explicit cost and launch review; no paid API or Transluce call was made at this checkpoint.
 
 ## Remaining reporting boundary
 

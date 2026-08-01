@@ -2673,3 +2673,14 @@ Execution order from this checkpoint is:
 
 No model call is authorized directly by the evidence bundle: its manifest deliberately records
 `renderer_frozen=false` and requires the renderer/request cohort to be committed first.
+
+Revision `38d83d4` completed that non-billable renderer boundary. The immutable artifact is
+`candidate-aware-clustering-c2-v1/labeling-renderer-v1`, manifest SHA-256
+`a0c49b86fc8fc53710aee8c6e88709da1391cdb8fa3fce255aac7ef62032c13c`. It freezes eight
+width-only-selected generation witnesses per anchor, the identical witness order for both arms,
+24 typed prompts, six-significant-digit candidate rendering, and explicit generation-stage
+firewalls. Its unresolved zero-call plan contains 120 Opus semantic requests, 24 Opus rewrites,
+and 24 Terra conservative controls. The frozen Qwen tokenizer counts 383,583 proxy input tokens
+across the 24 serialized prompt payloads. The next gate is therefore item 2 above: resolve exact
+provider IDs, output ceilings, request batching, and the maximum/expected cost for approval. Paid
+API calls and the fixed Transluce scorer remain unlaunched.
