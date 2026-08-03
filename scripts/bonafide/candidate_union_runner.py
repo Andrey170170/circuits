@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-
 from circuits.tracing.artifact import (
     load_topk_compact_trace,
     save_topk_compact_trace,
@@ -28,6 +27,7 @@ from circuits.tracing.candidate_union import (
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.trace import trace_teacher_forced_candidates
+
 from scripts.bonafide.runner import (
     _append_jsonl,
     _directory_size,
@@ -77,6 +77,8 @@ def validate_candidate_union_plan(plan: Mapping[str, Any]) -> None:
     case_ids = set()
     source_ids = set()
     for wave in waves:
+        if not isinstance(wave, Mapping):
+            raise ValueError("candidate-union waves must be objects")
         wave_id = wave.get("wave_id")
         if not isinstance(wave_id, str) or not wave_id or wave_id in wave_ids:
             raise ValueError(f"invalid candidate-union wave ID: {wave_id!r}")
@@ -85,6 +87,8 @@ def validate_candidate_union_plan(plan: Mapping[str, Any]) -> None:
         if not isinstance(cases, list) or not cases:
             raise ValueError(f"candidate-union wave {wave_id!r} has no cases")
         for case in cases:
+            if not isinstance(case, Mapping):
+                raise ValueError("candidate-union cases must be objects")
             case_id = case.get("case_id")
             source_id = case.get("source_width1_artifact_id")
             if not isinstance(case_id, str) or not case_id or case_id in case_ids:
@@ -106,19 +110,25 @@ def validate_candidate_union_plan(plan: Mapping[str, Any]) -> None:
             if not isinstance(references, list) or len(references) not in {5, 6}:
                 raise ValueError("candidate-union case requires five or six references")
             for index, reference in enumerate(references):
+                if not isinstance(reference, Mapping):
+                    raise ValueError("candidate-union references must be objects")
                 if reference.get("candidate_index") != index:
                     raise ValueError(
                         "candidate-union reference indices are not ordered"
                     )
-                for field in ("path", "artifact_id", "payload_sha256"):
-                    if (
-                        not isinstance(reference.get(field), str)
-                        or not reference[field]
-                    ):
+                path = reference.get("path")
+                artifact_id = reference.get("artifact_id")
+                payload_sha256 = reference.get("payload_sha256")
+                for field, value in (
+                    ("path", path),
+                    ("artifact_id", artifact_id),
+                    ("payload_sha256", payload_sha256),
+                ):
+                    if not isinstance(value, str) or not value:
                         raise ValueError(
                             f"candidate-union reference.{field} is required"
                         )
-                if len(reference["payload_sha256"]) != 64:
+                if not isinstance(payload_sha256, str) or len(payload_sha256) != 64:
                     raise ValueError("candidate-union reference hash is invalid")
                 token_id = reference.get("token_id")
                 if isinstance(token_id, bool) or not isinstance(token_id, int):
@@ -383,14 +393,14 @@ def run_candidate_union_wave(
             position = item["target_selection"]["response_token_positions"][0]
             example = item["example"]
             refinements = []
-            candidate_metrics = []
+            candidate_metrics: list[dict[str, Any]] = []
             started = time.perf_counter()
             if uses_cuda:
                 torch.cuda.synchronize()
                 torch.cuda.reset_peak_memory_stats()
             try:
                 for index, (reference, topology) in enumerate(
-                    zip(references, topologies)
+                    zip(references, topologies, strict=True)
                 ):
                     candidate = reference.topk_trace.candidate_selection.candidates[0]
                     refinement_id, refinement_identity = _refinement_identity(
@@ -522,10 +532,12 @@ def run_candidate_union_wave(
                     source_width1_artifact_id=case["source_width1_artifact_id"],
                 )
                 selected_node_entries = sum(
-                    sum(row) for row in union_trace.df_node["selected_by_candidate"]
+                    sum(int(value) for value in row)
+                    for row in union_trace.df_node["selected_by_candidate"]
                 )
                 selected_edge_entries = sum(
-                    sum(row) for row in union_trace.df_edge["selected_by_candidate"]
+                    sum(int(value) for value in row)
+                    for row in union_trace.df_edge["selected_by_candidate"]
                 )
                 metrics = {
                     "status": "complete",
@@ -533,11 +545,11 @@ def run_candidate_union_wave(
                     "node_count": len(union_trace.df_node),
                     "edge_count": len(union_trace.df_edge),
                     "dense_applicable_node_measurement_count": sum(
-                        sum(row)
+                        sum(int(value) for value in row)
                         for row in union_trace.df_node["applicable_by_candidate"]
                     ),
                     "dense_applicable_edge_measurement_count": sum(
-                        sum(row)
+                        sum(int(value) for value in row)
                         for row in union_trace.df_edge["applicable_by_candidate"]
                     ),
                     "selected_node_membership_count": selected_node_entries,

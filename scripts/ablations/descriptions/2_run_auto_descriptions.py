@@ -106,7 +106,7 @@ def run_descriptions(
 
     Returns (suffix, output_data) where suffix identifies the backend.
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     suffix = "api" if attr_backend == "api" else "vllm"
 
     logger.info(
@@ -123,7 +123,7 @@ def run_descriptions(
         attr_backend=attr_backend,
         attr_api_model_name=attr_api_model_name,
     )
-    attr_results, contrib_results, attr_exemplars, contrib_exemplars, cluster_to_neurons = result
+    attr_results, contrib_results, attr_exemplars, contrib_exemplars, _cluster_to_neurons = result
 
     # Read cluster_id_to_name AFTER label_clusters_simulator_v2, which populates it
     cluster_id_to_name: dict[int, str] = getattr(circuit, "_cluster_id_to_name", {})

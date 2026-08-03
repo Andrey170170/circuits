@@ -29,8 +29,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 Record = Mapping[str, Any]
+type _AnyArray = npt.NDArray[Any]
+type _BoolArray = npt.NDArray[np.bool_]
+type _FloatArray = npt.NDArray[np.float64]
+type _IntArray = npt.NDArray[np.int64]
 
 HELD_OUT_PARTITIONS = frozenset({"selection_scoring", "audit"})
 FROZEN_HELD_OUT_FAMILY_COUNT = 8
@@ -51,8 +56,8 @@ FROZEN_PROTOCOL_SHA256 = (
 class CandidateCentroids:
     """Generation-only candidate centroids and explicit omission diagnostics."""
 
-    values: np.ndarray
-    available: np.ndarray
+    values: _FloatArray
+    available: _BoolArray
     cluster_reports: tuple[dict[str, Any], ...]
     dimension: int
     cluster_count: int
@@ -116,7 +121,7 @@ def _validate_hierarchy(records: Sequence[Record]) -> None:
         seen.add(occurrence)
 
 
-def _assignment_array(assignments: Sequence[int] | np.ndarray) -> np.ndarray:
+def _assignment_array(assignments: Sequence[int] | _AnyArray) -> _IntArray:
     raw = np.asarray(assignments)
     if raw.ndim != 1:
         raise ValueError("assignments must be one-dimensional")
@@ -132,13 +137,13 @@ def _assignment_array(assignments: Sequence[int] | np.ndarray) -> np.ndarray:
 
 
 def _assignment_maps(
-    assignment_by_state: Mapping[str, Sequence[int] | np.ndarray],
+    assignment_by_state: Mapping[str, Sequence[int] | _AnyArray],
     required_states: Sequence[str],
     max_basis_index: int,
-) -> dict[str, np.ndarray]:
+) -> dict[str, _IntArray]:
     if len(set(required_states)) != len(required_states) or not required_states:
         raise ValueError("required_states must be unique and non-empty")
-    arrays: dict[str, np.ndarray] = {}
+    arrays: dict[str, _IntArray] = {}
     for state in required_states:
         if state not in assignment_by_state:
             raise ValueError(f"missing assignments for state {state!r}")
@@ -181,7 +186,7 @@ def _frozen_family_ids(
     return result
 
 
-def _boolean_mask(values: Sequence[bool], *, field: str) -> np.ndarray:
+def _boolean_mask(values: object, *, field: str) -> _BoolArray:
     raw = np.asarray(values)
     if raw.ndim != 1:
         raise ValueError(f"{field} must be one-dimensional")
@@ -190,8 +195,8 @@ def _boolean_mask(values: Sequence[bool], *, field: str) -> np.ndarray:
     return raw.astype(np.bool_, copy=False)
 
 
-def _candidate_vectors(records: Sequence[Record]) -> tuple[list[np.ndarray], int]:
-    vectors: list[np.ndarray] = []
+def _candidate_vectors(records: Sequence[Record]) -> tuple[list[_FloatArray], int]:
+    vectors: list[_FloatArray] = []
     dimension: int | None = None
     for record in records:
         vector = np.asarray(record.get("vector"), dtype=np.float64)
@@ -209,7 +214,7 @@ def _candidate_vectors(records: Sequence[Record]) -> tuple[list[np.ndarray], int
     return vectors, dimension
 
 
-def _unit(vector: np.ndarray) -> np.ndarray | None:
+def _unit(vector: _FloatArray) -> _FloatArray | None:
     norm = float(np.linalg.norm(vector))
     if not math.isfinite(norm) or norm <= 0.0:
         return None
@@ -221,7 +226,7 @@ def _unit(vector: np.ndarray) -> np.ndarray | None:
 
 def generation_candidate_centroids(
     records: Sequence[Record],
-    assignments: Sequence[int] | np.ndarray,
+    assignments: Sequence[int] | _AnyArray,
     *,
     n_clusters: int | None = None,
 ) -> CandidateCentroids:
@@ -256,7 +261,7 @@ def generation_candidate_centroids(
     families = sorted({_text(record, "family_id") for record in materialized})
     responses = sorted({_text(record, "response_id") for record in materialized})
     targets = sorted({_text(record, "target_id") for record in materialized})
-    target_vectors: dict[int, dict[tuple[str, str, str], list[np.ndarray]]] = {
+    target_vectors: dict[int, dict[tuple[str, str, str], list[_FloatArray]]] = {
         cluster: defaultdict(list) for cluster in range(n_clusters)
     }
     assigned_occurrence_counts = [0] * n_clusters
@@ -289,13 +294,13 @@ def generation_candidate_centroids(
             key: np.mean(np.stack(items), axis=0)
             for key, items in target_vectors[cluster].items()
         }
-        by_response: dict[tuple[str, str], list[np.ndarray]] = defaultdict(list)
+        by_response: dict[tuple[str, str], list[_FloatArray]] = defaultdict(list)
         for (family_id, response_id, _), vector in target_means.items():
             by_response[(family_id, response_id)].append(vector)
         response_means = {
             key: np.mean(np.stack(items), axis=0) for key, items in by_response.items()
         }
-        by_family: dict[str, list[np.ndarray]] = defaultdict(list)
+        by_family: dict[str, list[_FloatArray]] = defaultdict(list)
         for (family_id, _), vector in response_means.items():
             by_family[family_id].append(vector)
         family_means = {
@@ -346,9 +351,9 @@ def generation_candidate_centroids(
 
 
 def _score_occurrence(
-    vector: np.ndarray,
+    vector: _FloatArray,
     basis_index: int,
-    assignment: np.ndarray,
+    assignment: _IntArray,
     centroids: CandidateCentroids,
 ) -> tuple[float, float] | None:
     cluster = int(assignment[basis_index])
@@ -371,7 +376,7 @@ def _score_occurrence(
     return own_cosine, margin
 
 
-def _hierarchical_occurrence_weights(records: Sequence[Record]) -> np.ndarray:
+def _hierarchical_occurrence_weights(records: Sequence[Record]) -> _FloatArray:
     """Equal family/response/target/occurrence weights for coverage only."""
 
     by_family: dict[str, dict[str, dict[str, list[int]]]] = defaultdict(
@@ -424,7 +429,7 @@ def _hierarchical_summary(
 
 def evaluate_candidate_coherence(
     records: Sequence[Record],
-    assignment_by_state: Mapping[str, Sequence[int] | np.ndarray],
+    assignment_by_state: Mapping[str, Sequence[int] | _AnyArray],
     centroid_by_state: Mapping[str, CandidateCentroids],
     *,
     partition: str,
@@ -642,10 +647,10 @@ def candidate_coherence_bootstrap(
 
 
 def missing_aware_cosine(
-    left_values: Sequence[float],
-    left_support: Sequence[bool],
-    right_values: Sequence[float],
-    right_support: Sequence[bool],
+    left_values: Sequence[float] | _AnyArray,
+    left_support: Sequence[bool] | _AnyArray,
+    right_values: Sequence[float] | _AnyArray,
+    right_support: Sequence[bool] | _AnyArray,
 ) -> float | None:
     """Cosine over jointly supported source coordinates, with no zero fill."""
 
@@ -678,7 +683,7 @@ def missing_aware_cosine(
 
 def evaluate_width_one_coherence(
     records: Sequence[Record],
-    assignment_by_state: Mapping[str, Sequence[int] | np.ndarray],
+    assignment_by_state: Mapping[str, Sequence[int] | _AnyArray],
     *,
     partition: str,
     expected_family_ids: Collection[str],
@@ -709,7 +714,7 @@ def evaluate_width_one_coherence(
         )
     max_basis = max(_basis_index(record) for record in materialized)
     assignments = _assignment_maps(assignment_by_state, required_states, max_basis)
-    profiles: list[tuple[np.ndarray, np.ndarray]] = []
+    profiles: list[tuple[_FloatArray, _BoolArray]] = []
     for record in materialized:
         values = np.asarray(record.get("values"), dtype=np.float64)
         support = _boolean_mask(record.get("support"), field="support")
@@ -863,7 +868,7 @@ DEFAULT_READINESS_THRESHOLDS: Mapping[str, tuple[int, int]] = {
 
 def cluster_support_readiness(
     records: Sequence[Record],
-    assignments: Sequence[int] | np.ndarray,
+    assignments: Sequence[int] | _AnyArray,
     *,
     expected_family_ids_by_partition: Mapping[str, Collection[str]],
     n_clusters: int | None = None,

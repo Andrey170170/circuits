@@ -9,11 +9,12 @@ from uuid import uuid4
 import backoff
 import tiktoken
 from backoff.types import Details
-from env_util import ENV
 from openai import AsyncOpenAI, BadRequestError, OpenAI
 from openai._types import NOT_GIVEN
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from tqdm.asyncio import tqdm_asyncio
+
+from env_util import ENV
 from util.types import ChatMessage
 
 DEFAULT_TIKTOKEN_ENCODING = "cl100k_base"
@@ -218,7 +219,7 @@ async def get_openai_embeddings_async(
     """
 
     if model_name != "text-embedding-3-large":
-        assert dimensions == None, f"{model_name} does not have a variable dimension size"
+        assert dimensions is None, f"{model_name} does not have a variable dimension size"
 
     # Tokenize and truncate texts
     tokenizer = tiktoken.get_encoding(DEFAULT_TIKTOKEN_ENCODING)
@@ -252,9 +253,7 @@ async def get_openai_embeddings_async(
     results = await asyncio.gather(*tasks)
 
     # Flatten the results
-    embeddings = [embedding for batch_result in results for embedding in batch_result]
-
-    return embeddings
+    return [embedding for batch_result in results for embedding in batch_result]
 
 
 def get_openai_embeddings_sync(
@@ -324,7 +323,7 @@ def _prepare_jsonl_file(dataset: list[tuple[str, str]], prefix: str) -> tuple[st
         for prompt, completion in dataset
     ]
 
-    fname = f"_tmp_{prefix}_{str(uuid4())}_gitignore.jsonl"
+    fname = f"_tmp_{prefix}_{uuid4()!s}_gitignore.jsonl"
     with open(fname, "w") as f:
         for entry in data:
             f.write(json.dumps(entry) + "\n")
@@ -339,22 +338,22 @@ def fine_tune_model_openai(
 ):
     # Prepare files
     train_fname = _prepare_jsonl_file(train_dataset, "training_data")
-    train_file = client.files.create(file=open(train_fname, "rb"), purpose="fine-tune")
+    with open(train_fname, "rb") as train_data:
+        train_file = client.files.create(file=train_data, purpose="fine-tune")
 
     # Handle test dataset if provided
     test_file = None
     if test_dataset:
         test_fname = _prepare_jsonl_file(test_dataset, "test_data")
-        test_file = client.files.create(file=open(test_fname, "rb"), purpose="fine-tune")
+        with open(test_fname, "rb") as test_data:
+            test_file = client.files.create(file=test_data, purpose="fine-tune")
 
     # Create fine-tuning job
-    job = client.fine_tuning.jobs.create(
+    return client.fine_tuning.jobs.create(
         training_file=train_file.id,
         validation_file=test_file.id if test_file else None,
         model=model_name,
     )
-
-    return job
 
 
 def estimate_openai_prompt_tokens(messages: list[ChatMessage]) -> int:

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence, cast
+from typing import Any, Literal, cast
 
 from circuits.analysis.bonafide.canonical import (
     canonical_sha256,
@@ -523,19 +524,19 @@ def build_inventory(
         if len(candidates) > 1:
             record["status"] = InventoryStatus.CORRUPT.value
             record["error"] = "multiple physical artifacts resolve to one frozen target"
-            for duplicate in candidates[1:]:
-                unexpected.append(
-                    {
-                        "artifact_path": str(duplicate.path),
-                        "artifact_id": (
-                            duplicate.manifest.get("artifact_id")
-                            if duplicate.manifest
-                            else None
-                        ),
-                        "source_artifact_id": target.source_artifact_id,
-                        "reason": "duplicate physical artifact for frozen target",
-                    }
-                )
+            unexpected.extend(
+                {
+                    "artifact_path": str(duplicate.path),
+                    "artifact_id": (
+                        duplicate.manifest.get("artifact_id")
+                        if duplicate.manifest
+                        else None
+                    ),
+                    "source_artifact_id": target.source_artifact_id,
+                    "reason": "duplicate physical artifact for frozen target",
+                }
+                for duplicate in candidates[1:]
+            )
             records.append(record)
             continue
         artifact = candidates[0]

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import itertools
 import json
-import math
 import os
 import shutil
 import uuid
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, median
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -25,7 +25,6 @@ from circuits.analysis.bonafide.canonical import (
     load_json_object,
 )
 from circuits.analysis.bonafide.clustering_evaluation import (
-    LoadedClusterState,
     _validate_source_plan,
     load_cluster_states,
 )
@@ -179,9 +178,7 @@ def _cluster_summaries(
             bins_by_response.setdefault(
                 response_id,
                 np.zeros(5, dtype=np.float64),
-            )[
-                int(row["response_phase_bin"])
-            ] += float(row["absolute_attribution_mass"])
+            )[int(row["response_phase_bin"])] += float(row["absolute_attribution_mass"])
         target_count = len(rows)
         total_abs_mass = sum(response_abs_mass.values())
         maximum_response_target_fraction = (
@@ -204,8 +201,7 @@ def _cluster_summaries(
             span = positions[-1] - positions[0] + 1
             densities.append(len(positions) / span)
             adjacent = sum(
-                right == left + 1
-                for left, right in zip(positions[:-1], positions[1:], strict=True)
+                right == left + 1 for left, right in itertools.pairwise(positions)
             )
             continuities.append(adjacent / max(1, span - 1))
         temporal_cosines: list[float] = []

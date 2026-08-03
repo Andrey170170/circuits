@@ -47,7 +47,7 @@ def make_heatmap(data: dict, output_path: Path):
         attr_2d = attr_vec.reshape(1, -1)
         vmax_attr = max(abs(attr_vec.min()), abs(attr_vec.max()), 1e-8)
         norm_attr = TwoSlopeNorm(vmin=-vmax_attr, vcenter=0, vmax=vmax_attr)
-        im_attr = ax_attr.imshow(attr_2d, aspect="auto", cmap="RdBu_r", norm=norm_attr)
+        ax_attr.imshow(attr_2d, aspect="auto", cmap="RdBu_r", norm=norm_attr)
 
         ax_attr.set_yticks([])
         ax_attr.set_xticks(range(seq_len))
@@ -86,7 +86,7 @@ def make_heatmap(data: dict, output_path: Path):
 
         cmap_contrib = plt.cm.RdBu_r.copy()
         cmap_contrib.set_bad(color="0.9")
-        im_contrib = ax_contrib.imshow(masked, aspect="auto", cmap=cmap_contrib, norm=norm_contrib)
+        ax_contrib.imshow(masked, aspect="auto", cmap=cmap_contrib, norm=norm_contrib)
 
         ax_contrib.set_yticks([])
         ax_contrib.set_xticks(range(seq_len))

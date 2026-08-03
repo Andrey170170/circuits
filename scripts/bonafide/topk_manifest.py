@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from circuits.tracing.candidates import (
     CANDIDATE_POLICY_VERSION,
     JOINT_OBJECTIVE_VERSION,
 )
+
 from scripts.bonafide.runner import validate_target_selection
 
 SCHEMA_VERSION = "bonafide-topk-trace-manifest/v1"

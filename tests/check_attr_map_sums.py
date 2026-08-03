@@ -26,10 +26,9 @@ def load_raw_df_node(pickle_path: Path) -> pd.DataFrame:
     # Circuit pickles store df_node directly or in a dict
     if isinstance(data, dict):
         return data.get("df_node", pd.DataFrame())
-    elif hasattr(data, "df_node"):
+    if hasattr(data, "df_node"):
         return data.df_node
-    else:
-        return pd.DataFrame()
+    return pd.DataFrame()
 
 
 def main() -> None:
@@ -74,7 +73,9 @@ def main() -> None:
     sample_acts = df_mlp["activation"].head(5).tolist()
     for i, act in enumerate(sample_acts):
         if hasattr(act, "shape"):
-            print(f"  [{i}] type={type(act).__name__}, shape={act.shape}, mean={act.mean():.4f}")
+            print(
+                f"  [{i}] type={type(act).__name__}, shape={act.shape}, mean={act.mean():.4f}"
+            )
         else:
             print(f"  [{i}] type={type(act).__name__}, value={act}")
 
@@ -112,7 +113,9 @@ def main() -> None:
 
             for b in range(len(attr_sums)):
                 act_val = (
-                    float(activations[b]) if b < len(activations) else float(activations.mean())
+                    float(activations[b])
+                    if b < len(activations)
+                    else float(activations.mean())
                 )
                 attr_sum_val = float(attr_sums[b])
                 results.append(
@@ -124,14 +127,20 @@ def main() -> None:
                         "batch": b,
                         "activation": act_val,
                         "attr_sum": attr_sum_val,
-                        "ratio": attr_sum_val / (act_val + 1e-10) if act_val != 0 else float("nan"),
+                        "ratio": attr_sum_val / (act_val + 1e-10)
+                        if act_val != 0
+                        else float("nan"),
                         "diff": attr_sum_val - act_val,
                     }
                 )
         else:
             # 1D case - single value
             attr_sum = float(np.sum(attr_map))
-            act_val = float(activation) if np.isscalar(activation) else float(np.mean(activation))
+            act_val = (
+                float(activation)
+                if np.isscalar(activation)
+                else float(np.mean(activation))
+            )
             results.append(
                 {
                     "layer": row["layer"],
@@ -141,7 +150,9 @@ def main() -> None:
                     "batch": 0,
                     "activation": act_val,
                     "attr_sum": attr_sum,
-                    "ratio": attr_sum / (act_val + 1e-10) if act_val != 0 else float("nan"),
+                    "ratio": attr_sum / (act_val + 1e-10)
+                    if act_val != 0
+                    else float("nan"),
                     "diff": attr_sum - act_val,
                 }
             )
@@ -154,19 +165,19 @@ def main() -> None:
     print("SUMMARY STATISTICS")
     print("=" * 60)
 
-    print(f"\nActivation stats:")
+    print("\nActivation stats:")
     print(f"  mean: {df_results['activation'].mean():.6f}")
     print(f"  std:  {df_results['activation'].std():.6f}")
     print(f"  min:  {df_results['activation'].min():.6f}")
     print(f"  max:  {df_results['activation'].max():.6f}")
 
-    print(f"\nattr_sum stats:")
+    print("\nattr_sum stats:")
     print(f"  mean: {df_results['attr_sum'].mean():.6f}")
     print(f"  std:  {df_results['attr_sum'].std():.6f}")
     print(f"  min:  {df_results['attr_sum'].min():.6f}")
     print(f"  max:  {df_results['attr_sum'].max():.6f}")
 
-    print(f"\nRatio (attr_sum / activation) stats:")
+    print("\nRatio (attr_sum / activation) stats:")
     # Filter out extreme ratios from division by near-zero activations
     valid_ratios = df_results[df_results["activation"].abs() > 0.01]["ratio"]
     print(f"  mean: {valid_ratios.mean():.6f}")
@@ -174,7 +185,7 @@ def main() -> None:
     print(f"  min:  {valid_ratios.min():.6f}")
     print(f"  max:  {valid_ratios.max():.6f}")
 
-    print(f"\nDiff (attr_sum - activation) stats:")
+    print("\nDiff (attr_sum - activation) stats:")
     print(f"  mean: {df_results['diff'].mean():.6f}")
     print(f"  std:  {df_results['diff'].std():.6f}")
     print(f"  min:  {df_results['diff'].min():.6f}")
@@ -207,7 +218,9 @@ def main() -> None:
     ratio_bins = [0, 0.5, 0.9, 1.0, 1.1, 2.0, float("inf")]
     ratio_labels = ["<0.5", "0.5-0.9", "0.9-1.0", "1.0-1.1", "1.1-2.0", ">2.0"]
     valid_df = valid_df.copy()
-    valid_df["ratio_bin"] = pd.cut(valid_df["ratio"], bins=ratio_bins, labels=ratio_labels)
+    valid_df["ratio_bin"] = pd.cut(
+        valid_df["ratio"], bins=ratio_bins, labels=ratio_labels
+    )
     print(valid_df["ratio_bin"].value_counts().sort_index())
 
     # ========================================
@@ -242,7 +255,9 @@ def main() -> None:
     print("RAW VS NORMALIZED MAPS (first 5 MLP neurons)")
     print("-" * 60)
 
-    df_mlp_raw_maps = df_raw[(df_raw["layer"] >= 0) & (df_raw["layer"] < logit_layer)].head(5)
+    df_mlp_raw_maps = df_raw[
+        (df_raw["layer"] >= 0) & (df_raw["layer"] < logit_layer)
+    ].head(5)
 
     for _, raw_row in df_mlp_raw_maps.iterrows():
         label = str(raw_row["label"])
@@ -260,7 +275,9 @@ def main() -> None:
         activation = raw_row["activation"]
         logit_vals = np.asarray(logit_by_label.get(label, []))
 
-        print(f"\n  L{raw_row['layer']}/T{raw_row['token']}/N{raw_row['neuron']} ({label[:20]}...)")
+        print(
+            f"\n  L{raw_row['layer']}/T{raw_row['token']}/N{raw_row['neuron']} ({label[:20]}...)"
+        )
         print(f"    activation: {activation:.6f}")
 
         # attr_map comparison
@@ -321,19 +338,19 @@ def main() -> None:
     print(f"\nAnalyzed {len(df_contrib)} neurons with valid contrib_map")
 
     if len(df_contrib) > 0:
-        print(f"\ncontrib_sum stats (should be ~1.0 if normalized):")
+        print("\ncontrib_sum stats (should be ~1.0 if normalized):")
         print(f"  mean: {df_contrib['contrib_sum'].mean():.6f}")
         print(f"  std:  {df_contrib['contrib_sum'].std():.6f}")
         print(f"  min:  {df_contrib['contrib_sum'].min():.6f}")
         print(f"  max:  {df_contrib['contrib_sum'].max():.6f}")
 
-        print(f"\ncontrib_abs_sum stats:")
+        print("\ncontrib_abs_sum stats:")
         print(f"  mean: {df_contrib['contrib_abs_sum'].mean():.6f}")
         print(f"  std:  {df_contrib['contrib_abs_sum'].std():.6f}")
         print(f"  min:  {df_contrib['contrib_abs_sum'].min():.6f}")
         print(f"  max:  {df_contrib['contrib_abs_sum'].max():.6f}")
 
-        print(f"\ncontrib_len (number of target logits):")
+        print("\ncontrib_len (number of target logits):")
         print(f"  unique values: {sorted(df_contrib['contrib_len'].unique())}")
 
         # Show sample contrib_maps
@@ -346,7 +363,14 @@ def main() -> None:
         )
         print(
             df_contrib_sorted[
-                ["layer", "token", "neuron", "activation", "contrib_sum", "contrib_abs_sum"]
+                [
+                    "layer",
+                    "token",
+                    "neuron",
+                    "activation",
+                    "contrib_sum",
+                    "contrib_abs_sum",
+                ]
             ]
             .head(20)
             .to_string()
@@ -358,7 +382,15 @@ def main() -> None:
         print("=" * 60)
 
         contrib_bins = [-float("inf"), -1.0, -0.1, 0.0, 0.1, 1.0, 2.0, float("inf")]
-        contrib_labels = ["<-1", "-1 to -0.1", "-0.1 to 0", "0 to 0.1", "0.1 to 1", "1 to 2", ">2"]
+        contrib_labels = [
+            "<-1",
+            "-1 to -0.1",
+            "-0.1 to 0",
+            "0 to 0.1",
+            "0.1 to 1",
+            "1 to 2",
+            ">2",
+        ]
         df_contrib_copy = df_contrib.copy()
         df_contrib_copy["contrib_bin"] = pd.cut(
             df_contrib_copy["contrib_sum"], bins=contrib_bins, labels=contrib_labels

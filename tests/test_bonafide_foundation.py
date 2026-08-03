@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 
 import pytest
-
 from circuits.analysis.bonafide.canonical import canonical_sha256
 from circuits.analysis.bonafide.features import (
     build_profile_observations,

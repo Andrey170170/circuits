@@ -15,13 +15,14 @@ import os
 import re
 import unicodedata
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, cast
 
 from circuits.tracing.trace import get_chat_template, tokenize_teacher_forced_response
-from scripts.bonafide.manifest import resolve_pretrained_source
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerBase
 
+from scripts.bonafide.manifest import resolve_pretrained_source
 
 SCHEMA_VERSION = "bonafide-prompt-candidates/v1"
 SELECTION_POLICY_VERSION = "bonafide-prompt-coverage-v1"
@@ -113,9 +114,8 @@ def _is_tokenizer_file(path: Path, *, root: Path) -> bool:
     name = path.name.casefold()
     template_suffix = path.suffix.casefold() in {".jinja", ".json", ".txt"}
     relative_parts = tuple(part.casefold() for part in path.relative_to(root).parts)
-    return (
-        name in TOKENIZER_FILE_NAMES
-        or template_suffix
+    return name in TOKENIZER_FILE_NAMES or (
+        template_suffix
         and ("chat_template" in name or "chat_templates" in relative_parts[:-1])
     )
 
@@ -337,15 +337,17 @@ def _coverage_features(example: Mapping[str, Any]) -> list[str]:
     features: list[str] = []
     for axis in ("label_types", "hint_types", "hint_datasets", "src_types"):
         features.extend(f"{axis}={value}" for value in diversity[axis])
-    for axis in (
-        "cot_phenotype",
-        "answer_relation",
-        "annotation_position_bin",
-        "response_length_bin",
-        "total_length_bin",
-        "question_novelty_control_family_marker",
-    ):
-        features.append(f"{axis}={diversity[axis]}")
+    features.extend(
+        f"{axis}={diversity[axis]}"
+        for axis in (
+            "cot_phenotype",
+            "answer_relation",
+            "annotation_position_bin",
+            "response_length_bin",
+            "total_length_bin",
+            "question_novelty_control_family_marker",
+        )
+    )
     return features
 
 
@@ -438,7 +440,9 @@ def load_prompt_candidates(
         question_values = _unique(row["question"] for row in source_rows)
         canonical_question = question_values[0] if question_values else ""
         base_question_id = f"bfq-{_sha256_text(canonical_question)[:20]}"
-        tokenized = tokenize_teacher_forced_response(tokenizer, prompt, response)
+        tokenized = tokenize_teacher_forced_response(
+            cast(PreTrainedTokenizer, tokenizer), prompt, response
+        )
         prefix_count = len(tokenized.assistant_prefix_ids)
         response_count = len(tokenized.response_ids)
         suffix_count = len(tokenized.assistant_suffix_ids)
@@ -638,7 +642,7 @@ def build_corpus_selection(
             "broad_role": broad_role,
         }
 
-    chat_template = get_chat_template(tokenizer)
+    chat_template = get_chat_template(cast(PreTrainedTokenizer, tokenizer))
     tokenizer_files = _tokenizer_file_manifest(tokenizer_path)
     return {
         "schema_version": SCHEMA_VERSION,

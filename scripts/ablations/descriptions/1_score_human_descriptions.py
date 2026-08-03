@@ -16,11 +16,17 @@ from datetime import datetime
 
 from circuits.analysis.circuit_ops import Circuit
 from circuits.analysis.cluster import NeuronId
-from circuits.descriptions.api_backend import AnthropicAttrScorer, AnthropicContribScorer
+from circuits.descriptions.api_backend import (
+    AnthropicAttrScorer,
+    AnthropicContribScorer,
+)
 from circuits.descriptions.exemplars import build_contrib_minibatch
 from circuits.descriptions.label import build_neuron_activation_records
 from circuits.descriptions.types import ActivationRecord, ScoredExplanation
-from circuits.descriptions.vllm_backend import FinetunedSimulator, score_attr_explanations
+from circuits.descriptions.vllm_backend import (
+    FinetunedSimulator,
+    score_attr_explanations,
+)
 from circuits.utils.constants import RESULTS_DIR
 from transformers import AutoTokenizer
 
@@ -193,7 +199,7 @@ def main() -> None:
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
 
     # --- Load circuit and cluster ---
     logger.info("Loading circuit from %s", CIRCUIT_PICKLE)
@@ -214,12 +220,10 @@ def main() -> None:
     )
 
     # Prepare clustered df
-    df_clustered, cluster_to_neurons = circuit._prepare_clustered_df_for_labelling()
+    df_clustered, _cluster_to_neurons = circuit._prepare_clustered_df_for_labelling()
     cluster_id_to_name: dict[int, str] = getattr(circuit, "_cluster_id_to_name", {})
-    name_to_cluster_id = {v: k for k, v in cluster_id_to_name.items()}
-
     # Build activation records from the clustered df
-    neuron_data, neuron_ci_mapping = build_neuron_activation_records(
+    neuron_data, _neuron_ci_mapping = build_neuron_activation_records(
         df_clustered,
         circuit.cis,
         tokenizer,
@@ -411,10 +415,12 @@ def main() -> None:
             "contrib_score": contrib[0].score if contrib else None,
             "contrib_rsquared": contrib[0].rsquared if contrib else None,
             "attr_predictions": (
-                [p for p in attr[0].predictions] if attr and attr[0].predictions else None
+                list(attr[0].predictions) if attr and attr[0].predictions else None
             ),
             "contrib_predictions": (
-                [p for p in contrib[0].predictions] if contrib and contrib[0].predictions else None
+                list(contrib[0].predictions)
+                if contrib and contrib[0].predictions
+                else None
             ),
         }
 

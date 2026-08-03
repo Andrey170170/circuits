@@ -2,9 +2,10 @@ from abc import ABC, abstractmethod
 from functools import partial
 
 import torch as t
-from circuits.utils.modeling_utils import SparseAct
 from nnsight import LanguageModel
 from tqdm import tqdm
+
+from circuits.utils.modeling_utils import SparseAct
 
 
 def count_edges_from_nodes(nodes, nodes_dict, **kwargs):
@@ -53,10 +54,10 @@ def ablation_fn(x, ablation_type="mean"):
             x.act.device
         )
         return SparseAct(act=x.act[idxs], res=x.res[idxs])
-    elif ablation_type == "zero":
+    if ablation_type == "zero":
         return x.zeros_like()
-    else:  # mean ablation
-        return x.mean(dim=0).expand_as(x)
+    # mean ablation
+    return x.mean(dim=0).expand_as(x)
 
 
 def run_with_ablations(
@@ -67,11 +68,13 @@ def run_with_ablations(
     dictionaries,  # dictionaries[submodule] is an autoencoder for submodule's output
     nodes,  # nodes[submodule] is a boolean SparseAct with True for the nodes to keep (or ablate if complement is True)
     metric_fn,  # metric_fn(model, **metric_kwargs) -> t.Tensor
-    metric_kwargs=dict(),
+    metric_kwargs=None,
     complement=False,  # if True, then use the complement of nodes
     test_ablation_type="mean",  # what to do to the patch hidden states to produce values for ablation, default mean ablation
     handle_errors="default",  # or 'remove' to zero ablate all; 'keep' to keep all
 ):
+    if metric_kwargs is None:
+        metric_kwargs = {}
     if patch is None:
         patch = clean
     patch_states = {}
@@ -97,7 +100,8 @@ def run_with_ablations(
             # ablate features
             if complement:
                 submod_nodes = ~submod_nodes
-            resc_shape_to_expand = submod_nodes.resc.shape[:-1] + (
+            resc_shape_to_expand = (
+                *submod_nodes.resc.shape[:-1],
                 patch_states[submodule].res.shape[-1],
             )
             submod_nodes.resc = submod_nodes.resc.expand(resc_shape_to_expand)
@@ -188,9 +192,11 @@ class BaseMethod(ABC):
                 "resid": model.model.config.hidden_size,
             }
 
+    @abstractmethod
     def __str__(self):
         pass
 
+    @abstractmethod
     def make_dataloader(self, examples, **kwargs):
         pass
 
@@ -203,12 +209,11 @@ class BaseMethod(ABC):
             return self.inference_faithfulness_and_completeness_with_nodes(
                 examples, thresholds, **kwargs
             )
-        elif kwargs["component"] == "edges":
+        if kwargs["component"] == "edges":
             return self.inference_faithfulness_and_completeness_with_edges(
                 examples, thresholds, **kwargs
             )
-        else:
-            raise ValueError(f"Invalid component: {kwargs['component']}")
+        raise ValueError(f"Invalid component: {kwargs['component']}")
 
     def inference_faithfulness_and_completeness_with_edges(
         self, examples, thresholds=None, **kwargs
@@ -287,8 +292,8 @@ class BaseMethod(ABC):
                 edge_weights_dict = getattr(sparse_act, "incoming_edge_weights", {})
 
                 # Iterate through position -> neuron -> edge_weights
-                for token_pos, neurons_dict in edge_weights_dict.items():
-                    for neuron_idx, edge_weights_tensor in neurons_dict.items():
+                for neurons_dict in edge_weights_dict.values():
+                    for edge_weights_tensor in neurons_dict.values():
                         # edge_weights_tensor is now a tensor, so we can use tensor operations
                         abs_weights = edge_weights_tensor.abs()
                         all_edge_weights.extend(abs_weights.tolist())
@@ -494,8 +499,8 @@ class BaseMethod(ABC):
             edge_weights_dict = getattr(sparse_act, "incoming_edge_weights", {})
 
             # Count edges above threshold
-            for token_pos, neurons_dict in edge_weights_dict.items():
-                for neuron_idx, edge_weights_tensor in neurons_dict.items():
+            for neurons_dict in edge_weights_dict.values():
+                for edge_weights_tensor in neurons_dict.values():
                     # Count edges above threshold using tensor operations
                     n_edges += (edge_weights_tensor.abs() >= threshold).sum().item()
 
@@ -617,7 +622,7 @@ class BaseMethod(ABC):
 
             # override if thresholds are provided
             if len(thresholds) != 0:
-                absolute_thresholds = thresholds + [float("inf"), -1.0]
+                absolute_thresholds = [*thresholds, float("inf"), -1.0]
 
             for i, threshold in enumerate(tqdm(absolute_thresholds)):
                 # out[threshold] = {}
@@ -637,13 +642,13 @@ class BaseMethod(ABC):
                 p_edges = n_edges / total_edges if total_edges > 0 else 0
 
                 if self.auc_test_random:
-                    for k in nodes:
-                        nodes[k].act = (
-                            t.bernoulli(t.ones_like(nodes[k].act, dtype=t.float) * p)
+                    for node in nodes.values():
+                        node.act = (
+                            t.bernoulli(t.ones_like(node.act, dtype=t.float) * p)
                             .to(self.device)
                             .to(dtype=t.bool)
                         )
-                        nodes[k].resc = t.ones_like(nodes[k].resc, dtype=t.bool).to(self.device)
+                        node.resc = t.ones_like(node.resc, dtype=t.bool).to(self.device)
                     # out[threshold]["n_nodes"] = sum(
                     #     [n.act.sum() + n.resc.sum() for n in nodes.values()]
                     # ).item()
@@ -882,5 +887,6 @@ class BaseMethod(ABC):
         with open(dump_dir, "wb") as outfile:
             t.save(save_dict, outfile)
 
+    @abstractmethod
     def load(self, dump_dir, **kwargs):
         pass

@@ -14,6 +14,7 @@ from circuits.tracing.artifact import (
     load_topk_compact_trace,
     validate_topk_compact_trace_integrity,
 )
+
 from scripts.bonafide.build_topk_manifest import save_manifest
 from scripts.bonafide.execution_plan import sha256_file
 
@@ -54,9 +55,11 @@ def _reference_index(reference_root: Path) -> dict[tuple[int, str], Path]:
         for manifest_path in family_root.glob("*/*/manifest.json"):
             manifest = _load_json(manifest_path)
             source_id = manifest.get("source_width1_artifact_id")
+            if not isinstance(source_id, str) or not source_id:
+                raise ValueError(f"invalid C0 reference source ID: {source_id!r}")
             key = (candidate_index, source_id)
-            if not isinstance(source_id, str) or not source_id or key in result:
-                raise ValueError(f"invalid or duplicate C0 reference: {key}")
+            if key in result:
+                raise ValueError(f"duplicate C0 reference: {key}")
             result[key] = manifest_path.parent.resolve()
     return result
 

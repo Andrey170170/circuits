@@ -205,15 +205,14 @@ def build_graph(
             if idx < 0 or idx >= len(prompt_tokens):
                 return None
             return f"inp_{idx}"
-        elif layer == num_layers:
+        if layer == num_layers:
             if neuron in target_logit_ids:
                 return f"out_{target_logit_ids.index(neuron)}"
             return None
-        else:
-            cl = neuron_to_cluster.get((layer, neuron), "-1")
-            if cl in active_clusters:
-                return f"cl_{cl}"
-            return None
+        cl = neuron_to_cluster.get((layer, neuron), "-1")
+        if cl in active_clusters:
+            return f"cl_{cl}"
+        return None
 
     # Aggregate edges: sum attribution between supernode pairs
     agg_edges: dict[tuple[str, str], float] = defaultdict(float)
@@ -244,7 +243,7 @@ def build_graph(
     # Sort by absolute aggregated attribution, keep top N
     sorted_edges = sorted(agg_edges.items(), key=lambda x: abs(x[1]), reverse=True)
     if top_n_edges > 0:
-        top_set = set((s, t) for (s, t), _ in sorted_edges[:top_n_edges])
+        top_set = {(s, t) for (s, t), _ in sorted_edges[:top_n_edges]}
 
         if guarantee_edges:
             # Ensure each cluster has its strongest incoming and outgoing edge
@@ -271,9 +270,9 @@ def build_graph(
     # Determine connected IO nodes
     connected_io: set[str] = set()
     for (src, tgt), _ in sorted_edges:
-        if src.startswith("inp_") or src.startswith("out_"):
+        if src.startswith(("inp_", "out_")):
             connected_io.add(src)
-        if tgt.startswith("inp_") or tgt.startswith("out_"):
+        if tgt.startswith(("inp_", "out_")):
             connected_io.add(tgt)
 
     # Build cluster color map (only active clusters with edges)
@@ -427,10 +426,7 @@ def build_graph(
         # Color by sign of attribution (blue=positive, red=negative)
         signed = cluster_attr_signed.get(cl_name, 0)
         attr_frac = cluster_attr.get(cl_name, 0) / max_cluster_attr
-        if signed >= 0:
-            fill = POS_EDGE_COLOR
-        else:
-            fill = NEG_EDGE_COLOR
+        fill = POS_EDGE_COLOR if signed >= 0 else NEG_EDGE_COLOR
         # Opacity scales with attribution magnitude
         alpha = max(0.4, min(1.0, 0.4 + 0.6 * attr_frac))
         hex_alpha = f"{int(alpha * 255):02x}"

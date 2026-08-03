@@ -25,18 +25,17 @@ def malloc_cpu_if_None(
         return x
 
     # Otherwise, allocate new tensor
-    else:
-        if verbose:
-            print(
-                f"Mallocing {shape=}, {dtype=}, {shared=} on CPU... ",
-                end="",
-                flush=True,
-            )
+    if verbose:
+        print(
+            f"Mallocing {shape=}, {dtype=}, {shared=} on CPU... ",
+            end="",
+            flush=True,
+        )
 
-        x = torch.zeros(shape, dtype=dtype, device="cpu")
-        if shared:
-            x.share_memory_()
+    x = torch.zeros(shape, dtype=dtype, device="cpu")
+    if shared:
+        x.share_memory_()
 
-        if verbose:
-            print("Done")
-        return x
+    if verbose:
+        print("Done")
+    return x

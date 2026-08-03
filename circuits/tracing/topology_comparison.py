@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
-from functools import lru_cache
+from functools import cache
 from typing import Any
 
 import numpy as np
@@ -70,7 +70,7 @@ def _path_evidence(
         destinations.sort()
     sources = sorted(node for node in nodes if node[0] == -1)
 
-    @lru_cache(maxsize=None)
+    @cache
     def count_paths(node: NodeKey, retained_only: bool) -> int:
         if node == target:
             return 1
@@ -167,7 +167,7 @@ def compare_joint_to_independent_candidates(
         or max_omitted_path_witnesses_per_candidate < 0
     ):
         raise ValueError(
-            "max_omitted_path_witnesses_per_candidate must be a " "non-negative integer"
+            "max_omitted_path_witnesses_per_candidate must be a non-negative integer"
         )
     validate_topk_trace_data(joint)
     references = list(independent)

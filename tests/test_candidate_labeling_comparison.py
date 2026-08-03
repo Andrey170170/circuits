@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from circuits.analysis.bonafide.candidate_labeling_comparison import (
     ANCHOR_SCHEMA,
     ANCHORS_FILE,
@@ -37,8 +36,8 @@ from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 
 def test_anchor_assignment_uses_lexicographically_smallest_global_optimum() -> None:
     result = select_w_anchors(
-        member_counts={cluster: 5 for cluster in range(13)},
-        generation_target_counts={cluster: 8 for cluster in range(13)},
+        member_counts=dict.fromkeys(range(13), 5),
+        generation_target_counts=dict.fromkeys(range(13), 8),
     )
 
     assert result["anchors_in_target_point_order"] == list(range(12))

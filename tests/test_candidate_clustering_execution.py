@@ -9,8 +9,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from scipy.sparse import csr_matrix, load_npz, save_npz
-
 from circuits.analysis.bonafide.candidate_clustering import (
     CLUSTER_COUNTS,
     RANDOM_SEEDS,
@@ -33,6 +31,7 @@ from circuits.analysis.bonafide.clustering_evaluation import (
     cluster_size_metrics,
     sparse_graph_partition_metrics,
 )
+from scipy.sparse import csr_matrix, load_npz, save_npz
 
 
 def _write_self_hashed_input(root: Path) -> dict[str, object]:
@@ -168,8 +167,7 @@ def _patch_pipeline(monkeypatch, bundle, evidence, fit) -> None:
         lambda loaded: evidence,
     )
     monkeypatch.setattr(
-        "circuits.analysis.bonafide.candidate_clustering_execution."
-        "fit_generation_grid",
+        "circuits.analysis.bonafide.candidate_clustering_execution.fit_generation_grid",
         lambda built: fit,
     )
 
@@ -283,7 +281,7 @@ def test_loader_rejects_file_and_csr_content_hash_drift(
     content = bytearray(assignment_path.read_bytes())
     content[-1] ^= 1
     assignment_path.write_bytes(content)
-    with pytest.raises(ValueError, match="file hash drift: assignments.parquet"):
+    with pytest.raises(ValueError, match=r"file hash drift: assignments\.parquet"):
         load_candidate_clustering_baseline(output)
 
     output2, _ = _run_synthetic(tmp_path / "second", monkeypatch)
@@ -506,7 +504,7 @@ def test_revision_binds_clean_full_tree_and_rejects_tracked_dirt(
 def test_revision_rejects_untracked_source_module(tmp_path: Path, monkeypatch) -> None:
     repo = _synthetic_repo(tmp_path / "repo", untracked_role="candidate_nulls")
     _patch_runtime_paths(monkeypatch, repo)
-    with pytest.raises(ValueError, match="source is not tracked:.*candidate_nulls"):
+    with pytest.raises(ValueError, match=r"source is not tracked:.*candidate_nulls"):
         collect_candidate_clustering_revision(repo)
 
 

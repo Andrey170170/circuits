@@ -92,9 +92,11 @@ def plot_selected_methods_for_nodes(
     model_name: str = "Llama-3.1-8B",
     agg: str = "sum",
     prefix: str = str(RESULTS_DIR / "fc_evals"),
-    datasets: list[str] = ["rc", "within_rc", "nounpp", "simple"],
+    datasets: list[str] | None = None,
     width: str = "",
 ):
+    if datasets is None:
+        datasets = ["rc", "within_rc", "nounpp", "simple"]
     print(f"PROCESSING {subfolder} | {model_name} | {agg} | {prefix} | width={width}")
     pattern_prefix = prefix + "/" + model_name + "/" + subfolder + "/"
     model = model_name
@@ -108,11 +110,7 @@ def plot_selected_methods_for_nodes(
             opts = "_" + opts
         pattern = f"{pattern_prefix}/{dataset}/{model}_{dataset}_N300_AGG{agg_mode}_Mnap{opts}_EDGE_THRESHOLD0.02_TOPK_NEURONS100{suffix}{width_suffix}/faithfulness_and_completeness/*.json"
         files = list(glob.glob(pattern))
-        if len(files) == 0:
-            res = pd.DataFrame()
-        else:
-            res = pd.read_json(files[0])
-        return res
+        return pd.DataFrame() if len(files) == 0 else pd.read_json(files[0])
 
     dfs = []
     for dataset in datasets:
@@ -317,7 +315,7 @@ def plot_selected_methods_for_nodes(
         # Apply appropriate interpolation based on plot type
         df_interpolated = (
             df_base.groupby(["dataset", "component", "method"], group_keys=False)
-            .apply(lambda x: interpolate_group(x, use_log_interp=use_log))
+            .apply(lambda x, use_log=use_log: interpolate_group(x, use_log_interp=use_log))
             .reset_index(drop=True)
         )
 
@@ -376,7 +374,7 @@ def plot_selected_methods_for_nodes(
         if use_log:
             plot = plot + (p9.scale_x_log10(breaks=[10**i for i in range(10)]))
         else:
-            plot = plot + p9.scale_x_continuous(breaks=[i for i in range(0, 400 + 1, 100)])
+            plot = plot + p9.scale_x_continuous(breaks=list(range(0, 400 + 1, 100)))
             plot = plot + p9.coord_cartesian(xlim=(0, 400), ylim=(-0.3, 2))
         try:
             plot_path = f"{save_path_prefix}/fc_{'log' if use_log else 'linear'}{PLOT_SUFFIX}"
@@ -434,7 +432,7 @@ def plot_selected_methods_for_nodes(
         if use_log:
             plot = plot + (p9.scale_x_log10(breaks=[10**i for i in range(10)]))
         else:
-            plot = plot + p9.scale_x_continuous(breaks=[i for i in range(0, 400 + 1, 100)])
+            plot = plot + p9.scale_x_continuous(breaks=list(range(0, 400 + 1, 100)))
             plot = plot + p9.coord_cartesian(xlim=(0, 400), ylim=(-0.3, 2))
         try:
             plot_path = f"{save_path_prefix}/fc_{'log' if use_log else 'linear'}_bases{PLOT_SUFFIX}"
@@ -494,7 +492,7 @@ def plot_selected_methods_for_nodes(
         if use_log:
             plot = plot + (p9.scale_x_log10(breaks=[10**i for i in range(10)]))
         else:
-            plot = plot + p9.scale_x_continuous(breaks=[i for i in range(0, 400 + 1, 100)])
+            plot = plot + p9.scale_x_continuous(breaks=list(range(0, 400 + 1, 100)))
             plot = plot + p9.coord_cartesian(xlim=(0, 400), ylim=(-0.3, 2))
         try:
             plot_path = (
@@ -535,7 +533,7 @@ def plot_selected_methods_for_nodes(
         if use_log:
             plot = plot + (p9.scale_x_log10(breaks=[10**i for i in range(10)]))
         else:
-            plot = plot + p9.scale_x_continuous(breaks=[i for i in range(0, 400 + 1, 100)])
+            plot = plot + p9.scale_x_continuous(breaks=list(range(0, 400 + 1, 100)))
             plot = plot + p9.coord_cartesian(xlim=(0, 400), ylim=(-0.3, 2))
         try:
             plot_path = f"{save_path_prefix}/fc_{'log' if use_log else 'linear'}_adag_ablations{PLOT_SUFFIX}"
@@ -607,7 +605,7 @@ def plot_selected_methods_for_edges(
                 complete_methods[method_name] = dataset_folders
             else:
                 missing = [d for d in datasets if d not in dataset_folders]
-                example_folder = list(folder_mapping[method_name].values())[0]
+                example_folder = next(iter(folder_mapping[method_name].values()))
                 print(
                     f"Skipping {method_name} (e.g., {example_folder}): missing data for {missing}"
                 )
@@ -711,7 +709,7 @@ def plot_selected_methods_for_edges(
     for use_log in [True, False]:
         df_interpolated = (
             df_base.groupby(["dataset", "method", "method_label"], group_keys=False)
-            .apply(lambda x: interpolate_group(x, use_log_interp=use_log))
+            .apply(lambda x, use_log=use_log: interpolate_group(x, use_log_interp=use_log))
             .reset_index(drop=True)
         )
 
@@ -885,7 +883,9 @@ def plot_all_methods_for_edges(
             label_map[m] = wrapped
             if wrapped not in label_order:
                 label_order.append(wrapped)
-        data["method_label"] = data["method"].apply(lambda m: label_map[str(m)])
+        data["method_label"] = data["method"].apply(
+            lambda m, label_map=label_map: label_map[str(m)]
+        )
         data["method_label"] = pd.Categorical(
             data["method_label"], categories=label_order, ordered=True
         )

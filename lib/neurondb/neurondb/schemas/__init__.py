@@ -1,6 +1,6 @@
 __all__ = [
-    "SQLABase",
     "DB_INDICES",
+    "SQLABase",
     "SQLALanguageModel",
     "SQLANeuron",
     "SQLANeuronDescription",

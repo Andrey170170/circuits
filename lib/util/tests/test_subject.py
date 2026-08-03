@@ -43,11 +43,9 @@ class TestSubject(unittest.TestCase):
         }
         for layer in interventions_by_layer:
             for i in range(len(interventions_by_layer[layer])):
-                self.assertTrue(
-                    torch.equal(
-                        interventions_by_layer[layer][i],
-                        correct_intervention_tensors_by_layer[layer][i],
-                    )
+                assert torch.equal(
+                    interventions_by_layer[layer][i],
+                    correct_intervention_tensors_by_layer[layer][i],
                 )
 
     def test_generate_batched(self):
@@ -76,7 +74,7 @@ class TestSubject(unittest.TestCase):
                 num_return_sequences=1,
                 neuron_interventions=intervs,
             )
-            for ci, intervs in zip(cis, interventions)
+            for ci, intervs in zip(cis, interventions, strict=True)
         ]
 
         batched = self.subject.do_batched_interventions(
@@ -86,19 +84,17 @@ class TestSubject(unittest.TestCase):
         )
 
         for i in range(len(cis)):
-            self.assertTrue(
-                np.isclose(non_batched[i].output_ids_BT[0], batched[i].output_ids_BT).all()
-            )
-            self.assertTrue(np.isclose(non_batched[i].logits_BV[0], batched[i].logits_BV).all())
+            assert np.isclose(non_batched[i].output_ids_BT[0], batched[i].output_ids_BT).all()
+            assert np.isclose(non_batched[i].logits_BV[0], batched[i].logits_BV).all()
 
             for j in range(len(non_batched[i].tokenwise_log_probs)):
                 nb_lps = non_batched[i].tokenwise_log_probs[j]
                 b_lps = batched[i].tokenwise_log_probs[j]
-                self.assertTrue(np.isclose(nb_lps[0], b_lps[0]).all())
-                self.assertTrue(np.isclose(nb_lps[1], b_lps[1]).all())
+                assert np.isclose(nb_lps[0], b_lps[0]).all()
+                assert np.isclose(nb_lps[1], b_lps[1]).all()
 
-            self.assertEqual(non_batched[i].continuations, batched[i].continuations)
-            self.assertTrue(np.isclose(non_batched[i].acts[0], batched[i].acts).all())
+            assert non_batched[i].continuations == batched[i].continuations
+            assert np.isclose(non_batched[i].acts[0], batched[i].acts).all()
 
 
 if __name__ == "__main__":

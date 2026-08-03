@@ -10,8 +10,9 @@ import platform
 import shutil
 import subprocess
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -26,6 +27,7 @@ from circuits.analysis.bonafide.canonical import (
 )
 from circuits.analysis.bonafide.clustering import (
     SPARSE_CLUSTER_SCHEMA,
+    KnnSymmetrization,
     SparseSpectralResult,
     knn_affinity,
     mean_similarity_matrix,
@@ -57,6 +59,14 @@ ASSIGNMENT_SCHEMA = pa.schema(
         pa.field("assignment_status", pa.string(), nullable=False),
     ]
 )
+
+
+def _knn_symmetrization(value: object) -> KnnSymmetrization:
+    if value == "union_max":
+        return "union_max"
+    if value == "mutual_min":
+        return "mutual_min"
+    raise ValueError("unsupported kNN symmetrization")
 
 
 def collect_clustering_code_revision(repo_root: Path) -> dict[str, Any]:
@@ -358,7 +368,7 @@ def fit_sparse_cluster_config(
     affinity = knn_affinity(
         similarity,
         neighbors=int(config["neighbors"]),
-        symmetrization=str(config["knn_symmetrization"]),  # type: ignore[arg-type]
+        symmetrization=_knn_symmetrization(config["knn_symmetrization"]),
         minimum_affinity=float(config["minimum_affinity"]),
     )
     return (

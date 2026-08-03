@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from itertools import pairwise
+from typing import Any, cast
 
 from circuits.analysis.bonafide.identity import (
     OccurrenceKey,
@@ -36,7 +38,7 @@ def _finite_float(value: object, field: str) -> float:
 def _optional_vector(value: object, field: str) -> tuple[float | None, ...]:
     if not isinstance(value, (list, tuple)):
         try:
-            values = list(value)  # type: ignore[arg-type]
+            values = list(cast(Iterable[object], value))
         except TypeError as error:
             raise ValueError(f"{field} must be a one-dimensional sequence") from error
     else:
@@ -457,7 +459,7 @@ def validate_causal_path(edges: Sequence[OccurrenceEdge]) -> None:
     for edge in edges:
         if edge.trace_unit_id != trace_unit_id:
             raise ValueError("causal path cannot cross independently traced targets")
-    for left, right in zip(edges, edges[1:], strict=False):
+    for left, right in pairwise(edges):
         if left.target != right.source:
             raise ValueError(
                 "causal path does not preserve exact occurrence continuity"
@@ -505,21 +507,21 @@ class ResponseTimeMultiplex:
     ) -> tuple[LongitudinalCorrespondence, ...]:
         slices = self._response_slices(response_id)
         correspondences: list[LongitudinalCorrespondence] = []
-        for left, right in zip(slices, slices[1:], strict=False):
+        for left, right in pairwise(slices):
             shared = sorted(left.basis_index.keys() & right.basis_index.keys())
-            for basis in shared:
-                correspondences.append(
-                    LongitudinalCorrespondence(
-                        response_id=response_id,
-                        left_target_position=left.target_response_position,
-                        right_target_position=right.target_response_position,
-                        left_trace_unit_id=left.trace_unit_id,
-                        right_trace_unit_id=right.trace_unit_id,
-                        basis=basis,
-                        left_occurrences=left.basis_index[basis].occurrences,
-                        right_occurrences=right.basis_index[basis].occurrences,
-                    )
+            correspondences.extend(
+                LongitudinalCorrespondence(
+                    response_id=response_id,
+                    left_target_position=left.target_response_position,
+                    right_target_position=right.target_response_position,
+                    left_trace_unit_id=left.trace_unit_id,
+                    right_trace_unit_id=right.trace_unit_id,
+                    basis=basis,
+                    left_occurrences=left.basis_index[basis].occurrences,
+                    right_occurrences=right.basis_index[basis].occurrences,
                 )
+                for basis in shared
+            )
         return tuple(correspondences)
 
     def trajectory(
@@ -582,7 +584,9 @@ class ResponseTimeMultiplex:
                 for expected_basis in basis_path[1:]:
                     next_frontier: list[tuple[OccurrenceKey, ...]] = []
                     for path in frontier:
-                        for candidate in sorted(outgoing.get(path[-1], [])):
+                        next_frontier.extend(
+                            (*path, candidate)
+                            for candidate in sorted(outgoing.get(path[-1], []))
                             if (
                                 basis_from_occurrence(
                                     candidate,
@@ -590,8 +594,8 @@ class ResponseTimeMultiplex:
                                     model_revision=target_slice.model_revision,
                                 )
                                 == expected_basis
-                            ):
-                                next_frontier.append((*path, candidate))
+                            )
+                        )
                     frontier = next_frontier
                     if not frontier:
                         break

@@ -69,7 +69,7 @@ def main():
     results = []
     for (layer, neuron), sub in grouped.groupby(["layer", "neuron"]):
         # Build attribution vector aligned with all_labels
-        attr_by_label = dict(zip(sub["label"], sub["total_attr"]))
+        attr_by_label = dict(zip(sub["label"], sub["total_attr"], strict=False))
         attr_vec = np.array([attr_by_label.get(l, 0.0) for l in all_labels])
 
         n_present = (attr_vec != 0).sum()
@@ -115,7 +115,7 @@ def main():
     cluster_attr: dict[str, np.ndarray] = {}
     for (layer, neuron), sub in grouped.groupby(["layer", "neuron"]):
         cl = cluster_map.get((int(layer), int(neuron)), "?")
-        attr_by_label = dict(zip(sub["label"], sub["total_attr"]))
+        attr_by_label = dict(zip(sub["label"], sub["total_attr"], strict=False))
         attr_vec = np.array([attr_by_label.get(l, 0.0) for l in all_labels])
         if cl not in cluster_attr:
             cluster_attr[cl] = np.zeros(len(all_labels))
@@ -182,7 +182,7 @@ def main():
 
         edge_results = []
         for edge_id, sub in edge_grouped.groupby("edge_id"):
-            attr_by_label = dict(zip(sub["label"], sub["total_attr"]))
+            attr_by_label = dict(zip(sub["label"], sub["total_attr"], strict=False))
             attr_vec = np.array([attr_by_label.get(l, 0.0) for l in all_labels])
 
             n_present = (attr_vec != 0).sum()

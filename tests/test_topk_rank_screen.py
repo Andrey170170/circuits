@@ -75,19 +75,18 @@ def test_rank_screen_resolves_exact_frozen_pool_order() -> None:
     second = deepcopy(source["waves"][0]["items"][0])
     second["artifact_id"] = "second"
     source["waves"][0]["items"].append(second)
-    cases = []
-    for artifact_id in ("second", "source-trace-1"):
-        cases.append(
-            {
-                "source_width1_artifact_id": artifact_id,
-                "corpus_role": "dense_discovery",
-                "example_id": source["waves"][0]["items"][0]["example"]["example_id"],
-                "base_question_id": source["waves"][0]["items"][0]["example"][
-                    "base_question_id"
-                ],
-                "target_response_position": 2,
-            }
-        )
+    cases = [
+        {
+            "source_width1_artifact_id": artifact_id,
+            "corpus_role": "dense_discovery",
+            "example_id": source["waves"][0]["items"][0]["example"]["example_id"],
+            "base_question_id": source["waves"][0]["items"][0]["example"][
+                "base_question_id"
+            ],
+            "target_response_position": 2,
+        }
+        for artifact_id in ("second", "source-trace-1")
+    ]
     pool = {
         "schema_version": "bonafide-topk-c2-screen-pool/v1",
         "cases": cases,

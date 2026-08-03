@@ -53,6 +53,21 @@ uv run python scripts/circuit_prep/prep.py --config configs/capitals.yaml
 sbatch --export=CONFIG=configs/capitals.yaml scripts/circuit_prep/prep.sbatch
 ```
 
+### Development checks
+
+The locked development environment includes Ruff and ty. After `uv sync --frozen`, run the
+repository quality gate with:
+
+```bash
+scripts/check_quality.sh
+```
+
+The gate lints every tracked Python module, checks formatting on the actively maintained
+BonaFide, labeling, tracing, frontend, and test surfaces, and type-checks the configured modern
+code boundary. The ty exclusions in `pyproject.toml` record older dynamic tracing internals that
+still need a separate typing migration. Ruff excludes only `scripts/steering.py`, a stale
+notebook-style prototype that is not an executable Python module.
+
 ## Pipeline Overview
 
 1. **Prepare a circuit** -- trace neuron attributions across a dataset

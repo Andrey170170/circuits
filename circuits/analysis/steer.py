@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import pyvene as pv
 import torch
+from tqdm import tqdm
+
 from circuits.utils.steering_utils import (
     SubspaceZeroIntervention,
     batchify,
@@ -13,7 +15,6 @@ from circuits.utils.steering_utils import (
     multiple_subspaces_config,
     prepare_circuits_for_interchange_interventions,
 )
-from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -79,8 +80,6 @@ def run_vanilla_interchange_intervention(
                 source_class,
                 base_idx,
                 source_idx,
-                base_subspaces,
-                source_subspaces,
                 subspaces,
             ) = (
                 batch["base"],
@@ -89,8 +88,6 @@ def run_vanilla_interchange_intervention(
                 batch["source_class"],
                 batch["base_idx"],
                 batch["source_idx"],
-                batch["base_subspaces"],
-                batch["source_subspaces"],
                 batch["subspaces"],
             )
 
@@ -113,9 +110,7 @@ def run_vanilla_interchange_intervention(
                         base,
                         [source],
                         {"sources->base": pos},
-                        output_original_output=(
-                            True if len(cached_original_outputs) == idx else False
-                        ),
+                        output_original_output=len(cached_original_outputs) == idx,
                     )
                     subspaces_len = None
                 else:
@@ -127,9 +122,7 @@ def run_vanilla_interchange_intervention(
                         base,
                         [source],
                         {"sources->base": pos},
-                        output_original_output=(
-                            True if len(cached_original_outputs) == idx else False
-                        ),
+                        output_original_output=len(cached_original_outputs) == idx,
                         subspaces=sub,
                     )
 
@@ -205,7 +198,7 @@ def run_zero_intervention(
     data = []
 
     # go through each pair
-    for idx, batch in enumerate(batches):
+    for batch in batches:
         # get vars
         (
             base,
@@ -214,8 +207,6 @@ def run_zero_intervention(
             source_class,
             base_idx,
             source_idx,
-            base_subspaces,
-            source_subspaces,
             subspaces,
             record_subspaces,
         ) = (
@@ -225,8 +216,6 @@ def run_zero_intervention(
             batch["source_class"],
             batch["base_idx"],
             batch["source_idx"],
-            batch["base_subspaces"],
-            batch["source_subspaces"],
             batch["subspaces"],
             batch["record_subspaces"],
         )
@@ -273,7 +262,7 @@ def run_zero_intervention(
                     f"source_{num_interventions-1}->base": list(range(base["input_ids"].shape[-1])),
                     **{
                         f"source_{i}->source_{i+1}": list(range(base["input_ids"].shape[-1]))
-                        for i in range(0, num_interventions - 1)
+                        for i in range(num_interventions - 1)
                     },
                 }
             ),
@@ -289,6 +278,7 @@ def run_zero_intervention(
                         for subspace, activation in zip(
                             intervention.record_subspaces[pos_idx],
                             intervention.collected_activations[pos_idx][batch_idx].tolist(),
+                            strict=True,
                         ):
                             collected_subspaces.append(
                                 {
@@ -369,7 +359,9 @@ def get_cluster_steering_effects(
     cluster_to_output = []
 
     # run steering for each example in the dataset
-    for batch_idx, (ci, attention_mask, label) in enumerate(zip(cis, attention_masks, labels)):
+    for batch_idx, (ci, attention_mask, label) in enumerate(
+        zip(cis, attention_masks, labels, strict=True)
+    ):
         # reorg as if only one example were in the dataset
         true_label = f"{label}___{batch_idx}"
         df_node_ex = df_node[df_node.label == true_label].copy()
@@ -389,7 +381,7 @@ def get_cluster_steering_effects(
             for nid, cluster in cluster_map.items():
                 node_to_cluster[(nid.layer, nid.token, nid.neuron)] = cluster
             clusters = sorted(set(cluster_map.values()))
-            all_clusters = ["none", "all"] + clusters
+            all_clusters = ["none", "all", *clusters]
         else:
             for neuron_id in custom_neuron_ids:
                 node_to_cluster[neuron_id] = "0"
@@ -398,8 +390,8 @@ def get_cluster_steering_effects(
 
         # apply cluster data to df_node_ex
         df_node_ex.loc[:, "cluster"] = df_node_ex.apply(
-            lambda row: node_to_cluster.get(
-                (row.layer, row.token if custom_neuron_ids is None else -1, row.neuron), None
+            lambda row, cluster_lookup=node_to_cluster: cluster_lookup.get(
+                (row.layer, row.token if custom_neuron_ids is None else -1, row.neuron)
             ),
             axis=1,
         )
@@ -486,7 +478,9 @@ def get_cluster_steering_effects(
                     [
                         f"{token:>15}: {prob:>7.2%}"
                         for token, prob in zip(
-                            d["intervened_top_10_tokens"], d["intervened_top_10_tokens_probs"]
+                            d["intervened_top_10_tokens"],
+                            d["intervened_top_10_tokens_probs"],
+                            strict=True,
                         )
                     ]
                 )
@@ -626,9 +620,9 @@ def export_cluster_data_to_json(df: pd.DataFrame, output_path: str) -> dict[str,
         """Convert numpy arrays and other non-serializable objects to lists."""
         if isinstance(obj, np.ndarray):
             return obj.tolist()
-        elif isinstance(obj, (np.integer, np.floating)):
+        if isinstance(obj, (np.integer, np.floating)):
             return float(obj)
-        elif isinstance(obj, str):
+        if isinstance(obj, str):
             # Handle string representations of lists
             if obj.startswith("[") and obj.endswith("]"):
                 try:
@@ -665,7 +659,7 @@ def export_cluster_data_to_json(df: pd.DataFrame, output_path: str) -> dict[str,
     # Create the final data structure
     export_data = {
         "clusters": clusters,
-        "unique_labels": sorted(list(unique_labels)),
+        "unique_labels": sorted(unique_labels),
         "metadata": {"total_clusters": len(clusters), "export_format": "cluster_analysis_v1"},
     }
 

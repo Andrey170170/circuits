@@ -7,9 +7,10 @@ import os
 import shutil
 import uuid
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from statistics import mean, median
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -968,7 +969,7 @@ def build_selected_states(
         manifest: dict[str, Any] = {
             "schema_version": SELECTION_SCHEMA,
             "selection_rule": (
-                "frozen label-free percentile-rank composite from plan " "Section 8.5.2"
+                "frozen label-free percentile-rank composite from plan Section 8.5.2"
             ),
             "source_plan": {
                 "path": str(source_plan_path.resolve()),

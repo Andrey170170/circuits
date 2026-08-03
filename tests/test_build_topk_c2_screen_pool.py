@@ -4,7 +4,6 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-
 from scripts.bonafide.build_topk_c2_screen_pool import (
     C2_SCREEN_ITEM_COUNT,
     build_c2_screen_pool,
@@ -38,9 +37,7 @@ def _source() -> dict:
             item["target_selection"].pop("sampling", None)
             item["target_selection"]["final_selection"] = {
                 "corpus_role": role,
-                "refinement_diagnostics": {
-                    "probability": (position + 1) / 100.0
-                },
+                "refinement_diagnostics": {"probability": (position + 1) / 100.0},
             }
             wave["items"].append(item)
         waves.append(wave)
@@ -69,17 +66,15 @@ def test_c2_screen_pool_is_response_and_phase_balanced() -> None:
     assert pool["selection_contract"]["response_count"] == 35
     assert pool["selection_contract"]["base_question_family_count"] == 34
     assert pool["selection_contract"]["final_trace_count"] == 245
-    assert {
-        (case["example_id"], case["phase_bin"])
-        for case in pool["cases"]
-    } == {
+    assert {(case["example_id"], case["phase_bin"]) for case in pool["cases"]} == {
         (f"response-{response_index:02d}", phase_bin)
         for response_index in range(35)
         for phase_bin in range(7)
     }
-    assert {
-        case["screen_slot"] for case in pool["cases"]
-    } == {"minimum_probability", "temporal_center"}
+    assert {case["screen_slot"] for case in pool["cases"]} == {
+        "minimum_probability",
+        "temporal_center",
+    }
     assert all(
         not case["source_width1_artifact_id"].startswith(("holdout-", "extreme-"))
         for case in pool["cases"]

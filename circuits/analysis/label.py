@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 from openai import AsyncOpenAI
 
+from circuits.descriptions.prompts import CLUSTER_SUMMARY_BATCH_PROMPT
+
 _client: AsyncOpenAI | None = None
 
 
@@ -14,8 +16,6 @@ def _get_client() -> AsyncOpenAI:
         _client = AsyncOpenAI()
     return _client
 
-
-from circuits.descriptions.prompts import CLUSTER_SUMMARY_BATCH_PROMPT
 
 CLUSTERING_PROMPT = """
 You are given a list of natural language descriptions from a large dataset. Your task is to generate a short summary of the labels.{top_examples}
@@ -98,7 +98,7 @@ async def generate_cluster_labels(
         # top_examples = top_examples[:20]
         prompt_content = [
             f"(top label: {top_example}) {desc}"
-            for (desc, top_example) in zip(node_descriptions, top_examples)
+            for desc, top_example in zip(node_descriptions, top_examples, strict=True)
         ]
         prompt_content = "- " + "\n- ".join(prompt_content)
     elif node_descriptions:
@@ -133,8 +133,7 @@ async def generate_cluster_labels(
     if not result:
         print("???")
         return "???"
-    result = result.strip()
-    return result
+    return result.strip()
 
 
 async def generate_label_eval(
@@ -354,7 +353,7 @@ async def label_clusters(
         results = await asyncio.gather(*summary_coroutines)
 
         # Process results
-        for i, (cluster, task_type, _) in enumerate(labeling_tasks):
+        for i, (cluster, _task_type, _) in enumerate(labeling_tasks):
             cluster_labels[int(cluster)] = results[i]
             print(f"Summarised {cluster}: {cluster_labels[int(cluster)]}")
 
@@ -370,7 +369,7 @@ async def eval_labels_on_steering(
     polarity: Literal["positive", "negative"] = "positive",
 ):
     eval_tasks = []
-    for label, cluster in zip(labels, list(range(len(labels)))):
+    for cluster, label in enumerate(labels):
         steering_results = prepare_table_from_steering_results(
             (
                 cluster_to_output[cluster_to_output.multiplier >= 1.0]

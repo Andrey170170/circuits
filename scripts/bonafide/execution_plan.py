@@ -6,11 +6,11 @@ import argparse
 import hashlib
 import json
 import math
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, NotRequired, TypedDict, cast
 
 import numpy as np
-
 
 SCHEMA_VERSION = "bonafide-trace-execution-plan/v1"
 FEATURE_NAMES = (
@@ -31,9 +31,20 @@ DEFAULT_HISTORICAL_SUMMARY_SHA256 = (
 )
 
 
+class _Shard(TypedDict):
+    shard_index: int
+    items: list[dict[str, Any]]
+    estimated_seconds: float
+    item_count: NotRequired[int]
+
+
 def canonical_json(value: Any) -> bytes:
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -134,7 +145,9 @@ def fit_cost_model(records: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     coefficients, _, rank, singular_values = np.linalg.lstsq(x, y, rcond=None)
     if rank != len(FEATURE_NAMES):
         raise ValueError(f"cost-model design matrix is rank deficient: {rank}")
-    if not np.all(np.isfinite(coefficients)) or not np.all(np.isfinite(singular_values)):
+    if not np.all(np.isfinite(coefficients)) or not np.all(
+        np.isfinite(singular_values)
+    ):
         raise ValueError("cost-model fit produced non-finite values")
     predictions = x @ coefficients
     residual_sum = float(np.square(y - predictions).sum())
@@ -155,7 +168,8 @@ def fit_cost_model(records: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "target": "trace_wall_seconds",
         "feature_names": list(FEATURE_NAMES),
         "coefficients": {
-            name: float(value) for name, value in zip(FEATURE_NAMES, coefficients, strict=True)
+            name: float(value)
+            for name, value in zip(FEATURE_NAMES, coefficients, strict=True)
         },
         "r_squared_in_sample": float(r_squared),
         "training_record_count": len(rows),
@@ -166,7 +180,9 @@ def fit_cost_model(records: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _predict(model: Mapping[str, Any], metrics: Mapping[str, float]) -> tuple[float, float, bool]:
+def _predict(
+    model: Mapping[str, Any], metrics: Mapping[str, float]
+) -> tuple[float, float, bool]:
     coefficients = model["coefficients"]
     raw = float(coefficients["intercept"]) + sum(
         float(coefficients[name]) * float(metrics[name]) for name in FEATURE_NAMES[1:]
@@ -178,7 +194,9 @@ def _predict(model: Mapping[str, Any], metrics: Mapping[str, float]) -> tuple[fl
     return raw, estimated, estimated != raw
 
 
-def _refinement_index(records: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, float]]:
+def _refinement_index(
+    records: Iterable[Mapping[str, Any]],
+) -> dict[str, dict[str, float]]:
     index: dict[str, dict[str, float]] = {}
     for record in records:
         if record.get("status") != "complete":
@@ -206,7 +224,9 @@ def _refinement_index(records: Iterable[Mapping[str, Any]]) -> dict[str, dict[st
     return index
 
 
-def _manifest_items(manifest: Mapping[str, Any]) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+def _manifest_items(
+    manifest: Mapping[str, Any],
+) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
     pairs: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     wave_ids: set[str] = set()
     artifact_ids: set[str] = set()
@@ -217,8 +237,14 @@ def _manifest_items(manifest: Mapping[str, Any]) -> list[tuple[Mapping[str, Any]
         wave_ids.add(wave_id)
         for item in wave.get("items", []):
             artifact_id = item.get("artifact_id")
-            if not isinstance(artifact_id, str) or not artifact_id or artifact_id in artifact_ids:
-                raise ValueError(f"invalid or duplicate source artifact_id {artifact_id!r}")
+            if (
+                not isinstance(artifact_id, str)
+                or not artifact_id
+                or artifact_id in artifact_ids
+            ):
+                raise ValueError(
+                    f"invalid or duplicate source artifact_id {artifact_id!r}"
+                )
             artifact_ids.add(artifact_id)
             pairs.append((wave, item))
     if not pairs:
@@ -235,15 +261,22 @@ def _item_ref(
     final_selection = item.get("target_selection", {}).get("final_selection", {})
     probe_id = final_selection.get("source_refinement_probe_id")
     if not isinstance(probe_id, str) or not probe_id:
-        raise ValueError(f"final target {item.get('artifact_id')} lacks source probe identity")
+        raise ValueError(
+            f"final target {item.get('artifact_id')} lacks source probe identity"
+        )
     diagnostics = final_selection.get("refinement_diagnostics")
     if not isinstance(diagnostics, Mapping):
-        raise ValueError(f"final target {item.get('artifact_id')} lacks refinement diagnostics")
+        raise ValueError(
+            f"final target {item.get('artifact_id')} lacks refinement diagnostics"
+        )
     diagnosed_edges = _finite_number(
-        diagnostics.get("candidate_mlp_edge_count"), "diagnostic candidate_mlp_edge_count"
+        diagnostics.get("candidate_mlp_edge_count"),
+        "diagnostic candidate_mlp_edge_count",
     )
     if diagnosed_edges != metrics["candidate_mlp_edge_count"]:
-        raise ValueError(f"conflicting candidate-edge metrics for {item.get('artifact_id')}")
+        raise ValueError(
+            f"conflicting candidate-edge metrics for {item.get('artifact_id')}"
+        )
     raw, estimated, clamped = _predict(model, metrics)
     return {
         "source_wave_id": wave["wave_id"],
@@ -252,7 +285,9 @@ def _item_ref(
         "example_id": item["example"]["example_id"],
         "corpus_role": wave.get("corpus_role"),
         "cluster_fit_eligible": wave.get("cluster_fit_eligible"),
-        "target_response_positions": item["target_selection"]["response_token_positions"],
+        "target_response_positions": item["target_selection"][
+            "response_token_positions"
+        ],
         "token_text": diagnostics.get("token_text"),
         "selection_reasons": final_selection.get("selection_reasons", []),
         "workload": {name: int(metrics[name]) for name in FEATURE_NAMES[1:]},
@@ -262,26 +297,35 @@ def _item_ref(
     }
 
 
-def _lpt_shards(items: list[dict[str, Any]], shard_count: int) -> list[dict[str, Any]]:
+def _lpt_shards(items: list[dict[str, Any]], shard_count: int) -> list[_Shard]:
     if shard_count < 1:
         raise ValueError("shard_count must be positive")
     if shard_count > len(items):
         raise ValueError("shard_count cannot exceed routine target count")
-    shards = [{"shard_index": i, "items": [], "estimated_seconds": 0.0} for i in range(shard_count)]
+    shards: list[_Shard] = [
+        {"shard_index": i, "items": [], "estimated_seconds": 0.0}
+        for i in range(shard_count)
+    ]
     ordered = sorted(
         items,
         key=lambda item: (
-            -item["estimated_seconds"], item["source_wave_id"], item["source_artifact_id"]
+            -item["estimated_seconds"],
+            item["source_wave_id"],
+            item["source_artifact_id"],
         ),
     )
     for item in ordered:
-        shard = min(shards, key=lambda value: (value["estimated_seconds"], value["shard_index"]))
+        shard = min(
+            shards, key=lambda value: (value["estimated_seconds"], value["shard_index"])
+        )
         shard["items"].append(item)
         shard["estimated_seconds"] += item["estimated_seconds"]
     for shard in shards:
         shard["items"].sort(
             key=lambda item: (
-                -item["estimated_seconds"], item["source_wave_id"], item["source_artifact_id"]
+                -item["estimated_seconds"],
+                item["source_wave_id"],
+                item["source_artifact_id"],
             )
         )
         shard["item_count"] = len(shard["items"])
@@ -328,18 +372,24 @@ def build_execution_plan(
     routine: list[dict[str, Any]] = []
     extremes: list[dict[str, Any]] = []
     for wave, item in _manifest_items(manifest):
-        probe_id = item.get("target_selection", {}).get("final_selection", {}).get(
-            "source_refinement_probe_id"
+        probe_id = (
+            item.get("target_selection", {})
+            .get("final_selection", {})
+            .get("source_refinement_probe_id")
         )
         if probe_id not in probes:
-            raise ValueError(f"missing refinement metrics for final target {item.get('artifact_id')}")
+            raise ValueError(
+                f"missing refinement metrics for final target {item.get('artifact_id')}"
+            )
         ref = _item_ref(wave, item, probes[probe_id], model)
         if wave.get("extreme_workload_isolation") is True:
             extremes.append(ref)
         else:
             routine.append(ref)
     if len(extremes) != 4:
-        raise ValueError(f"expected exactly four manifest-marked extremes, found {len(extremes)}")
+        raise ValueError(
+            f"expected exactly four manifest-marked extremes, found {len(extremes)}"
+        )
 
     pathological = [
         item
@@ -351,10 +401,14 @@ def build_execution_plan(
         raise ValueError("expected exactly one pathological extreme target")
     preflight.sort(
         key=lambda item: (
-            item["estimated_seconds"], item["source_wave_id"], item["source_artifact_id"]
+            item["estimated_seconds"],
+            item["source_wave_id"],
+            item["source_artifact_id"],
         )
     )
-    pathological.sort(key=lambda item: (item["source_wave_id"], item["source_artifact_id"]))
+    pathological.sort(
+        key=lambda item: (item["source_wave_id"], item["source_artifact_id"])
+    )
     shards = _lpt_shards(routine, shard_count)
     sources = {
         "final_trace_manifest": {
@@ -415,7 +469,9 @@ def build_execution_plan(
             "within_shard_order": "estimated_seconds_descending",
             "routine_shard_count": shard_count,
             "routine_target_count": len(routine),
-            "routine_total_estimated_seconds": sum(item["estimated_seconds"] for item in routine),
+            "routine_total_estimated_seconds": sum(
+                item["estimated_seconds"] for item in routine
+            ),
             "shards": shards,
         },
         "extremes": {
@@ -438,7 +494,9 @@ def validate_execution_plan(
     verify_sources: bool = True,
 ) -> None:
     if plan.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(f"unsupported execution-plan schema {plan.get('schema_version')!r}")
+        raise ValueError(
+            f"unsupported execution-plan schema {plan.get('schema_version')!r}"
+        )
     core = dict(plan)
     plan_sha = core.pop("plan_sha256", None)
     actual_plan_sha = hashlib.sha256(canonical_json(core)).hexdigest()
@@ -459,13 +517,19 @@ def validate_execution_plan(
                 raise ValueError(f"execution plan lacks source {name}")
             path = Path(str(source.get("path", "")))
             if not path.is_absolute() or not path.is_file():
-                raise ValueError(f"execution-plan source must be an existing absolute path: {path}")
+                raise ValueError(
+                    f"execution-plan source must be an existing absolute path: {path}"
+                )
             if sha256_file(path) != source.get("sha256"):
                 raise ValueError(f"execution-plan source hash drift: {name}")
             if name in ("final_trace_manifest", "trace_run_config"):
-                canonical_sha = hashlib.sha256(canonical_json(_load_json(path))).hexdigest()
+                canonical_sha = hashlib.sha256(
+                    canonical_json(_load_json(path))
+                ).hexdigest()
                 if source.get("canonical_sha256") != canonical_sha:
-                    raise ValueError(f"execution-plan canonical source hash drift: {name}")
+                    raise ValueError(
+                        f"execution-plan canonical source hash drift: {name}"
+                    )
     if manifest is None:
         manifest = _load_json(Path(sources["final_trace_manifest"]["path"]))
     manifest_pairs = _manifest_items(manifest)
@@ -522,27 +586,38 @@ def validate_execution_plan(
             raise ValueError(f"extreme group {group} must be a list")
         extreme_items.extend(items)
     all_items = [*routine_items, *extreme_items]
-    actual = [(item.get("source_wave_id"), item.get("source_artifact_id")) for item in all_items]
+    actual = [
+        (item.get("source_wave_id"), item.get("source_artifact_id"))
+        for item in all_items
+    ]
     if len(actual) != len(set(actual)):
         raise ValueError("execution plan contains duplicate target assignments")
     routine_refs = {
-        (item.get("source_wave_id"), item.get("source_artifact_id")) for item in routine_items
+        (item.get("source_wave_id"), item.get("source_artifact_id"))
+        for item in routine_items
     }
     extreme_refs = {
-        (item.get("source_wave_id"), item.get("source_artifact_id")) for item in extreme_items
+        (item.get("source_wave_id"), item.get("source_artifact_id"))
+        for item in extreme_items
     }
     if routine_refs != expected_routine:
-        raise ValueError("routine shard membership disagrees with manifest non-extreme targets")
+        raise ValueError(
+            "routine shard membership disagrees with manifest non-extreme targets"
+        )
     if extreme_refs != expected_extreme:
         raise ValueError("extreme membership disagrees with manifest-marked targets")
     preflight = extremes["preflight"]
     pathological = extremes["manual_pathological"]
     if len(preflight) != 3 or len(pathological) != 1:
-        raise ValueError("extreme groups must contain three preflights and one manual target")
+        raise ValueError(
+            "extreme groups must contain three preflights and one manual target"
+        )
     threshold = int(extremes.get("pathological_candidate_edge_threshold", -1))
     if threshold != PATHOLOGICAL_EDGE_THRESHOLD:
         raise ValueError("pathological threshold is inconsistent")
-    if any(item["workload"]["candidate_mlp_edge_count"] >= threshold for item in preflight):
+    if any(
+        item["workload"]["candidate_mlp_edge_count"] >= threshold for item in preflight
+    ):
         raise ValueError("pathological target was assigned to preflight")
     if pathological[0]["workload"]["candidate_mlp_edge_count"] < threshold:
         raise ValueError("manual target does not meet pathological threshold")
@@ -562,16 +637,23 @@ def validate_execution_plan(
     ):
         raise ValueError("routine aggregate estimate is inconsistent")
     tasks = plan.get("tasks")
-    if not isinstance(tasks, list) or [task.get("task_index") for task in tasks] != list(
-        range(len(tasks))
+    if not isinstance(tasks, list) or not all(
+        isinstance(task, Mapping) for task in tasks
     ):
+        raise ValueError("execution tasks must be an array of objects")
+    typed_tasks = cast(list[Mapping[str, Any]], tasks)
+    if [task.get("task_index") for task in typed_tasks] != list(range(len(tasks))):
         raise ValueError("execution tasks must have contiguous ordered indices")
     expected_task_count = len(shards) + len(preflight) + len(pathological)
     if len(tasks) != expected_task_count:
         raise ValueError("execution task count is inconsistent")
-    for index, task in enumerate(tasks):
+    for index, task in enumerate(typed_tasks):
         if index < len(shards):
-            expected_kind, expected_source, expected_items = "routine", index, shards[index]["item_count"]
+            expected_kind, expected_source, expected_items = (
+                "routine",
+                index,
+                shards[index]["item_count"],
+            )
         elif index < len(shards) + len(preflight):
             expected_kind = "extreme_preflight"
             expected_source = index - len(shards)
@@ -579,13 +661,17 @@ def validate_execution_plan(
         else:
             expected_kind, expected_source, expected_items = "pathological_manual", 0, 1
             if task.get("requires_explicit_manual_opt_in") is not True:
-                raise ValueError("pathological task must require explicit manual opt-in")
+                raise ValueError(
+                    "pathological task must require explicit manual opt-in"
+                )
         if (
             task.get("task_kind") != expected_kind
             or task.get("source_index") != expected_source
             or task.get("item_count") != expected_items
         ):
-            raise ValueError(f"execution task {index} does not resolve to its source group")
+            raise ValueError(
+                f"execution task {index} does not resolve to its source group"
+            )
 
 
 def write_execution_plan(path: Path, plan: Mapping[str, Any]) -> None:
@@ -597,7 +683,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--historical-summary", type=Path, default=DEFAULT_HISTORICAL_SUMMARY)
+    parser.add_argument(
+        "--historical-summary", type=Path, default=DEFAULT_HISTORICAL_SUMMARY
+    )
     parser.add_argument("--refinement-summary", type=Path, required=True)
     parser.add_argument("--shard-count", type=int, default=DEFAULT_SHARD_COUNT)
     parser.add_argument("--output", type=Path, required=True)
@@ -614,13 +702,18 @@ def main() -> None:
         shard_count=args.shard_count,
     )
     write_execution_plan(args.output, plan)
-    print(json.dumps({
-        "output": str(args.output.resolve()),
-        "plan_sha256": plan["plan_sha256"],
-        "routine_shards": plan["sharding"]["routine_shard_count"],
-        "routine_targets": plan["sharding"]["routine_target_count"],
-        "extreme_targets": plan["extremes"]["manifest_marked_count"],
-    }, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "output": str(args.output.resolve()),
+                "plan_sha256": plan["plan_sha256"],
+                "routine_shards": plan["sharding"]["routine_shard_count"],
+                "routine_targets": plan["sharding"]["routine_target_count"],
+                "extreme_targets": plan["extremes"]["manifest_marked_count"],
+            },
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

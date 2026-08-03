@@ -61,7 +61,7 @@ def main():
     if args.layers:
         selected_layers = [int(x) for x in args.layers.split(",")]
     else:
-        all_layers = sorted(set(r["layer"] for r in results))
+        all_layers = sorted({r["layer"] for r in results})
         n = min(8, len(all_layers))
         indices = np.linspace(0, len(all_layers) - 1, n, dtype=int)
         selected_layers = [all_layers[i] for i in indices]

@@ -9,10 +9,8 @@ import hashlib
 import json
 import os
 
-import torch
 import torch as t
 import yaml
-from args.args import get_args, make_save_path, print_args
 from circuits.utils.constants import (
     DATASET_TASK_MAPPING,
     DTYPE_MAPPING,
@@ -25,6 +23,8 @@ from circuits.utils.constants import (
 )
 from circuits.utils.data_loading_utils import load_examples_helper
 from nnsight import LanguageModel
+
+from args.args import get_args, make_save_path, print_args
 
 
 def main():
@@ -89,8 +89,8 @@ def main():
         dataset_path,
         args.num_auc_test_examples,
         model,
-        use_min_length_only=True if DATASET_TASK_MAPPING[args.dataset] == "sva" else False,
-        allow_length_mismatch=False if DATASET_TASK_MAPPING[args.dataset] == "sva" else True,
+        use_min_length_only=DATASET_TASK_MAPPING[args.dataset] == "sva",
+        allow_length_mismatch=DATASET_TASK_MAPPING[args.dataset] != "sva",
     )
 
     if examples is None:

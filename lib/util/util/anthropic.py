@@ -9,8 +9,9 @@ from anthropic import Anthropic, AsyncAnthropic
 from anthropic._types import NOT_GIVEN
 from anthropic.types import Message, MessageParam
 from backoff.types import Details
-from env_util import ENV
 from tqdm.asyncio import tqdm_asyncio
+
+from env_util import ENV
 from util.types import ChatMessage
 
 
@@ -145,7 +146,6 @@ def parse_anthropic_completion(response: Message | None) -> str | None:
         first_content = response.content[0]
         if first_content.type == "text":
             return first_content.text
-        else:
-            return None
+        return None
     except (AttributeError, IndexError):
         return None

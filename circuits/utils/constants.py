@@ -2,9 +2,10 @@ import os
 from pathlib import Path
 
 import torch as t
+from util.subject import gemma2_2b_config, llama31_8B_config, llama31_8B_instruct_config
+
 from circuits.evals.enap import ENAP
 from circuits.evals.nap import NAP
-from util.subject import gemma2_2b_config, llama31_8B_config, llama31_8B_instruct_config
 
 RESULTS_DIR = Path(os.environ.get("CIRCUITS_RESULTS_DIR", "results"))
 
@@ -56,11 +57,11 @@ START_LAYER_MAPPING = {
 }
 
 THRESHOLD_RANGE_MAPPING = {
-    "google/gemma-2-2b": [0] + t.logspace(-4, 0, 15).tolist(),
-    "google/gemma-2-9b": [0] + t.logspace(-4, 0, 15).tolist(),
-    "meta-llama/Llama-3.1-8B": [0] + t.logspace(-6, 0, 30).tolist(),
-    "meta-llama/Llama-3.1-8B-Instruct": [0] + t.logspace(-6, 0, 30).tolist(),
-    "Qwen/Qwen3-32B": [0] + t.logspace(-6, 0, 30).tolist(),
+    "google/gemma-2-2b": [0, *t.logspace(-4, 0, 15).tolist()],
+    "google/gemma-2-9b": [0, *t.logspace(-4, 0, 15).tolist()],
+    "meta-llama/Llama-3.1-8B": [0, *t.logspace(-6, 0, 30).tolist()],
+    "meta-llama/Llama-3.1-8B-Instruct": [0, *t.logspace(-6, 0, 30).tolist()],
+    "Qwen/Qwen3-32B": [0, *t.logspace(-6, 0, 30).tolist()],
 }
 
 DATASET_TASK_MAPPING = {

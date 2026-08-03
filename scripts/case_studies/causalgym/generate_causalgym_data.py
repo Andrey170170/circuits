@@ -310,7 +310,13 @@ def generate_examples(
     # Build paired subject lists: zip singular[i] with plural[i]
     subj_lists = variables[label_var]  # dict: {"singular": [...], "plural": [...]}
     n_pairs = min(len(subj_lists[t]) for t in types)
-    subject_pairs = list(zip(subj_lists[types[0]][:n_pairs], subj_lists[types[1]][:n_pairs]))
+    subject_pairs = list(
+        zip(
+            subj_lists[types[0]][:n_pairs],
+            subj_lists[types[1]][:n_pairs],
+            strict=False,
+        )
+    )
 
     examples = []
     for _ in range(n):

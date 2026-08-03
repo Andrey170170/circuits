@@ -125,7 +125,7 @@ def prepare_cluster_data(
         # Decode prompt tokens (strip padding via attention_mask)
         input_ids = circuit.cis[example_idx]
         attn_mask = circuit.attention_masks[example_idx]
-        unpadded_ids = [tid for tid, m in zip(input_ids, attn_mask) if m == 1]
+        unpadded_ids = [tid for tid, m in zip(input_ids, attn_mask, strict=True) if m == 1]
         prompt_tokens = [tokenizer.decode(tid) for tid in unpadded_ids]
 
         # attr_map may be shorter than prompt tokens (e.g. BOS removed), align to suffix
@@ -472,7 +472,7 @@ def make_handler(
 
         def _save_annotations(self, descriptions: dict) -> None:
             output_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
             out_path = output_dir / f"annotations_{timestamp}.json"
             result = {
                 "timestamp": timestamp,

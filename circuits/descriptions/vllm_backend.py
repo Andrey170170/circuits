@@ -3,11 +3,18 @@
 import gc
 import logging
 import random
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
-from circuits.descriptions.exemplars import build_attr_exemplar_pool, sample_and_format_exemplars
-from circuits.descriptions.prompts import ATTR_EXPLAINER_SYSTEM_PROMPT, ATTR_SIMULATOR_PREFIX
+
+from circuits.descriptions.exemplars import (
+    build_attr_exemplar_pool,
+    sample_and_format_exemplars,
+)
+from circuits.descriptions.prompts import (
+    ATTR_EXPLAINER_SYSTEM_PROMPT,
+    ATTR_SIMULATOR_PREFIX,
+)
 from circuits.descriptions.scoring import compute_correlation_and_rsquared
 from circuits.descriptions.types import (
     ActivationRecord,
@@ -185,7 +192,7 @@ class FinetunedSimulator:
     """
 
     # Special token remapping (same as observatory's UPD_MAPPING)
-    UPD_MAPPING = {
+    UPD_MAPPING: ClassVar[dict[int, int]] = {
         128000: 128257,  # <|begin_of_text|>
         128006: 128258,  # <|start_header_id|>
         128007: 128259,  # <|end_header_id|>
@@ -404,8 +411,7 @@ def score_attr_explanations(
             return list(activations)
         if act_sign == "pos":
             return [max(0, a) for a in activations]
-        else:
-            return [abs(min(0, a)) for a in activations]
+        return [abs(min(0, a)) for a in activations]
 
     # Get simulation results
     sim_results = simulator.simulate_batch(explanations, records)

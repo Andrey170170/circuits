@@ -35,8 +35,7 @@ def _color(val: float, vmax: float, alpha: float = 0.7) -> str:
     a = abs(t) * alpha
     if t >= 0:
         return f"rgba(33,102,172,{a:.2f})"  # RdBu blue (positive)
-    else:
-        return f"rgba(178,24,43,{a:.2f})"  # RdBu red (negative)
+    return f"rgba(178,24,43,{a:.2f})"  # RdBu red (negative)
 
 
 def _short_token(tok: str) -> str:
@@ -55,7 +54,7 @@ def _render_token_row(tokens: list[str], scores: list[float], vmax: float) -> st
     inline background colors easily.
     """
     parts: list[str] = []
-    for tok, score in zip(tokens, scores):
+    for tok, score in zip(tokens, scores, strict=False):
         bg = _color(score, vmax)
         safe_tok = escape(tok)
         parts.append(f'<span class="tok" style="background:{bg};">{safe_tok}</span>')
@@ -222,9 +221,13 @@ def main() -> None:
                 neuron_keys.append((layer, neuron, polarity))
             if neuron_objs:
                 descs = get_descriptions_for_neurons(neuron_objs, db)
-                for key, desc in zip(neuron_keys, descs):
-                    if desc:
-                        neuron_desc[key] = desc
+                neuron_desc.update(
+                    {
+                        key: desc
+                        for key, desc in zip(neuron_keys, descs, strict=False)
+                        if desc
+                    }
+                )
             logger.info(
                 "Fetched %d/%d neuron descriptions from DB", len(neuron_desc), len(cluster_neurons)
             )

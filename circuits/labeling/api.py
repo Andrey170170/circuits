@@ -10,17 +10,19 @@ import random
 import re
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Literal, override
 
 from circuits.labeling.config import ModelRoleConfig
 from circuits.labeling.schema import GenerationRequest, GenerationResult, Usage
 
 logger = logging.getLogger(__name__)
 
+ParseStatus = Literal["success", "empty", "invalid_json", "provider_error"]
+
 
 def parse_json_output(
     text: str, stage: str, prompt_template_version: str | None = None
-) -> tuple[dict[str, Any] | None, str]:
+) -> tuple[dict[str, Any] | None, ParseStatus]:
     stripped = text.strip()
     if not stripped:
         return None, "empty"
@@ -211,9 +213,11 @@ class OpenAIResponsesBackend(AsyncGenerationBackend):
         self.client = AsyncOpenAI(api_key=api_key, timeout=config.timeout_seconds)
 
     @property
+    @override
     def endpoint_identity(self) -> str:
         return "https://api.openai.com/v1/responses"
 
+    @override
     async def _generate_once(self, request: GenerationRequest) -> GenerationResult:
         kwargs: dict[str, Any] = {
             "model": request.model,
@@ -239,7 +243,7 @@ class OpenAIResponsesBackend(AsyncGenerationBackend):
             raw_text=text,
             raw_response_sha256=_hash_text(text),
             parsed=parsed,
-            parse_status=status,  # type: ignore[arg-type]
+            parse_status=status,
             usage=openai_usage(response.usage),
             stop_reason=openai_stop_reason(response),
         )
@@ -261,9 +265,11 @@ class AnthropicMessagesBackend(AsyncGenerationBackend):
         self.client = AsyncAnthropic(api_key=api_key, timeout=config.timeout_seconds)
 
     @property
+    @override
     def endpoint_identity(self) -> str:
         return "https://api.anthropic.com/v1/messages"
 
+    @override
     async def _generate_once(self, request: GenerationRequest) -> GenerationResult:
         system_parts = [
             message.content for message in request.messages if message.role == "system"
@@ -302,7 +308,7 @@ class AnthropicMessagesBackend(AsyncGenerationBackend):
             raw_text=text,
             raw_response_sha256=_hash_text(text),
             parsed=parsed,
-            parse_status=status,  # type: ignore[arg-type]
+            parse_status=status,
             usage=anthropic_usage(response.usage),
             stop_reason=response.stop_reason,
         )
@@ -328,9 +334,11 @@ class OpenAICompatibleBackend(AsyncGenerationBackend):
         )
 
     @property
+    @override
     def endpoint_identity(self) -> str:
         return f"{self.base_url}/chat/completions"
 
+    @override
     async def _generate_once(self, request: GenerationRequest) -> GenerationResult:
         kwargs: dict[str, Any] = {
             "model": request.model,
@@ -376,7 +384,7 @@ class OpenAICompatibleBackend(AsyncGenerationBackend):
             raw_text=text,
             raw_response_sha256=_hash_text(text),
             parsed=parsed,
-            parse_status=status,  # type: ignore[arg-type]
+            parse_status=status,
             usage=normalized,
             stop_reason=choice.finish_reason,
         )
@@ -384,9 +392,11 @@ class OpenAICompatibleBackend(AsyncGenerationBackend):
 
 class FakeBackend(AsyncGenerationBackend):
     @property
+    @override
     def endpoint_identity(self) -> str:
         return "fake://deterministic"
 
+    @override
     async def _generate_once(self, request: GenerationRequest) -> GenerationResult:
         if request.stage == "candidate_generation":
             value: dict[str, Any] = {

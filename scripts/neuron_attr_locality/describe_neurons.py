@@ -53,10 +53,7 @@ def build_df_and_cis(
         for entry in entries:
             tokens = entry["tokens"]
 
-            if view == "attr":
-                vec = list(entry["attr_vec"])
-            else:
-                vec = list(entry["act_vec"])
+            vec = list(entry["attr_vec"]) if view == "attr" else list(entry["act_vec"])
 
             # Mask BOS token (set to 0)
             if len(vec) > 0:

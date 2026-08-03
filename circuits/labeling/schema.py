@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,7 +15,7 @@ TransportKind = Literal["live", "native_batch"]
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class StrictModel(BaseModel):
@@ -155,7 +155,7 @@ class TelemetryRecord(StrictModel):
         slurm_job_id: str | None,
         slurm_array_task_id: str | None,
         host: str | None,
-    ) -> "TelemetryRecord":
+    ) -> TelemetryRecord:
         generation_parameters = {
             "max_output_tokens": request.max_output_tokens,
             "temperature": request.temperature,

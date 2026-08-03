@@ -165,7 +165,7 @@ def print_latex_table(valid_results: list[dict]) -> None:
     lines.append("\\adjustbox{max width=\\textwidth}{")
 
     # Column spec: l + (n_ks r's per metric)
-    col_spec = "l " + " ".join(["*{%d}{r}" % n_ks] * n_metrics)
+    col_spec = "l " + " ".join([f"*{{{n_ks}}}{{r}}"] * n_metrics)
     lines.append(f"\\begin{{tabular}}{{{col_spec}}}")
     lines.append("\\toprule")
 
@@ -188,14 +188,13 @@ def print_latex_table(valid_results: list[dict]) -> None:
     # Header row 2: k values repeated per metric
     k_headers = []
     for _ in metrics:
-        for k in ks:
-            k_headers.append(f"${k}$")
+        k_headers.extend(f"${k}$" for k in ks)
     lines.append("Method & " + " & ".join(k_headers) + " \\\\")
     lines.append("\\midrule")
 
     # Find best value per column (metric, k) for bolding
     best_per_col: dict[tuple[str, int], float] = {}
-    for metric_name, metric_key, higher_better in metrics:
+    for _metric_name, metric_key, higher_better in metrics:
         for k in ks:
             vals = []
             for row_name in present_rows:
@@ -219,7 +218,7 @@ def print_latex_table(valid_results: list[dict]) -> None:
             last_section = section
 
         cells = []
-        for metric_name, metric_key, higher_better in metrics:
+        for _metric_name, metric_key, _higher_better in metrics:
             for k in ks:
                 r = lookup.get((row_name, k))
                 if r is None:

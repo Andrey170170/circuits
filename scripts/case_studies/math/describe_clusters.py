@@ -52,7 +52,7 @@ def main() -> None:
     logger.info("Loading cluster state from %s", args.cluster_state)
     circuit.load_cluster_state(args.cluster_state)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     cluster_id_to_name: dict[int, str] = getattr(circuit, "_cluster_id_to_name", {})
 
     if not args.skip_descriptions:

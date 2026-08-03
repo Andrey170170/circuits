@@ -19,7 +19,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from circuits.analysis.bonafide import (
     candidate_clustering_execution as publisher_module,
@@ -329,8 +329,7 @@ def validate_candidate_labeling_renderer_runtime_paths(repo_root: Path) -> None:
         expected = repo_root / _SOURCE_BINDINGS[role]
         if Path(observed).resolve() != expected.resolve():
             raise ValueError(
-                "candidate labeling renderer module came from another worktree: "
-                f"{role}"
+                f"candidate labeling renderer module came from another worktree: {role}"
             )
 
 
@@ -455,9 +454,9 @@ def select_generation_witnesses(
         seen_tokens: set[tuple[int, str]] = set()
         selected: list[dict[str, Any]] = []
         for selection_index in range(WITNESSES_PER_ANCHOR):
-            scored: list[tuple[int, float, str, Mapping[str, Any], dict[str, bool]]] = (
-                []
-            )
+            scored: list[
+                tuple[int, float, str, Mapping[str, Any], dict[str, bool]]
+            ] = []
             for case_id, row in remaining.items():
                 flags = {
                     "family": str(row["family_id"]) not in seen_families,
@@ -543,8 +542,8 @@ def _render_width_witness(row: Mapping[str, Any], witness_index: int) -> str:
         ),
         "width_one_source_attribution_highlights_top16_or_fewer:",
     ]
-    for highlight in width["highlights"]:
-        lines.append(
+    lines.extend(
+        (
             "- "
             + json.dumps(
                 {
@@ -561,6 +560,8 @@ def _render_width_witness(row: Mapping[str, Any], witness_index: int) -> str:
                 ensure_ascii=False,
             )
         )
+        for highlight in width["highlights"]
+    )
     return "\n".join(lines)
 
 
@@ -586,8 +587,8 @@ def _render_candidate_witness(row: Mapping[str, Any]) -> str:
     lines = [
         "candidate_model_rank_slots:",
     ]
-    for slot in ranked_slots:
-        lines.append(
+    lines.extend(
+        (
             "- "
             + json.dumps(
                 {
@@ -602,6 +603,8 @@ def _render_candidate_witness(row: Mapping[str, Any]) -> str:
                 ensure_ascii=False,
             )
         )
+        for slot in ranked_slots
+    )
 
     def vector(values: Sequence[Any] | None) -> list[str] | None:
         return None if values is None else [_format_float(value) for value in values]
@@ -740,6 +743,9 @@ def build_generation_prompts(
     prompts: list[dict[str, Any]] = []
     for arm_id, include_candidate in ARM_SPECS:
         for expected_index, selection in enumerate(selection_anchors):
+            if not isinstance(selection, Mapping):
+                raise TypeError("witness selection anchor is invalid")
+            selection = cast(Mapping[str, Any], selection)
             cluster = int(selection["cluster_id"])
             if (
                 int(selection["anchor_index"]) != expected_index
@@ -1198,6 +1204,7 @@ def _validate_witness_selection_payload(selection: Mapping[str, Any]) -> None:
             raise TypeError("witness selection anchor is invalid")
         case_ids = anchor.get("selected_case_ids_in_order")
         trace = anchor.get("selection_trace")
+        available_count = anchor.get("available_generation_witness_count")
         if (
             set(anchor)
             != {
@@ -1209,8 +1216,8 @@ def _validate_witness_selection_payload(selection: Mapping[str, Any]) -> None:
             }
             or anchor.get("anchor_index") != index
             or anchor.get("cluster_id") != cluster
-            or not isinstance(anchor.get("available_generation_witness_count"), int)
-            or anchor["available_generation_witness_count"] < WITNESSES_PER_ANCHOR
+            or not isinstance(available_count, int)
+            or available_count < WITNESSES_PER_ANCHOR
             or not isinstance(case_ids, list)
             or len(case_ids) != WITNESSES_PER_ANCHOR
             or len(set(case_ids)) != WITNESSES_PER_ANCHOR
@@ -1224,6 +1231,21 @@ def _validate_witness_selection_payload(selection: Mapping[str, Any]) -> None:
         ):
             flags = step.get("novel_dimensions") if isinstance(step, Mapping) else None
             observed = step.get("observed_token") if isinstance(step, Mapping) else None
+            valid_flags = (
+                isinstance(flags, Mapping)
+                and set(flags) == {"family", "response", "phase", "observed_token"}
+                and all(type(value) is bool for value in flags.values())
+            )
+            novel_dimension_count = (
+                sum(value for value in flags.values() if isinstance(value, bool))
+                if valid_flags and isinstance(flags, Mapping)
+                else None
+            )
+            width_score = (
+                step.get("width_top16_absolute_score_sum")
+                if isinstance(step, Mapping)
+                else None
+            )
             if (
                 not isinstance(step, Mapping)
                 or set(step)
@@ -1247,13 +1269,11 @@ def _validate_witness_selection_payload(selection: Mapping[str, Any]) -> None:
                 or set(observed) != {"token_id", "token_text"}
                 or type(observed.get("token_id")) is not int
                 or not isinstance(observed.get("token_text"), str)
-                or not isinstance(flags, Mapping)
-                or set(flags) != {"family", "response", "phase", "observed_token"}
-                or any(type(value) is not bool for value in flags.values())
-                or step.get("novel_dimension_count") != sum(flags.values())
-                or not isinstance(step.get("width_top16_absolute_score_sum"), float)
-                or not math.isfinite(step["width_top16_absolute_score_sum"])
-                or step["width_top16_absolute_score_sum"] < 0.0
+                or not valid_flags
+                or step.get("novel_dimension_count") != novel_dimension_count
+                or not isinstance(width_score, float)
+                or not math.isfinite(width_score)
+                or width_score < 0.0
             ):
                 raise ValueError("witness selection trace contract drift")
 

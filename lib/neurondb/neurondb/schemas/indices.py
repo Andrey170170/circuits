@@ -1,5 +1,6 @@
-from neurondb.schemas.tables import SQLANeuronDescription
 from sqlalchemy import Index
+
+from neurondb.schemas.tables import SQLANeuronDescription
 
 DB_INDICES = [
     Index(

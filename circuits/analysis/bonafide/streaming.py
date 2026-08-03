@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import resource
 import shutil
 import uuid
 from collections import defaultdict
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -633,7 +633,7 @@ def _build_response_shards(
     reference = validated_plans[0]
     task, records = task_records(reference, task_index=task_index)
     fit_weights = dense_fit_weights(reference)
-    start = datetime.now(timezone.utc)
+    start = datetime.now(UTC)
     wall_started = perf_counter()
     timings = StageTimings.empty()
     results: dict[str, dict[str, Any]] = {}
@@ -643,7 +643,7 @@ def _build_response_shards(
         for validated in validated_plans:
             lane = str(validated["lane"])
             output_root = Path(str(validated["output_root"]))
-            shard_name = f"task-{task_index:03d}-{str(task['response_id'])}"
+            shard_name = f"task-{task_index:03d}-{task['response_id']!s}"
             shard_path = output_root / "shards" / shard_name
             if shard_path.exists():
                 manifest = _validate_existing_shard(
@@ -862,37 +862,33 @@ def _build_response_shards(
                         for summary in target_slice.basis_summaries
                     }
                     if prior_summaries is not None:
-                        for basis in sorted(
-                            prior_summaries.keys() & current_summaries.keys()
-                        ):
-                            longitudinal_rows.append(
-                                {
-                                    "response_id": target_slice.response_id,
-                                    "left_response_position": prior_position,
-                                    "right_response_position": (
-                                        target_slice.target_response_position
-                                    ),
-                                    "left_trace_unit_id": prior_trace_id,
-                                    "right_trace_unit_id": trace_id,
-                                    **_basis_record(basis),
-                                    "left_token_positions": [
-                                        occurrence.token_position
-                                        for occurrence in prior_summaries[
-                                            basis
-                                        ].occurrences
-                                    ],
-                                    "right_token_positions": [
-                                        occurrence.token_position
-                                        for occurrence in current_summaries[
-                                            basis
-                                        ].occurrences
-                                    ],
-                                    "correspondence_kind": (
-                                        "same_basis_at_next_target"
-                                    ),
-                                    "explicitly_noncausal": True,
-                                }
+                        longitudinal_rows.extend(
+                            {
+                                "response_id": target_slice.response_id,
+                                "left_response_position": prior_position,
+                                "right_response_position": (
+                                    target_slice.target_response_position
+                                ),
+                                "left_trace_unit_id": prior_trace_id,
+                                "right_trace_unit_id": trace_id,
+                                **_basis_record(basis),
+                                "left_token_positions": [
+                                    occurrence.token_position
+                                    for occurrence in prior_summaries[basis].occurrences
+                                ],
+                                "right_token_positions": [
+                                    occurrence.token_position
+                                    for occurrence in current_summaries[
+                                        basis
+                                    ].occurrences
+                                ],
+                                "correspondence_kind": "same_basis_at_next_target",
+                                "explicitly_noncausal": True,
+                            }
+                            for basis in sorted(
+                                prior_summaries.keys() & current_summaries.keys()
                             )
+                        )
                     prior_summaries = current_summaries
                     prior_position = target_slice.target_response_position
                     prior_trace_id = trace_id
@@ -1067,7 +1063,7 @@ def _build_response_shards(
                 **identity,
                 "shard_identity_sha256": canonical_sha256(identity),
                 "created_at": start.isoformat(),
-                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(UTC).isoformat(),
                 "build_mode": (
                     "joint_one_pass" if len(validated_plans) > 1 else "single_lane"
                 ),

@@ -1,37 +1,35 @@
 from __future__ import annotations
 
-from enum import Enum
-from typing import Any, Callable, Literal, Optional, Type
+from collections.abc import Callable
+from enum import StrEnum
+from typing import Any, ClassVar, Literal
 
 import numpy as np
-from neurondb.postgres import DBManager, sqla_and_
-from neurondb.schemas import SQLABase, SQLANeuron, SQLANeuronDescription
 from pydantic import BaseModel, model_validator
 from sqlalchemy import ColumnElement, Float
 from util.errors import EmbeddingException
 from util.openai import get_openai_client_sync, get_openai_embeddings_sync
 from util.types import NDFloatArray
 
+from neurondb.postgres import DBManager, sqla_and_
+from neurondb.schemas import SQLABase, SQLANeuron, SQLANeuronDescription
+
 __all__ = [
-    # Neurons
-    "Neuron",
-    "NeuronPolarity",
-    "NeuronDescription",
-    # Neuron metadata
-    "NeuronGeneralMetadata",
-    "AttributionResult",
-    "NeuronRunMetadata",
-    "NeuronsMetadataDict",
-    # Filters
-    "NeuronFilter",
-    "NeuronDBFilter",
+    "QTILE_KEYS",
     "ActivationPercentileFilter",
     "AttributionFilter",
-    "IdFilter",
-    "TokenFilter",
+    "AttributionResult",
     "ComplexFilter",
-    # Quantile keys
-    "QTILE_KEYS",
+    "IdFilter",
+    "Neuron",
+    "NeuronDBFilter",
+    "NeuronDescription",
+    "NeuronFilter",
+    "NeuronGeneralMetadata",
+    "NeuronPolarity",
+    "NeuronRunMetadata",
+    "NeuronsMetadataDict",
+    "TokenFilter",
 ]
 
 DB_VECTOR_SEARCH_LIMIT = 1000
@@ -65,14 +63,22 @@ QTILE_KEYS: list[QTILE_KEYS_TYPE] = [
 ###########
 
 
-class NeuronPolarity(str, Enum):
+class NeuronPolarity(StrEnum):
     POS = "1"
     NEG = "-1"
+
+    def __str__(self) -> str:
+        """Retain the string representation of the previous ``str, Enum`` definition."""
+        return f"{type(self).__name__}.{self.name}"
+
+    def __format__(self, format_spec: str) -> str:
+        """Retain the formatting behavior of the previous ``str, Enum`` definition."""
+        return format(str(self), format_spec)
 
 
 class JSONEncodable(BaseModel):
     class Config:
-        json_encoders: dict[Any, Callable[[NeuronPolarity], str]] = {
+        json_encoders: ClassVar[dict[Any, Callable[[NeuronPolarity], str]]] = {
             NeuronPolarity: lambda p: p.value,
         }
 
@@ -160,8 +166,8 @@ class AttributionResult(BaseModel):
     src_token_idx: int
     tgt_token_idx: int
     attribution: float
-    activation: Optional[float] = None
-    polarity: Optional[NeuronPolarity] = None
+    activation: float | None = None
+    polarity: NeuronPolarity | None = None
 
 
 class NeuronRunMetadata(BaseModel):
@@ -183,7 +189,7 @@ class NeuronsMetadataDict(BaseModel):
     )
 
     class Config(JSONEncodable.Config):
-        json_encoders: dict[Any, Callable[[Any], str]] = {
+        json_encoders: ClassVar[dict[Any, Callable[[Any], str]]] = {
             tuple[int, int]: lambda x: f"{x[0]},{x[1]}",
             tuple[int, int, int]: lambda x: f"{x[0]},{x[1]},{x[2]}",
         }
@@ -206,8 +212,7 @@ class NeuronFilter(BaseModel):
 
         if isinstance(self, ComplexFilter):
             return any(f.contains_filter_type(filter_type) for f in self.filters)
-        else:
-            return isinstance(self, filter_type)
+        return isinstance(self, filter_type)
 
     def get_attribution_filters(self) -> list[AttributionFilter]:
         """
@@ -215,10 +220,9 @@ class NeuronFilter(BaseModel):
         """
         if isinstance(self, AttributionFilter):
             return [self]
-        elif isinstance(self, ComplexFilter):
+        if isinstance(self, ComplexFilter):
             return [af for f in self.filters for af in f.get_attribution_filters()]
-        else:
-            return []
+        return []
 
 
 class NeuronDBFilter(NeuronFilter):
@@ -274,7 +278,7 @@ class NeuronDBFilter(NeuronFilter):
     ) -> set[Neuron]:
         # Initialize query elements
         entities = [SQLANeuron.layer, SQLANeuron.neuron, SQLANeuronDescription.polarity]
-        joins: list[tuple[Type[SQLABase], ColumnElement[bool]]] = [
+        joins: list[tuple[type[SQLABase], ColumnElement[bool]]] = [
             (
                 SQLANeuronDescription,
                 SQLANeuronDescription.neuron_id == SQLANeuron.id,
@@ -375,16 +379,14 @@ class NeuronDBFilter(NeuronFilter):
         )
 
         # TODO once we fix the DB schema, change from int to str
-        return set(
-            [
-                Neuron(
-                    layer=n.layer,
-                    neuron=n.neuron,
-                    polarity=NeuronPolarity.POS if n.polarity == 1 else NeuronPolarity.NEG,
-                )
-                for n in neurons
-            ]
-        )
+        return {
+            Neuron(
+                layer=n.layer,
+                neuron=n.neuron,
+                polarity=NeuronPolarity.POS if n.polarity == 1 else NeuronPolarity.NEG,
+            )
+            for n in neurons
+        }
 
 
 class ActivationPercentileFilter(NeuronFilter):
@@ -410,9 +412,10 @@ class ActivationPercentileFilter(NeuronFilter):
             else acts_LIT <= percentiles_LI[..., None]
         )
         indices_3N = np.nonzero(mask_LIT)
-        return set(
-            [Neuron(layer=l, neuron=n, token=t, polarity=polarity) for l, n, t in zip(*indices_3N)]
-        )
+        return {
+            Neuron(layer=l, neuron=n, token=t, polarity=polarity)
+            for l, n, t in zip(*indices_3N, strict=True)
+        }
 
 
 class AttributionFilter(NeuronFilter):
@@ -442,20 +445,17 @@ class AttributionFilter(NeuronFilter):
             neg_dist = abs(act - neg_pctile)
             if pos_dist < neg_dist:
                 return NeuronPolarity.POS
-            else:
-                return NeuronPolarity.NEG
+            return NeuronPolarity.NEG
 
-        return set(
-            [
-                Neuron(
-                    layer=result.layer,
-                    neuron=result.neuron,
-                    token=result.src_token_idx,
-                    polarity=_get_polarity(result),
-                )
-                for result in top_k_results
-            ]
-        )
+        return {
+            Neuron(
+                layer=result.layer,
+                neuron=result.neuron,
+                token=result.src_token_idx,
+                polarity=_get_polarity(result),
+            )
+            for result in top_k_results
+        }
 
 
 class IdFilter(NeuronFilter):

@@ -334,7 +334,7 @@ def get_args() -> argparse.Namespace:
 
     # Load YAML config if provided and set as defaults
     if temp_args.config:
-        with open(temp_args.config, "r") as f:
+        with open(temp_args.config) as f:
             config = yaml.safe_load(f)
 
         # Set YAML values as defaults in the parser
@@ -347,6 +347,4 @@ def get_args() -> argparse.Namespace:
                         break
 
     # Parse again with updated defaults - command line args will override YAML
-    args = parser.parse_args()
-
-    return args
+    return parser.parse_args()

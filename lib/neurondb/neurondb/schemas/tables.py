@@ -1,11 +1,12 @@
 from typing import Any
 
-from neurondb.schemas.base import SQLABase
 from pgvector.sqlalchemy import Vector  # type: ignore
 from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import mapped_column
 from util.subject import Subject
+
+from neurondb.schemas.base import SQLABase
 
 
 def get_sqla_neuron_id(

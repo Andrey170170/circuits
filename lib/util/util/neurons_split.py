@@ -1,4 +1,5 @@
 import numpy as np
+
 from util.subject import Subject, get_subject_config
 
 
@@ -24,9 +25,10 @@ def get_random_neurons(
     num_layers = subject.L
     neurons_per_layer = subject.I
 
-    neurons = []
-    for layer in range(num_layers):
-        neurons.append(np.stack([np.ones(neurons_per_layer) * layer, np.arange(neurons_per_layer)]))
+    neurons = [
+        np.stack([np.ones(neurons_per_layer) * layer, np.arange(neurons_per_layer)])
+        for layer in range(num_layers)
+    ]
     neurons = np.concatenate(neurons, axis=-1).T
 
     if blacklist is not None:

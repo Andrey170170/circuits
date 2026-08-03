@@ -6,8 +6,9 @@ import hashlib
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 def canonical_json(value: object) -> bytes:

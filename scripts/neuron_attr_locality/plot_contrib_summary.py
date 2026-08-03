@@ -46,9 +46,8 @@ def main():
     # Flatten: one row per (target, layer)
     rows = []
     for entry in data:
-        for pl in entry["per_layer"]:
-            rows.append(
-                {
+        rows.extend(
+            {
                     "sample_idx": entry["sample_idx"],
                     "target_pos": entry["target_pos"],
                     "seq_len": entry["seq_len"],
@@ -56,8 +55,9 @@ def main():
                     "distance": pl["distance"],
                     "abs_distance": abs(pl["distance"]),
                     "attr_value": pl["attr_value"],
-                }
-            )
+            }
+            for pl in entry["per_layer"]
+        )
     df = pd.DataFrame(rows)
 
     output_path = Path(args.output or str(Path(args.results).parent / "contrib_summary.pdf"))

@@ -14,16 +14,18 @@ import os
 import re
 import statistics
 from collections import defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, cast
 
 from circuits.tracing.probe_artifact import ProbeArtifact, load_probe_artifact
+
 from scripts.bonafide.manifest import SCHEMA_VERSION as TRACE_MANIFEST_SCHEMA
 from scripts.bonafide.runner import _sha256 as stable_object_sha256
 from scripts.bonafide.runner import validate_target_selection
-
 
 SCHEMA_VERSION = "bonafide-final-trace-selection/v1"
 EXPECTED_BROAD_TARGETS = 16
@@ -60,7 +62,9 @@ def _read_summary(path: Path) -> list[dict[str, Any]]:
                     f"invalid refinement summary JSON on line {line_number}"
                 ) from error
             if not isinstance(value, dict):
-                raise ValueError(f"refinement summary line {line_number} is not an object")
+                raise ValueError(
+                    f"refinement summary line {line_number} is not an object"
+                )
             records.append(value)
     return records
 
@@ -100,7 +104,9 @@ class BroadCandidate:
         return self.probe.position
 
 
-def _validate_refinement_manifest(manifest: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+def _validate_refinement_manifest(
+    manifest: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
     if manifest.get("artifact_kind") != "bonafide_refinement_probe_manifest":
         raise ValueError("input is not a BonaFide refinement-probe manifest")
     contract = manifest.get("selection_contract")
@@ -126,7 +132,9 @@ def _validate_refinement_manifest(manifest: Mapping[str, Any]) -> list[Mapping[s
         validate_target_selection(item)
         source_id = item.get("artifact_id")
         if not isinstance(source_id, str) or source_id in source_ids:
-            raise ValueError(f"duplicate or invalid refinement source ID: {source_id!r}")
+            raise ValueError(
+                f"duplicate or invalid refinement source ID: {source_id!r}"
+            )
         source_ids.add(source_id)
     return items
 
@@ -149,7 +157,9 @@ def audit_append_only_summary(
             continue
         source_id = record.get("source_artifact_id")
         if source_id not in expected_source_ids:
-            raise ValueError(f"summary contains unknown refinement source: {source_id!r}")
+            raise ValueError(
+                f"summary contains unknown refinement source: {source_id!r}"
+            )
         status = record.get("status")
         if status not in accepted:
             raise ValueError(f"unsupported refinement summary status: {status!r}")
@@ -193,15 +203,18 @@ def _probe_from_artifact(
         for field in ("mode", "batch_size", "model", "adag_config", "code_revision")
     }
     if any(value is None for value in cohort_identity.values()):
-        raise ValueError(f"probe artifact cohort identity is incomplete for {source_id}")
-    if manifest.get("model_revision") != cohort_identity["model"].get("revision"):
+        raise ValueError(
+            f"probe artifact cohort identity is incomplete for {source_id}"
+        )
+    cohort_model = cast(Mapping[str, Any], cohort_identity["model"])
+    if manifest.get("model_revision") != cohort_model.get("revision"):
         raise ValueError(f"probe artifact model revision disagrees for {source_id}")
     if manifest.get("code_revision") != cohort_identity["code_revision"]:
         raise ValueError(f"probe artifact code revision disagrees for {source_id}")
     cohort_identity_sha256 = stable_object_sha256(cohort_identity)
     position = int(item["target_selection"]["response_token_positions"][0])
     token_id = int(item["target_selection"]["final_target_token_id"])
-    provenance = loaded.probe["target_provenance"]
+    provenance = cast(Mapping[str, Any], loaded.probe["target_provenance"])
     if provenance.get("response_token_position") != position:
         raise ValueError(f"probe position disagrees for {source_id}")
     if provenance.get("token_id") != token_id:
@@ -214,25 +227,26 @@ def _probe_from_artifact(
             raise ValueError(f"probe {label} is invalid for {source_id}")
     if not isinstance(token_text, str):
         raise ValueError(f"probe token text is invalid for {source_id}")
-    counters = loaded.metrics.get("instrumentation", {}).get("counters", {})
+    instrumentation = cast(Mapping[str, Any], loaded.metrics.get("instrumentation", {}))
+    counters = cast(Mapping[str, Any], instrumentation.get("counters", {}))
     edge_count = counters.get("candidate_mlp_edge_count")
     occurrences = loaded.metrics.get("selected_occurrence_count")
     for value, label in ((edge_count, "candidate edge"), (occurrences, "occurrence")):
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"probe {label} count is invalid for {source_id}")
+    feature_basis = cast(Mapping[str, Any], loaded.probe["feature_basis_signature"])
     features = frozenset(
-        (int(layer), int(neuron))
-        for layer, neuron in loaded.probe["feature_basis_signature"]["feature_ids"]
+        (int(layer), int(neuron)) for layer, neuron in feature_basis["feature_ids"]
     )
     return RefinementProbe(
         item=item,
         artifact_path=loaded.path,
         artifact_id=str(manifest["artifact_id"]),
         token_text=token_text,
-        logit=float(logit),
-        probability=float(probability),
-        candidate_edge_count=int(edge_count),
-        selected_occurrence_count=int(occurrences),
+        logit=float(cast(int | float, logit)),
+        probability=float(cast(int | float, probability)),
+        candidate_edge_count=int(cast(int, edge_count)),
+        selected_occurrence_count=cast(int, occurrences),
         feature_ids=features,
         probe_sha256=str(manifest["probe_sha256"]),
         metrics_sha256=str(manifest["metrics_sha256"]),
@@ -276,12 +290,15 @@ def load_authoritative_refinement_probes(
         )
     missing = sorted(set(by_source) - set(candidates))
     if missing:
-        raise ValueError(f"refinement artifacts are incomplete; missing {len(missing)} items")
+        raise ValueError(
+            f"refinement artifacts are incomplete; missing {len(missing)} items"
+        )
     resolved: dict[str, RefinementProbe] = {}
     duplicate_sources = 0
     for source_id, probes in sorted(candidates.items()):
         fingerprints = {
-            (probe.probe_sha256, probe.metrics_sha256, probe.artifact_id) for probe in probes
+            (probe.probe_sha256, probe.metrics_sha256, probe.artifact_id)
+            for probe in probes
         }
         if len(fingerprints) != 1:
             raise ValueError(f"conflicting authoritative artifacts for {source_id}")
@@ -291,8 +308,13 @@ def load_authoritative_refinement_probes(
     cohort_audit = _audit_probe_cohort(resolved.values())
     completed_ids = audit.pop("completed_runtime_ids")
     for source_id, artifact_ids in completed_ids.items():
-        if any(artifact_id != resolved[source_id].artifact_id for artifact_id in artifact_ids):
-            raise ValueError(f"summary runtime identity conflicts with artifact for {source_id}")
+        if any(
+            artifact_id != resolved[source_id].artifact_id
+            for artifact_id in artifact_ids
+        ):
+            raise ValueError(
+                f"summary runtime identity conflicts with artifact for {source_id}"
+            )
     audit["authoritative_artifact_count"] = len(resolved)
     audit["duplicate_identical_artifact_sources"] = duplicate_sources
     audit.update(cohort_audit)
@@ -319,7 +341,9 @@ def _audit_probe_cohort(probes: Iterable[RefinementProbe]) -> dict[str, Any]:
     }
 
 
-def _jaccard_distance(left: frozenset[tuple[int, int]], right: frozenset[tuple[int, int]]) -> float:
+def _jaccard_distance(
+    left: frozenset[tuple[int, int]], right: frozenset[tuple[int, int]]
+) -> float:
     union = left | right
     return 1.0 - (len(left & right) / len(union) if union else 1.0)
 
@@ -332,7 +356,9 @@ def _candidate_reasons(item: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]
     if not isinstance(target_reason, Mapping):
         raise ValueError("refinement item lacks target selection reason")
     reasons = target_reason.get("reasons", [])
-    if not isinstance(reasons, list) or any(not isinstance(reason, Mapping) for reason in reasons):
+    if not isinstance(reasons, list) or any(
+        not isinstance(reason, Mapping) for reason in reasons
+    ):
         raise ValueError("refinement candidate reasons must be a list of objects")
     return tuple(reasons)
 
@@ -345,14 +371,20 @@ def _semantic_candidates(candidates: Sequence[BroadCandidate]) -> list[BroadCand
     return [
         candidate
         for candidate in candidates
-        if any(reason.get("reason_type") != "phase_control" for reason in candidate.candidate_reasons)
+        if any(
+            reason.get("reason_type") != "phase_control"
+            for reason in candidate.candidate_reasons
+        )
     ]
 
 
 def _select_window(
     candidates: Sequence[BroadCandidate], center: int, width: int = 3
 ) -> list[BroadCandidate]:
-    nearby = sorted(candidates, key=lambda candidate: (abs(candidate.position - center), candidate.position))
+    nearby = sorted(
+        candidates,
+        key=lambda candidate: (abs(candidate.position - center), candidate.position),
+    )
     chosen = sorted(nearby[:width], key=lambda candidate: candidate.position)
     if len(chosen) != width:
         raise ValueError("not enough candidates for semantic micro-window")
@@ -367,11 +399,15 @@ def _answer_anchor_center(
     for candidate in candidates:
         for reason in _reason_matches(
             candidate,
-            lambda value: value.get("reason_type") == "answer_or_source_anchor"
-            and value.get("phrase_type") in phrase_priority
-            and _answer_phrase_is_reliable(value.get("phrase")),
+            lambda value: (
+                value.get("reason_type") == "answer_or_source_anchor"
+                and value.get("phrase_type") in phrase_priority
+                and _answer_phrase_is_reliable(value.get("phrase"))
+            ),
         ):
-            span = reason.get("character_span", [candidate.position, candidate.position + 1])
+            span = reason.get(
+                "character_span", [candidate.position, candidate.position + 1]
+            )
             boundary_priority = 0 if reason.get("phrase_boundary") == "end" else 1
             matches.append(
                 (
@@ -385,7 +421,9 @@ def _answer_anchor_center(
         return None, None
     occurrence_starts = sorted({match[0] for match in matches})
     wanted = occurrence_starts[-1] if latest else occurrence_starts[0]
-    selected = min((match for match in matches if match[0] == wanted), key=lambda match: match[1:3])
+    selected = min(
+        (match for match in matches if match[0] == wanted), key=lambda match: match[1:3]
+    )
     reason = selected[3]
     return int(reason.get("micro_window_center", wanted)), reason
 
@@ -403,7 +441,16 @@ def _answer_phrase_is_reliable(value: Any) -> bool:
 
 
 STRONG_SOURCE_MARKERS = frozenset(
-    {"hint", "according", "source", "professor", "indicates", "suggests", "clue", "told"}
+    {
+        "hint",
+        "according",
+        "source",
+        "professor",
+        "indicates",
+        "suggests",
+        "clue",
+        "told",
+    }
 )
 
 
@@ -436,7 +483,10 @@ def _source_anchor_center(
     if preferred or fallback_anchors:
         return min(preferred or fallback_anchors, key=lambda value: value[0])
     semantic = _semantic_candidates(candidates)
-    fallback = min(semantic or list(candidates), key=lambda candidate: (candidate.probe.probability, candidate.position))
+    fallback = min(
+        semantic or list(candidates),
+        key=lambda candidate: (candidate.probe.probability, candidate.position),
+    )
     return fallback.position, {
         "reason_type": "unsupported_evidence_fallback",
         "phenotype": phenotype,
@@ -450,7 +500,12 @@ def select_broad_targets(
     """Freeze exactly 16 targets using reviewed semantic and diagnostic buckets."""
 
     candidates = sorted(
-        (BroadCandidate(probe=probe, candidate_reasons=_candidate_reasons(probe.item)) for probe in probes),
+        (
+            BroadCandidate(
+                probe=probe, candidate_reasons=_candidate_reasons(probe.item)
+            )
+            for probe in probes
+        ),
         key=lambda candidate: candidate.position,
     )
     if len(candidates) < EXPECTED_BROAD_TARGETS:
@@ -463,7 +518,9 @@ def select_broad_targets(
         if canonical not in entry[1]:
             entry[1].append(canonical)
 
-    source_center, source_anchor = _source_anchor_center(candidates, phenotype=phenotype)
+    source_center, source_anchor = _source_anchor_center(
+        candidates, phenotype=phenotype
+    )
     first_center, first_anchor = _answer_anchor_center(candidates, latest=False)
     if first_center is None:
         first_center = source_center
@@ -504,7 +561,8 @@ def select_broad_targets(
             final_candidate, phase_reason = max(
                 final_phase_candidates,
                 key=lambda value: (
-                    int(value[1].get("phase_index", -1)), value[0].position
+                    int(value[1].get("phase_index", -1)),
+                    value[0].position,
                 ),
             )
             final_center = final_candidate.position
@@ -556,7 +614,8 @@ def select_broad_targets(
 
     semantic = _semantic_candidates(candidates) or list(candidates)
     low_probability = min(
-        semantic, key=lambda candidate: (candidate.probe.probability, candidate.position)
+        semantic,
+        key=lambda candidate: (candidate.probe.probability, candidate.position),
     )
     add(
         low_probability,
@@ -567,9 +626,13 @@ def select_broad_targets(
     )
 
     adjacent_changes: list[tuple[float, BroadCandidate, BroadCandidate]] = []
-    for left, right in zip(candidates, candidates[1:]):
+    for left, right in pairwise(candidates):
         adjacent_changes.append(
-            (_jaccard_distance(left.probe.feature_ids, right.probe.feature_ids), left, right)
+            (
+                _jaccard_distance(left.probe.feature_ids, right.probe.feature_ids),
+                left,
+                right,
+            )
         )
     change, left, right = max(
         adjacent_changes,
@@ -585,7 +648,9 @@ def select_broad_targets(
         },
     )
 
-    median_edges = statistics.median(candidate.probe.candidate_edge_count for candidate in candidates)
+    median_edges = statistics.median(
+        candidate.probe.candidate_edge_count for candidate in candidates
+    )
     median_workload = min(
         candidates,
         key=lambda candidate: (
@@ -604,12 +669,19 @@ def select_broad_targets(
 
     local_change: dict[int, float] = defaultdict(float)
     for distance, left_candidate, right_candidate in adjacent_changes:
-        local_change[left_candidate.position] = max(local_change[left_candidate.position], distance)
-        local_change[right_candidate.position] = max(local_change[right_candidate.position], distance)
+        local_change[left_candidate.position] = max(
+            local_change[left_candidate.position], distance
+        )
+        local_change[right_candidate.position] = max(
+            local_change[right_candidate.position], distance
+        )
     remaining = sorted(
         (candidate for candidate in candidates if candidate.position not in selected),
         key=lambda candidate: (
-            -sum(reason.get("reason_type") != "phase_control" for reason in candidate.candidate_reasons),
+            -sum(
+                reason.get("reason_type") != "phase_control"
+                for reason in candidate.candidate_reasons
+            ),
             -local_change[candidate.position],
             candidate.probe.probability,
             abs(candidate.probe.candidate_edge_count - median_edges),
@@ -632,7 +704,9 @@ def select_broad_targets(
             },
         )
     if len(selected) != EXPECTED_BROAD_TARGETS:
-        raise ValueError(f"broad target freeze produced {len(selected)} targets, expected 16")
+        raise ValueError(
+            f"broad target freeze produced {len(selected)} targets, expected 16"
+        )
     return [selected[position] for position in sorted(selected)]
 
 
@@ -676,7 +750,10 @@ def _final_item(
                 },
             },
         },
-        "objective": {"name": "single_selected_logit", "benchmark_only_multi_target": False},
+        "objective": {
+            "name": "single_selected_logit",
+            "benchmark_only_multi_target": False,
+        },
     }
 
 
@@ -700,7 +777,8 @@ def build_final_trace_manifest(
             raise ValueError(f"authoritative refinement probe is missing: {source_id}")
         grouped[str(item["example"]["example_id"])].append(probe)
     analysis_by_id = {
-        str(row["example_id"]): row for row in refinement_manifest.get("prompt_analysis", [])
+        str(row["example_id"]): row
+        for row in refinement_manifest.get("prompt_analysis", [])
     }
     waves: list[dict[str, Any]] = []
     selected_counts: dict[str, int] = defaultdict(int)
@@ -712,7 +790,9 @@ def build_final_trace_manifest(
         if refinement_role == "dense_full_response_refinement":
             response_count = int(probes[0].item["response_token_count"])
             if [probe.position for probe in probes] != list(range(response_count)):
-                raise ValueError(f"dense refinement positions are incomplete for {example_id}")
+                raise ValueError(
+                    f"dense refinement positions are incomplete for {example_id}"
+                )
             role = "dense_discovery"
             final = [
                 _final_item(
@@ -755,7 +835,8 @@ def build_final_trace_manifest(
             "example_id": example_id,
             "corpus_role": role,
             "cluster_fit_eligible": cluster_fit_eligible,
-            "holdout_excluded_from_cluster_fitting": role == "broad_confirmatory_holdout",
+            "holdout_excluded_from_cluster_fitting": role
+            == "broad_confirmatory_holdout",
         }
         routine = [
             item

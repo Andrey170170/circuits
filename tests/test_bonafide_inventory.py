@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 from circuits.analysis.bonafide.canonical import (
     canonical_sha256,
     file_sha256,
@@ -302,14 +303,10 @@ def test_inventory_fails_closed_on_partition_contract_drift(tmp_path: Path) -> N
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     selection["waves"][1]["cluster_fit_eligible"] = True
     _write_json(selection_path, selection)
-    try:
+    with pytest.raises(ValueError, match="partition contract mismatch"):
         build_inventory(
             selection_path=selection_path,
             execution_plan_path=plan_path,
             artifact_root=artifact_root,
             validation_level="integrity",
         )
-    except ValueError as error:
-        assert "partition contract mismatch" in str(error)
-    else:
-        raise AssertionError("partition drift should fail closed")

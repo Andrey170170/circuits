@@ -1,6 +1,6 @@
 import os
 import shutil
-from typing import Callable, List
+from collections.abc import Callable
 
 import torch
 import torch.nn.functional as F
@@ -29,7 +29,8 @@ def is_llamadecoder_layer(module):
 
 
 def param_init_fn(module: torch.nn.Module) -> None:
-    assert hasattr(module, "reset_parameters") and isinstance(module.reset_parameters, Callable)
+    assert hasattr(module, "reset_parameters")
+    assert isinstance(module.reset_parameters, Callable)
     module.reset_parameters()
 
 
@@ -85,7 +86,7 @@ class Llama3TokenizerWrapper:
             upd_messages.append({"role": msg["role"], "content": upd_seq})
         return self.tokenizer.apply_chat_template(upd_messages, *args, **kwargs)
 
-    def __call__(self, seq: str | List[str], *args, **kwargs):
+    def __call__(self, seq: str | list[str], *args, **kwargs):
         if isinstance(seq, str):
             upd_seq = self.update_input(seq)
         else:

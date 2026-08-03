@@ -33,7 +33,7 @@ class ModelRoleConfig(StrictModel):
     retry: RetryConfig = Field(default_factory=RetryConfig)
 
     @model_validator(mode="after")
-    def validate_endpoint(self) -> "ModelRoleConfig":
+    def validate_endpoint(self) -> ModelRoleConfig:
         if self.base_url and self.base_url_env:
             raise ValueError("set only one of base_url and base_url_env")
         if self.provider == "openai_compatible" and not (
@@ -68,7 +68,7 @@ class LabelingRecipe(StrictModel):
     price_snapshot: str
 
     @model_validator(mode="after")
-    def validate_width_one_policy(self) -> "LabelingRecipe":
+    def validate_width_one_policy(self) -> LabelingRecipe:
         if self.prompt_policy != "width_one_v2":
             return self
         if self.cluster_summarizer.max_output_tokens < 1200:

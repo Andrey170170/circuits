@@ -90,7 +90,7 @@ class MLPBuffer(CLSOBuffer):
             }
             self.neuron_indices_map = new_neuron_indices_map
         else:
-            self.neuron_indices_map = {i: idx for i, idx in enumerate(sorted(indices.tolist()))}
+            self.neuron_indices_map = dict(enumerate(sorted(indices.tolist())))
 
     def get_activations(self) -> torch.Tensor:
         return (
@@ -108,13 +108,12 @@ class MLPBuffer(CLSOBuffer):
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         # apply layernorm and w_in
-        result = (
+        return (
             torch.matmul(
                 x * self.ln_in_B1D, self.w_in_ND.T
             )  # [B, N_in, D] x [D, N] -> [B, N_in, N]
             * self.mlp_gate_BN[:, None, :]
         )
-        return result  # [B, N_in, N]
 
     def decode(self) -> torch.Tensor:
         # apply w_out
@@ -170,8 +169,7 @@ class TranscoderBuffer(CLSOBuffer):
             return (self.neurons_BN - self.neurons_BN.mean(dim=0, keepdim=True)) - (
                 self.b_enc * (self.neurons_BN > 0)
             )
-        else:
-            return self.neurons_BN - (self.b_enc * (self.neurons_BN > 0))
+        return self.neurons_BN - (self.b_enc * (self.neurons_BN > 0))
 
     @property
     def shape(self) -> torch.Size:
@@ -183,17 +181,15 @@ class TranscoderBuffer(CLSOBuffer):
         # if self.apply_b_dec_to_input:
         #     result = result - self.b_dec[None, None, :]
         result = torch.matmul(result, self.W_enc)  # [B, N_in, D] x [D, N] -> [B, N_in, N]
-        result = result * (self.neurons_BN > 0)[:, None, :]
         # x = torch.nn.functional.relu(x * (x > self.threshold))
-        return result
+        return result * (self.neurons_BN > 0)[:, None, :]
 
     def decode(self) -> torch.Tensor:
         # print(
         #     f"nonzero neurons, layer {self.layer}, token {self.token}: {self.neurons_BN[0].nonzero().flatten().shape} / {self.neurons_BN[0].numel()}"
         # )
-        result = contract("bn,nd->bnd", self.neurons_BN, self.W_dec)
         # result += self.transcoder.b_dec
-        return result
+        return contract("bn,nd->bnd", self.neurons_BN, self.W_dec)
 
     def apply_mask(self, indices: torch.Tensor):
         self.indices = indices

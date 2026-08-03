@@ -42,13 +42,13 @@ class SubspaceZeroIntervention(
         # base shape: (batch_size, seq_len, hidden_size)
         result = base.clone()
         if not self.complement:
-            for pos, subspaces in zip(self.pos, self.subspaces):
+            for pos, subspaces in zip(self.pos, self.subspaces, strict=True):
                 result[:, pos, subspaces] *= self.multiplier
         else:
             result *= self.multiplier
-            for pos, subspaces in zip(self.pos, self.subspaces):
+            for pos, subspaces in zip(self.pos, self.subspaces, strict=True):
                 result[:, pos, subspaces] = base[:, pos, subspaces]  # restore the original values
-        for pos, subspaces in zip(self.record_pos, self.record_subspaces):
+        for pos, subspaces in zip(self.record_pos, self.record_subspaces, strict=True):
             self.collected_activations.append(result[:, pos, subspaces].clone().detach())
         # print("ran zero intervention at layer", self.layer, ": ", result.to(torch.float32).sum().item())
         return result
@@ -69,11 +69,11 @@ def multiple_subspaces_config(
 
     # merge subspaces and record subspaces
     all_params = defaultdict(lambda: defaultdict(list))
-    for (layer, pos), subspace in sorted(list(subspaces.items())):
+    for (layer, pos), subspace in sorted(subspaces.items()):
         all_params[layer]["intervene_subspaces"].append(subspace)
         all_params[layer]["intervene_pos"].append(pos)
     if record_subspaces is not None:
-        for (layer, pos), subspace in sorted(list(record_subspaces.items())):
+        for (layer, pos), subspace in sorted(record_subspaces.items()):
             all_params[layer]["record_subspaces"].append(subspace)
             all_params[layer]["record_pos"].append(pos)
 
@@ -330,8 +330,7 @@ def prepare_circuits_for_interchange_interventions(
 def format_token(token, tokenizer) -> str:
     result = tokenizer.decode([token])
     result = result.replace(" ", "_")
-    result = result.replace("\n", "\\n")
-    return result
+    return result.replace("\n", "\\n")
 
 
 def compute_metrics(

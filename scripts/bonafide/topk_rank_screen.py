@@ -15,6 +15,7 @@ from circuits.tracing.trace import (
     _teacher_forced_position_logits,
     prepare_teacher_forced_input,
 )
+
 from scripts.bonafide.execution_plan import sha256_file
 from scripts.bonafide.runner import (
     _load_model_and_tokenizer,
@@ -111,11 +112,7 @@ def select_exact_rank_screen_items(
         if not isinstance(case, Mapping):
             raise ValueError("exact rank-screen cases must be objects")
         artifact_id = case.get("source_width1_artifact_id")
-        if (
-            not isinstance(artifact_id, str)
-            or not artifact_id
-            or artifact_id in seen
-        ):
+        if not isinstance(artifact_id, str) or not artifact_id or artifact_id in seen:
             raise ValueError(f"invalid or duplicate exact screen case: {artifact_id}")
         seen.add(artifact_id)
         pair = source_items.get(artifact_id)

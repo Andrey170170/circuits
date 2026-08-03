@@ -90,9 +90,7 @@ def test_c1_builder_creates_six_balanced_independent_manifests() -> None:
         rank_screen_sha256="d" * 64,
     )
 
-    assert set(manifests) == {
-        *(f"independent-candidate-{index}" for index in range(6))
-    }
+    assert set(manifests) == {*(f"independent-candidate-{index}" for index in range(6))}
     assert len(cases) == 32
     assert balance["role_counts"] == {
         "broad_discovery": 16,
@@ -101,8 +99,7 @@ def test_c1_builder_creates_six_balanced_independent_manifests() -> None:
     assert balance["width_counts"] == {"5": 17, "6": 15}
     assert (
         sum(
-            len(wave["items"])
-            for wave in manifests["independent-candidate-0"]["waves"]
+            len(wave["items"]) for wave in manifests["independent-candidate-0"]["waves"]
         )
         == 32
     )
@@ -113,6 +110,5 @@ def test_c1_builder_creates_six_balanced_independent_manifests() -> None:
     assert len(reference_items) == 15
     assert all("specified_candidate_token_id" in item for item in reference_items)
     assert all(
-        manifest["phase"] == "c1_policy_resource"
-        for manifest in manifests.values()
+        manifest["phase"] == "c1_policy_resource" for manifest in manifests.values()
     )

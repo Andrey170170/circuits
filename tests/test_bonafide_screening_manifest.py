@@ -8,10 +8,11 @@ import json
 from pathlib import Path
 
 import pytest
-
 from circuits.tracing.trace import tokenize_teacher_forced_response
 from scripts.bonafide.corpus_selection import (
     SCHEMA_VERSION as CANDIDATE_SCHEMA_VERSION,
+)
+from scripts.bonafide.corpus_selection import (
     _tokenizer_file_manifest,
 )
 from scripts.bonafide.manifest import SCHEMA_VERSION
@@ -47,9 +48,7 @@ class FakeChatTokenizer:
         if add_generation_prompt:
             return prefix
         response = next(
-            message["content"]
-            for message in messages
-            if message["role"] == "assistant"
+            message["content"] for message in messages if message["role"] == "assistant"
         )
         return [*prefix, *[1000 + ord(char) for char in response], self.eos_token_id]
 
@@ -72,9 +71,7 @@ def _token_counts(tokenizer: FakeChatTokenizer, prompt: str, response: str) -> d
     }
 
 
-def _example(
-    tokenizer: FakeChatTokenizer, index: int, *, inventory: str
-) -> dict:
+def _example(tokenizer: FakeChatTokenizer, index: int, *, inventory: str) -> dict:
     if inventory == "dense_inventory":
         prompt = f"dense-{index}"
         response = "abcdefghijklmnopqrst"
@@ -199,13 +196,19 @@ def _build(tmp_path: Path) -> tuple[dict, Path, Path, FakeChatTokenizer]:
     return manifest, selection_path, tokenizer_path, tokenizer
 
 
-def test_builds_one_consolidated_multi_prompt_wave_accepted_by_runner(tmp_path: Path) -> None:
+def test_builds_one_consolidated_multi_prompt_wave_accepted_by_runner(
+    tmp_path: Path,
+) -> None:
     manifest, _, _, _ = _build(tmp_path)
 
     assert manifest["schema_version"] == SCHEMA_VERSION
     assert manifest["screening_contract"]["purpose"] == "prompt_screening_estimation"
-    assert manifest["screening_contract"]["final_trace_prompt_membership_frozen"] is False
-    assert manifest["screening_contract"]["final_trace_target_membership_frozen"] is False
+    assert (
+        manifest["screening_contract"]["final_trace_prompt_membership_frozen"] is False
+    )
+    assert (
+        manifest["screening_contract"]["final_trace_target_membership_frozen"] is False
+    )
     wave = select_wave(manifest, WAVE_ID)
     assert len(wave["items"]) == 2_128
     assert len({item["example"]["example_id"] for item in wave["items"]}) == 133
@@ -243,7 +246,9 @@ def test_each_example_has_16_unique_deterministic_stratified_positions(
     for item in manifest["waves"][0]["items"]:
         grouped.setdefault(item["example"]["example_id"], []).append(item)
     for items in grouped.values():
-        positions = [item["target_selection"]["response_token_positions"][0] for item in items]
+        positions = [
+            item["target_selection"]["response_token_positions"][0] for item in items
+        ]
         strata = [
             item["target_selection"]["screening_selection"]["position_selection"][
                 "stratum_index"
@@ -268,7 +273,9 @@ def test_target_token_identity_and_inventory_disjointness(tmp_path: Path) -> Non
             tokenizer, item["example"]["prompt"], item["example"]["response"]
         ).response_ids
         position = item["target_selection"]["response_token_positions"][0]
-        assert item["target_selection"]["final_target_token_id"] == response_ids[position]
+        assert (
+            item["target_selection"]["final_target_token_id"] == response_ids[position]
+        )
         provenance = item["target_selection"]["screening_selection"]
         expected_inventory = (
             "dense_inventory"
@@ -307,7 +314,9 @@ def test_validates_hash_caps_model_and_tokenizer_provenance(tmp_path: Path) -> N
 
     broken = copy.deepcopy(selection)
     first_dense = broken["selections"]["dense_inventory"][0]
-    example = next(item for item in broken["examples"] if item["example_id"] == first_dense)
+    example = next(
+        item for item in broken["examples"] if item["example_id"] == first_dense
+    )
     example["token_counts"]["response"] = 31
     selection_path.write_text(json.dumps(broken) + "\n")
     with pytest.raises(ValueError, match="exceeds dense_inventory caps"):

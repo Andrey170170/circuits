@@ -8,8 +8,9 @@ import os
 import shutil
 import uuid
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, cast
 
 from circuits.analysis.bonafide.canonical import (
     canonical_sha256,

@@ -1,9 +1,9 @@
+from _thread import LockType
+from collections.abc import Sequence
 from threading import Lock
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
+from typing import Any, ClassVar
 from uuid import uuid4
 
-from env_util import ENV
-from neurondb.schemas import DB_INDICES, SQLABase, SQLANeuron
 from sqlalchemy import (
     Column,
     Engine,
@@ -24,13 +24,16 @@ from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateTable
 from util.errors import DBTimeoutException
 
+from env_util import ENV
+from neurondb.schemas import DB_INDICES, SQLABase, SQLANeuron
+
 # Convenient alias for sqlalchemy functions
 sqla_and_, sqla_or_, sqla_desc = and_, or_, desc
 
 
 class DBManager:
-    creation_lock = Lock()
-    instances: Dict[str, "DBManager"] = {}
+    creation_lock: ClassVar[LockType] = Lock()
+    instances: ClassVar[dict[str, "DBManager"]] = {}
 
     def __new__(cls, engine: Engine):
         raise Exception("Use DBManager.get_instance() instead of DBManager()")
@@ -99,14 +102,14 @@ class DBManager:
     def get(
         self,
         entities: Sequence[Any],
-        joins: Optional[List[Tuple[Any, Any]]] = None,
-        filter: Optional[Any] = None,
-        order_by: Optional[Sequence[Any]] = None,
-        group_by: Optional[Sequence[Any]] = None,
-        limit: Optional[int] = None,
-        layer_neuron_tuples: Optional[List[Tuple[int, int]]] = None,
-        set_ef_search: Optional[int] = None,
-        timeout_ms: Optional[int] = 30_000,
+        joins: list[tuple[Any, Any]] | None = None,
+        filter: Any | None = None,
+        order_by: Sequence[Any] | None = None,
+        group_by: Sequence[Any] | None = None,
+        limit: int | None = None,
+        layer_neuron_tuples: list[tuple[int, int]] | None = None,
+        set_ef_search: int | None = None,
+        timeout_ms: int | None = 30_000,
     ) -> Sequence[Any]:
         """
         Example usage:
@@ -128,7 +131,7 @@ class DBManager:
             # Add timeout setting at the start of the session
             if timeout_ms is not None:
                 sess.execute(
-                    text(f"SET LOCAL statement_timeout = :timeout_ms"), {"timeout_ms": timeout_ms}
+                    text("SET LOCAL statement_timeout = :timeout_ms"), {"timeout_ms": timeout_ms}
                 )
 
             stmt = select(*entities)
@@ -184,12 +187,12 @@ class DBManager:
                     raise DBTimeoutException("Query execution timed out") from e
                 raise e  # Re-raise if it's a different OperationalError
 
-    def insert(self, objs: List[SQLABase]) -> None:
+    def insert(self, objs: list[SQLABase]) -> None:
         with Session(self._engine) as sess:
             sess.add_all(objs)
             sess.commit()
 
-    def upsert_many(self, objs: List[SQLABase]) -> None:
+    def upsert_many(self, objs: list[SQLABase]) -> None:
         if not objs:
             return
 
@@ -207,18 +210,18 @@ class DBManager:
             sess.merge(obj)
             sess.commit()
 
-    def clear_table(self, sqla_class: Type[SQLABase]) -> None:
+    def clear_table(self, sqla_class: type[SQLABase]) -> None:
         with Session(self._engine) as sess:
             sess.execute(text(f"DELETE FROM {sqla_class.__tablename__}"))
             sess.commit()
 
-    def drop_table(self, sqla_class: Type[SQLABase]) -> None:
+    def drop_table(self, sqla_class: type[SQLABase]) -> None:
         with Session(self._engine) as sess:
             sess.execute(text(f"DROP TABLE IF EXISTS {sqla_class.__tablename__}"))
             sess.commit()
 
     def bulk_update_mappings(
-        self, sqla_class: Type[SQLABase], mappings: List[Dict[str, Any]]
+        self, sqla_class: type[SQLABase], mappings: list[dict[str, Any]]
     ) -> None:
         with Session(self._engine) as sess:
             sess.bulk_update_mappings(sqla_class, mappings)  # type: ignore

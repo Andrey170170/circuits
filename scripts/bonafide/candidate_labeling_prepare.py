@@ -7,13 +7,12 @@ import argparse
 import json
 from pathlib import Path
 
-from transformers import AutoTokenizer
-
 from circuits.analysis.bonafide.candidate_labeling_comparison import (
     TOKENIZER_ID,
     TOKENIZER_REVISION,
     run_candidate_labeling_preparation,
 )
+from transformers import AutoTokenizer
 
 
 def parse_args() -> argparse.Namespace:

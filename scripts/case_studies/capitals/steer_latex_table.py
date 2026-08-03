@@ -9,11 +9,15 @@ Usage:
 
 import argparse
 import logging
+from typing import TYPE_CHECKING
 
 import torch
 from circuits.analysis.circuit_ops import Circuit
 from circuits.analysis.cluster import prepare_circuit_data
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -90,7 +94,7 @@ def build_table(
         tok_cells = " & ".join(
             [
                 _color_cell(tok, prob, token_to_color[tok.strip()])
-                for tok, prob in zip(top_toks, top_probs)
+                for tok, prob in zip(top_toks, top_probs, strict=False)
             ]
         )
         safe_name = _escape_latex(cl_name)
@@ -149,7 +153,9 @@ def main() -> None:
     # Filter df_node to target labels, relabel ___N to sequential indices
     old_to_new = {}
     filtered_dfs = []
-    for new_idx, (ci_idx, lbl) in enumerate(zip(target_ci_indices, target_labels)):
+    for new_idx, (ci_idx, lbl) in enumerate(
+        zip(target_ci_indices, target_labels, strict=False)
+    ):
         old_label = f"{lbl}___{ci_idx}"
         new_label = f"{lbl}___{new_idx}"
         old_to_new[old_label] = new_label

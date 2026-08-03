@@ -3,8 +3,8 @@ from __future__ import annotations
 import queue
 import time
 import traceback
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Dict, List
 
 import torch
 import torch.multiprocessing as mp
@@ -52,15 +52,15 @@ class TensorDict(dict):
 
 
 def parallelize_work(
-    shared_inputs: Dict[str, torch.Tensor],
-    batch_inputs: Dict[str, torch.Tensor],
-    shared_batch_inputs: Dict[str, torch.Tensor],
-    shared_batch_outputs: Dict[str, torch.Tensor],
+    shared_inputs: dict[str, torch.Tensor],
+    batch_inputs: dict[str, torch.Tensor],
+    shared_batch_inputs: dict[str, torch.Tensor],
+    shared_batch_outputs: dict[str, torch.Tensor],
     batch_size: int,
     num_batches: int,
-    work_fn: Callable[[Dict[str, torch.Tensor], int, str], Dict[str, torch.Tensor]],
-    handle_output_fn: Callable[[Dict[str, torch.Tensor], Dict[str, torch.Tensor], int], None],
-    use_gpus: List[int] = list(range(torch.cuda.device_count())),
+    work_fn: Callable[[dict[str, torch.Tensor], int, str], dict[str, torch.Tensor]],
+    handle_output_fn: Callable[[dict[str, torch.Tensor], dict[str, torch.Tensor], int], None],
+    use_gpus: list[int] | None = None,
 ):
     """
     This function parallelizes work over multiple GPUs.
@@ -86,13 +86,16 @@ def parallelize_work(
         - We then call `handle_output_fn`
     """
 
+    if use_gpus is None:
+        use_gpus = list(range(torch.cuda.device_count()))
+
     mp.set_start_method("spawn", force=True)
 
     # Check that all IPC memory is indeed shared
     assert all(
         tensor.is_shared()
         for tensor in shared_inputs.values()
-        if isinstance(tensor, torch.Tensor) or isinstance(tensor, TensorDict)
+        if isinstance(tensor, (torch.Tensor, TensorDict))
     ), "All shared input tensors must be shared"
     assert all(
         tensor.is_shared() for tensor in shared_batch_inputs.values()
@@ -136,7 +139,7 @@ def parallelize_work(
                             # Shared inputs should be moved to the correct device if possible
                             # CUDA IPC is faster than CPU IPC (I think)
                             v.to(f"cuda:{device_rank}")
-                            if isinstance(v, TensorDict) or isinstance(v, torch.Tensor)
+                            if isinstance(v, (TensorDict, torch.Tensor))
                             else v
                         )
                         for k, v in shared_inputs.items()
@@ -178,7 +181,7 @@ def parallelize_work(
                 # Copy the input data to the shared tensors
                 # The order must be consistent
                 for batch_input, shared_batch_input in zip(
-                    batch_inputs.values(), shared_batch_inputs.values()
+                    batch_inputs.values(), shared_batch_inputs.values(), strict=True
                 ):
                     # print(shared_batch_input.shape)
                     # print(batch_input.narrow(0, batch_idx * batch_size, batch_size).shape)
@@ -234,10 +237,10 @@ def parallelize_work(
 
 def worker_function(
     task_queue: mp.Queue,
-    work_fn: Callable[[Dict[str, torch.Tensor], int, str], Dict[str, torch.Tensor]],
-    shared_inputs: Dict[str, torch.Tensor],
-    shared_batch_inputs: Dict[str, torch.Tensor],
-    shared_batch_outputs: Dict[str, torch.Tensor],
+    work_fn: Callable[[dict[str, torch.Tensor], int, str], dict[str, torch.Tensor]],
+    shared_inputs: dict[str, torch.Tensor],
+    shared_batch_inputs: dict[str, torch.Tensor],
+    shared_batch_outputs: dict[str, torch.Tensor],
     data_request: mp.Event,
     data_ready: mp.Event,
     input_batch_index: mp.Value,
@@ -300,7 +303,7 @@ def worker_function(
         traceback.print_exc()
 
         # If there is a task and it's not done, push it back on the queue
-        if task_done == False and task is not None:
+        if not task_done and task is not None:
             print("Pushing failed task back on the queue")
             task_queue.put(task)
 

@@ -209,9 +209,9 @@ def steering_analysis(
             word, lang = label.split("___")
             translated_word = word_to_lang[word][lang]
             axis = word_to_axis[word]
-            opposite_word_same_axis = [
+            opposite_word_same_axis = next(
                 w for w, a in word_to_axis.items() if a == axis and w != word
-            ][0]
+            )
             translated_opposite_word = word_to_lang[opposite_word_same_axis][lang]
             matches = [x for x in all_labels if label in x]
             if len(matches) == 0:
@@ -255,7 +255,7 @@ def steering_analysis(
             "antonym_of_answer_english_token",
         ]:
             cluster_to_output[token_col + "_prob"] = cluster_to_output.apply(
-                lambda x: (
+                lambda x, token_col=token_col: (
                     x["probs"][int(x[token_col])].item() if not pd.isna(x[token_col]) else None
                 ),
                 axis=1,

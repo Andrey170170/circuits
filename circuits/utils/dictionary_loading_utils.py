@@ -13,6 +13,7 @@ from tqdm import tqdm
 from .modeling_utils import Submodule
 
 DICT_DIR = os.path.dirname(os.path.abspath(__file__)) + "/dictionaries"
+CPU_DEVICE = t.device("cpu")
 
 DictionaryStash = namedtuple("DictionaryStash", ["embed", "attns", "mlps", "resids", "transcoders"])
 
@@ -54,8 +55,8 @@ def load_gemma_sae(
     width: Literal["16k", "65k", "131k"] = "16k",
     neurons: bool = False,
     dtype: t.dtype = t.float32,
-    device: t.device = t.device("cpu"),
-    module_dim: int = None,
+    device: t.device = CPU_DEVICE,
+    module_dim: int | None = None,
     model_size: Literal["2b", "9b"] = "2b",
 ):
     if neurons:
@@ -108,8 +109,8 @@ def _load_gemma_saes_and_submodules(
     use_transcoder: bool = False,
     neurons: bool = False,
     dtype: t.dtype = t.float32,
-    device: t.device = t.device("cpu"),
-    module_dims: dict = None,
+    device: t.device = CPU_DEVICE,
+    module_dims: dict | None = None,
     use_mlp_acts: bool = False,
     width: Literal["16k", "65k", "131k"] = "16k",
     model_size: Literal["2b", "9b"] = "2b",
@@ -218,16 +219,15 @@ def _load_gemma_saes_and_submodules(
 
     if separate_by_type:
         return DictionaryStash(embed, attns, mlps, resids, transcoders), dictionaries
-    else:
-        submodules = [embed] if include_embed else []
-        for i in range(thru_layer):
-            if include_attn:
-                submodules.append(attns[i])
-            if include_mlp:
-                submodules.append(mlps[i])
-            if include_resid:
-                submodules.append(resids[i])
-        return submodules, dictionaries
+    submodules = [embed] if include_embed else []
+    for i in range(thru_layer):
+        if include_attn:
+            submodules.append(attns[i])
+        if include_mlp:
+            submodules.append(mlps[i])
+        if include_resid:
+            submodules.append(resids[i])
+    return submodules, dictionaries
 
 
 def load_llama_sae(
@@ -236,7 +236,7 @@ def load_llama_sae(
     width: Literal["8x", "32x"] = "8x",
     neurons: bool = False,
     dtype: t.dtype = t.float32,
-    device: t.device = t.device("cpu"),
+    device: t.device = CPU_DEVICE,
     module_dim: int | None = None,
 ):
     if neurons:
@@ -277,8 +277,8 @@ def _load_llama_saes_and_submodules(
     use_transcoder: bool = False,
     neurons: bool = False,
     dtype: t.dtype = t.float32,
-    device: t.device = t.device("cpu"),
-    module_dims: dict = None,
+    device: t.device = CPU_DEVICE,
+    module_dims: dict | None = None,
     use_mlp_acts: bool = False,
     width: Literal["8x", "32x"] = "8x",
 ):
@@ -346,7 +346,7 @@ def _load_llama_saes_and_submodules(
                     mlp := Submodule(
                         name=f"mlp_{i}",
                         submodule=layer.mlp,
-                        use_input=True if use_transcoder else False,
+                        use_input=bool(use_transcoder),
                         use_transcoder=use_transcoder,
                     )
                 )
@@ -380,16 +380,15 @@ def _load_llama_saes_and_submodules(
 
     if separate_by_type:
         return DictionaryStash(embed, attns, mlps, resids, transcoders), dictionaries
-    else:
-        submodules = [embed] if include_embed else []
-        for i in range(thru_layer):
-            if include_attn:
-                submodules.append(attns[i])
-            if include_mlp:
-                submodules.append(mlps[i])
-            if include_resid:
-                submodules.append(resids[i])
-        return submodules, dictionaries
+    submodules = [embed] if include_embed else []
+    for i in range(thru_layer):
+        if include_attn:
+            submodules.append(attns[i])
+        if include_mlp:
+            submodules.append(mlps[i])
+        if include_resid:
+            submodules.append(resids[i])
+    return submodules, dictionaries
 
 
 def load_saes_and_submodules(
@@ -403,16 +402,16 @@ def load_saes_and_submodules(
     use_transcoder: bool = False,
     neurons: bool = False,
     dtype: t.dtype = t.float32,
-    device: t.device = t.device("cpu"),
-    module_dims: dict = None,
+    device: t.device = CPU_DEVICE,
+    module_dims: dict | None = None,
     use_mlp_acts: bool = False,
     width: str = "8x",
 ):
     model_name = model.config._name_or_path
 
     if model_name == "EleutherAI/pythia-70m-deduped":
-        assert False, "Pythia is not supported"
-    elif model_name in ("google/gemma-2-2b", "google/gemma-2-9b"):
+        raise NotImplementedError("Pythia is not supported")
+    if model_name in ("google/gemma-2-2b", "google/gemma-2-9b"):
         gemma_width = width if width in ("16k", "65k", "131k") else "16k"
         model_size = "2b" if "2b" in model_name else "9b"
         return _load_gemma_saes_and_submodules(
@@ -432,7 +431,7 @@ def load_saes_and_submodules(
             width=gemma_width,
             model_size=model_size,
         )
-    elif (
+    if (
         model_name == "meta-llama/Llama-3.1-8B" or model_name == "meta-llama/Llama-3.1-8B-Instruct"
     ):
         return _load_llama_saes_and_submodules(
@@ -451,5 +450,4 @@ def load_saes_and_submodules(
             use_mlp_acts=use_mlp_acts,
             width=width,
         )
-    else:
-        raise ValueError(f"Model {model_name} not supported")
+    raise ValueError(f"Model {model_name} not supported")

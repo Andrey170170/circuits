@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pyarrow.parquet as pq
 from scipy.optimize import linear_sum_assignment
 
@@ -85,6 +86,7 @@ TARGET_POINTS = tuple(
     )
 )
 MAX_WIDTH_HIGHLIGHTS = 16
+type _IntArray = npt.NDArray[np.int64]
 
 EXPECTED_ELIGIBLE_ARMS = [
     {
@@ -203,8 +205,7 @@ def validate_candidate_labeling_runtime_paths(repo_root: Path) -> None:
         expected = repo_root / _SOURCE_BINDINGS[role]
         if Path(observed).resolve() != expected.resolve():
             raise ValueError(
-                "candidate labeling runtime module came from another worktree: "
-                f"{role}"
+                f"candidate labeling runtime module came from another worktree: {role}"
             )
 
 
@@ -265,7 +266,7 @@ def _midrank_percentiles(values: Mapping[int, int]) -> dict[int, Fraction]:
     return result
 
 
-def _integer_cost_matrix(costs: Sequence[Sequence[Fraction]]) -> np.ndarray:
+def _integer_cost_matrix(costs: Sequence[Sequence[Fraction]]) -> _IntArray:
     denominator = 1
     for row in costs:
         for value in row:
@@ -282,15 +283,17 @@ def _integer_cost_matrix(costs: Sequence[Sequence[Fraction]]) -> np.ndarray:
     return integers
 
 
-def _minimum_assignment_cost(costs: np.ndarray) -> int:
+def _minimum_assignment_cost(costs: _IntArray) -> int:
     rows, columns = linear_sum_assignment(costs)
     if len(rows) != costs.shape[0]:
         raise AssertionError("Hungarian assignment did not cover every target point")
-    return int(sum(int(costs[row, column]) for row, column in zip(rows, columns)))
+    return int(
+        sum(int(costs[row, column]) for row, column in zip(rows, columns, strict=True))
+    )
 
 
 def _lexicographic_optimal_assignment(
-    costs: np.ndarray, cluster_ids: Sequence[int]
+    costs: _IntArray, cluster_ids: Sequence[int]
 ) -> tuple[int, ...]:
     """Choose the lexicographically smallest tuple among exact global optima."""
 
@@ -477,9 +480,16 @@ def _aggregate_width(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         )
         for index in range(width)
     ]
+
+    def ranking_key(index: int) -> tuple[float, int]:
+        mean = means[index]
+        if mean is None:
+            raise AssertionError("unsupported width coordinate cannot be ranked")
+        return -abs(mean), index
+
     ranked = sorted(
         (index for index, value in enumerate(means) if value is not None),
-        key=lambda index: (-abs(float(means[index])), index),
+        key=ranking_key,
     )[:MAX_WIDTH_HIGHLIGHTS]
     return {
         "member_basis_count": len(member_bases),
@@ -591,7 +601,7 @@ def _candidate_evidence(
 
 
 def _group_profiles(
-    rows: Sequence[Mapping[str, Any]], assignments: np.ndarray
+    rows: Sequence[Mapping[str, Any]], assignments: _IntArray
 ) -> dict[tuple[int, str], list[Mapping[str, Any]]]:
     grouped: dict[tuple[int, str], list[Mapping[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -991,7 +1001,9 @@ def run_candidate_labeling_preparation(
                     else (
                         len(generation)
                         if name == GENERATION_FILE
-                        else len(scoring) if name == SCORING_FILE else len(handoff)
+                        else len(scoring)
+                        if name == SCORING_FILE
+                        else len(handoff)
                     )
                 ),
             }

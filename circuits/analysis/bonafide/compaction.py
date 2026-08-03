@@ -6,8 +6,9 @@ import json
 import os
 import shutil
 import uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -71,7 +72,7 @@ def _expected_shard_path(
     return (
         Path(str(plan["output_root"]))
         / "shards"
-        / f"task-{int(task['task_index']):03d}-{str(task['response_id'])}"
+        / f"task-{int(task['task_index']):03d}-{task['response_id']!s}"
     )
 
 

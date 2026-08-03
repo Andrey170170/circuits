@@ -4,7 +4,6 @@ from copy import deepcopy
 from dataclasses import replace
 
 import pytest
-
 from circuits.tracing.parity import compare_observed_token_k1
 from tests.test_teacher_forced_trace import _topk_trace
 

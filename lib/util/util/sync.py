@@ -1,14 +1,13 @@
 import asyncio
 import traceback
+from collections.abc import Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Coroutine, Optional, TypeVar, cast
+from typing import Any, cast
 
 from tqdm.asyncio import tqdm as tqdm_asyncio
 
-T = TypeVar("T")
 
-
-def sync_wrapper(coroutine: Coroutine[Any, Any, T]) -> T:
+def sync_wrapper[T](coroutine: Coroutine[Any, Any, T]) -> T:
     executor = ThreadPoolExecutor()
     try:
         future: Future[T] = executor.submit(
@@ -20,11 +19,11 @@ def sync_wrapper(coroutine: Coroutine[Any, Any, T]) -> T:
         executor.shutdown(wait=False, cancel_futures=True)
 
 
-async def parallelize_async(
+async def parallelize_async[T](
     coroutines: list[Coroutine[Any, Any, T]],
     max_concurrency: int = 100,
     use_tqdm: bool = False,
-) -> list[Optional[T]]:
+) -> list[T | None]:
     """
     Parallel execution of coroutines with concurrency control.
 
@@ -35,7 +34,7 @@ async def parallelize_async(
     """
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def limited_task(coro: Coroutine[Any, Any, T]) -> Optional[T]:
+    async def limited_task(coro: Coroutine[Any, Any, T]) -> T | None:
         async with semaphore:
             try:
                 return await coro
@@ -48,7 +47,7 @@ async def parallelize_async(
 
     if use_tqdm:
         results = cast(
-            list[Optional[T]],
+            list[T | None],
             await tqdm_asyncio.gather(*tasks, desc="Processing items"),  # type: ignore
         )
     else:

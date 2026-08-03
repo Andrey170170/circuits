@@ -9,8 +9,9 @@ similarities are then accumulated with the frozen hierarchical fit weights.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -52,9 +53,7 @@ class TargetProfileBlock:
             raise ValueError("profile values/support shapes disagree")
         if self.values.shape[0] != len(self.basis_indices):
             raise ValueError("profile row count does not match basis indices")
-        if len(set(int(value) for value in self.basis_indices)) != len(
-            self.basis_indices
-        ):
+        if len({int(value) for value in self.basis_indices}) != len(self.basis_indices):
             raise ValueError("target profile block contains duplicate basis indices")
         if np.any(self.basis_indices < 0):
             raise ValueError("basis indices must be nonnegative")

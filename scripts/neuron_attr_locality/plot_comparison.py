@@ -40,7 +40,7 @@ def main() -> None:
     ax.bar(layers, means, yerr=stds, capsize=2, color="#4C72B0", alpha=0.8, edgecolor="white")
 
     # Add count labels
-    for l, m, c in zip(layers, means, counts):
+    for l, m, c in zip(layers, means, counts, strict=False):
         ax.text(l, m + 0.02, str(c), ha="center", va="bottom", fontsize=6, color="gray")
 
     ax.set_xlabel("Layer")

@@ -4,7 +4,6 @@ import math
 from pathlib import Path
 
 import pytest
-
 from circuits.labeling.quality import (
     assess_width_one_quality,
     best_finite_score,

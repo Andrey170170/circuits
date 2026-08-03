@@ -6,14 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from torch import nn
-
 from circuits.tracing.grad import (
     layerwise_revert_stop_nonlinear_grad,
     layerwise_stop_nonlinear_grad,
     revert_stop_nonlinear_grad,
     stop_nonlinear_grad,
 )
+from torch import nn
 
 
 class FakeNorm(nn.Module):
@@ -55,9 +54,7 @@ class FakeBackbone(nn.Module):
     def __init__(self, config, layer_count: int) -> None:
         super().__init__()
         self.norm = FakeNorm()
-        self.layers = nn.ModuleList(
-            [FakeLayer(config) for _ in range(layer_count)]
-        )
+        self.layers = nn.ModuleList([FakeLayer(config) for _ in range(layer_count)])
 
 
 class FakeModel(nn.Module):

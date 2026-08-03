@@ -62,15 +62,14 @@ def format_row(row: Datapoint, split: str) -> dict[str, str]:
             "answer": answer,
             "case": max_key,
         }
-    elif isinstance(row, WikipediaDatapoint):
+    if isinstance(row, WikipediaDatapoint):
         answer = " " + row.latent_attributes[split][0].capitalize()
         return {
             "prefix": format_conversation(row.conversation[0]["content"], SEED_RESPONSES[split]),
             "answer": answer,
             "case": row.latent_attributes[split][0],
         }
-    else:
-        raise ValueError(f"Invalid row type: {type(row)}")
+    raise ValueError(f"Invalid row type: {type(row)}")
 
 
 def make_user_model_examples(
@@ -91,7 +90,7 @@ def make_user_model_examples(
 
     # make examples
     if mode == "pair":
-        for subset in dataset.keys():
+        for subset in dataset:
             examples = []
             for _ in range(train_examples if split == "train" else test_examples):
                 # sample two different classes of examples
@@ -119,7 +118,7 @@ def make_user_model_examples(
                     f.write(json.dumps(example) + "\n")
 
     elif mode == "nopair":
-        for subset in dataset.keys():
+        for subset in dataset:
             examples = []
             for _ in range(train_examples if split == "train" else test_examples):
                 row = random.choice(dataset[subset].datapoints)
@@ -168,7 +167,7 @@ def load_examples(
     enforce_pad: bool = False,
     apply_chat_template: bool = False,
 ):
-    with open(dataset, "r") as f:
+    with open(dataset) as f:
         dataset_items = f.readlines()
     random.Random(seed).shuffle(dataset_items)
 
@@ -214,9 +213,8 @@ def load_examples(
             continue
 
         # check that prefixes are the same length
-        if not allow_length_mismatch:
-            if len(clean_prefix) != len(patch_prefix):
-                continue
+        if not allow_length_mismatch and len(clean_prefix) != len(patch_prefix):
+            continue
 
         # check for tokenization mismatches
         if clean_prefix + clean_answer != clean_full:
@@ -315,7 +313,7 @@ def load_examples_helper(dataset, dataset_path, num_examples, model, nopair=Fals
             **kwargs,
         )
     elif DATASET_TASK_MAPPING[dataset] == "user_modeling_nopair":
-        seed = kwargs.get("seed", None)
+        seed = kwargs.get("seed")
         examples = load_user_modeling_nopair_examples(
             dataset,
             dataset_path,
@@ -352,7 +350,9 @@ def get_annotation(dataset, model, data):
 
     # Iterate through words in the template and input. Get token spans
     curr_token = 0
-    for template_word, word in zip(template.split(), data["clean_prefix"].split()):
+    for template_word, word in zip(
+        template.split(), data["clean_prefix"].split(), strict=True
+    ):
         if word != "The":
             word = " " + word
         word_tok = model.tokenizer(word, return_tensors="pt", padding=False).input_ids

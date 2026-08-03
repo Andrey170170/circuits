@@ -183,7 +183,7 @@ def main():
 
     circuit = Circuit.load_from_pickle(CIRCUIT_PICKLE)
     circuit.set_subject(Subject(llama31_8B_instruct_config))
-    prompts, seed_responses, labels = _prepare_split_examples(
+    _prompts, _seed_responses, labels = _prepare_split_examples(
         Subject(llama31_8B_instruct_config), "gender"
     )
     hypotheses = {

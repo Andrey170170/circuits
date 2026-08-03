@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from circuits.tracing.artifact import (
     save_topk_compact_trace,
     validate_topk_compact_trace_integrity,
@@ -21,7 +20,6 @@ from tests.test_topk_topology_comparison import _joint_and_references
 
 def _saved_references(tmp_path: Path):
     _joint, traces, _candidate_ids = _joint_and_references()
-    artifacts = []
     records = []
     for index, trace in enumerate(traces):
         path = tmp_path / f"reference-{index}"

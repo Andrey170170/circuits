@@ -66,7 +66,7 @@ class NeuronSteeringHook:
                 x[:, self.token_pos, self.neuron] *= self.multiplier
         else:
             x[:, :, self.neuron] *= self.multiplier
-        return (x,) + input[1:]
+        return (x, *input[1:])
 
     def register(self, model):
         # Hook on down_proj to access intermediate MLP activations
@@ -266,7 +266,9 @@ def main():
             n_incoherent,
             len(responses),
         )
-        for i, (resp, outcome, coh) in enumerate(zip(responses, outcomes, coherence)):
+        for _i, (resp, outcome, coh) in enumerate(
+            zip(responses, outcomes, coherence, strict=False)
+        ):
             preview = resp[:150].replace("\n", " ")
             print(f"  [{outcome}|coh={coh}] {preview}")
 

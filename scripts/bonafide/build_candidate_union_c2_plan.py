@@ -14,6 +14,7 @@ from circuits.tracing.artifact import (
     validate_topk_compact_trace_integrity,
 )
 from circuits.tracing.candidate_union import frozen_union_topologies
+
 from scripts.bonafide.build_candidate_union_c0_plan import (
     PLAN_SCHEMA_VERSION,
     _load_json,
@@ -108,9 +109,11 @@ def _reference_index(reference_root: Path) -> dict[tuple[int, str], Path]:
         for manifest_path in family_root.glob("*/*/manifest.json"):
             manifest = _load_json(manifest_path)
             source_id = manifest.get("source_width1_artifact_id")
+            if not isinstance(source_id, str) or not source_id:
+                raise ValueError(f"invalid C2 reference source ID: {source_id!r}")
             key = (candidate_index, source_id)
-            if not isinstance(source_id, str) or not source_id or key in result:
-                raise ValueError(f"invalid or duplicate C2 reference: {key}")
+            if key in result:
+                raise ValueError(f"duplicate C2 reference: {key}")
             result[key] = manifest_path.parent.resolve()
     return result
 
@@ -190,8 +193,7 @@ def build_candidate_union_c2_plan(
         or bundle.get("case_count") != C2_CASE_COUNT
         or bundle.get("cohort_id") != selection.get("cohort_id")
         or bundle.get("rank_screen_path") != selection.get("rank_screen_path")
-        or bundle.get("rank_screen_sha256")
-        != selection.get("rank_screen_sha256")
+        or bundle.get("rank_screen_sha256") != selection.get("rank_screen_sha256")
         or Path(str(bundle.get("selection_path", ""))).resolve()
         != selection_path.resolve()
         or bundle.get("selection_sha256") != selection_sha256
@@ -215,8 +217,7 @@ def build_candidate_union_c2_plan(
         candidate_contracts[0]["manifest"] != candidate_zero_manifest
         or candidate_contracts[0]["path"].resolve()
         != candidate_zero_manifest_path.resolve()
-        or candidate_contracts[0]["file_sha256"]
-        != candidate_zero_manifest_sha256
+        or candidate_contracts[0]["file_sha256"] != candidate_zero_manifest_sha256
     ):
         raise ValueError("candidate-zero C2 manifest disagrees with bundle")
     source = candidate_zero_manifest.get("source")
@@ -306,9 +307,7 @@ def build_candidate_union_c2_plan(
                 != source_item["target_selection"]
                 or manifest.get("bonafide_example") != source_item["example"]
                 or trace_contract.get("trace_family_id")
-                != candidate_contract["manifest"]["trace_family"][
-                    "trace_family_id"
-                ]
+                != candidate_contract["manifest"]["trace_family"]["trace_family_id"]
             ):
                 raise ValueError(
                     f"C2 candidate reference contract drift: {case_id}, "
@@ -352,9 +351,7 @@ def build_candidate_union_c2_plan(
                 "frozen_union_topology_sha256": topology_sha256,
                 "frozen_union_mlp_node_count": union_mlp_nodes,
                 "frozen_union_candidate_edge_counts": candidate_edge_counts,
-                "frozen_union_max_candidate_edge_count": max(
-                    candidate_edge_counts
-                ),
+                "frozen_union_max_candidate_edge_count": max(candidate_edge_counts),
             }
         )
 
@@ -420,12 +417,8 @@ def build_candidate_union_c2_plan(
             "launch_bundle_sha256": bundle_sha256,
             "selection_path": str(selection_path.resolve()),
             "selection_sha256": selection_sha256,
-            "candidate_zero_manifest_path": str(
-                candidate_zero_manifest_path.resolve()
-            ),
-            "candidate_zero_manifest_sha256": (
-                candidate_zero_manifest_sha256
-            ),
+            "candidate_zero_manifest_path": str(candidate_zero_manifest_path.resolve()),
+            "candidate_zero_manifest_sha256": (candidate_zero_manifest_sha256),
             "reference_root": str(reference_root.resolve()),
             "case_count": len(cases),
             "reference_trace_count": sum(

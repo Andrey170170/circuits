@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from circuits.tracing.instrumentation import (
     SCHEMA_VERSION,
     TraceInstrumentation,
@@ -145,9 +144,11 @@ def test_stage_does_not_synchronize_while_unwinding_original_error(monkeypatch) 
 
     monkeypatch.setattr(recorder, "_synchronize", fake_synchronize)
 
-    with pytest.raises(ValueError, match="original trace failure"):
-        with recorder.stage("failing_stage"):
-            raise ValueError("original trace failure")
+    with (
+        pytest.raises(ValueError, match="original trace failure"),
+        recorder.stage("failing_stage"),
+    ):
+        raise ValueError("original trace failure")
 
     assert sync_calls == 1
     assert recorder.snapshot()["stages"]["failing_stage"]["calls"] == 1

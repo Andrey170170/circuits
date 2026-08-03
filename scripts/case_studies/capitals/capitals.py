@@ -69,7 +69,6 @@ labels = [" " + capital for _, _, capital in city_state_capital]
 
 def main():
     subject = Subject(llama31_8B_instruct_config)
-    subject.tokenizer
 
     # convert to dataframes
     circuit = Circuit.from_dataset(

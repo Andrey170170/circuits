@@ -41,7 +41,7 @@ def main() -> None:
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
 
     # Step 1: Load and cluster
     logger.info("Loading circuit from %s", CIRCUIT_PICKLE)
@@ -70,7 +70,7 @@ def main() -> None:
         contrib_model_name="claude-haiku-4-5-20251001",
         verbose=True,
     )
-    attr_results, contrib_results, attr_exemplars, contrib_exemplars, cluster_to_neurons = result
+    attr_results, contrib_results, attr_exemplars, contrib_exemplars, _cluster_to_neurons = result
 
     cluster_id_to_name: dict[int, str] = getattr(circuit, "_cluster_id_to_name", {})
 

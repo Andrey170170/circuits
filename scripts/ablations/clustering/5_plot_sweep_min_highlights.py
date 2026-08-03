@@ -79,9 +79,7 @@ def load_sweep_data(input_dir: Path) -> pd.DataFrame:
 
         # Known files without metadata
         if mode is None or mh is None:
-            if "20260305_232222" in f.name:
-                mode, mh = "quantile", 4
-            elif "20260305_235733" in f.name:
+            if "20260305_232222" in f.name or "20260305_235733" in f.name:
                 mode, mh = "quantile", 4
             else:
                 continue

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import shutil
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from statistics import median
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -265,9 +265,11 @@ def validate_resample_plan(
         recorded = unhashed.pop("fit_task_sha256", None)
         if recorded != canonical_sha256(unhashed):
             raise ValueError("resample fit task hash mismatch")
-    if verify_code:
-        if collect_clustering_code_revision(repo_root) != validated["code_revision"]:
-            raise ValueError("resample executable source has drifted")
+    if (
+        verify_code
+        and collect_clustering_code_revision(repo_root) != validated["code_revision"]
+    ):
+        raise ValueError("resample executable source has drifted")
     return validated
 
 

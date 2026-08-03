@@ -30,6 +30,13 @@ dependencies = [
     "sentence-transformers",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest==9.0.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "ruff==0.16.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "ty==0.0.65; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -37,6 +44,78 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["circuits"]
 
+[tool.ruff]
+required-version = "==0.16.1"
+target-version = "py312"
+line-length = 88
+preview = false
+src = ["circuits", "lib", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "C4",
+    "DTZ",
+    "LOG",
+    "PERF",
+    "PIE",
+    "PLE",
+    "PLC",
+    "PT",
+    "RET",
+    "RUF",
+    "SIM",
+]
+ignore = [
+    "E741",  # Legacy scientific code uses I/l/O as established dimension and index names.
+    "PLC0415",  # Lazy imports keep optional and GPU-heavy dependencies out of startup paths.
+    "RUF001",  # Scientific text intentionally contains Unicode symbols.
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"circuits/analysis/bonafide/clustering_evaluation.py" = [
+    "UP035",  # Byte-hashed frozen implementation; preserve artifact compatibility.
+]
+"scripts/steering.py" = ["ALL"]  # Stale notebook prototype; not an executable module.
+"tests/**/*.py" = ["B011"]
+
+[tool.ty.environment]
+python-version = "3.12"
+python-platform = "linux"
+
+[tool.ty.src]
+include = [
+    "circuits/analysis/bonafide",
+    "circuits/frontend",
+    "circuits/labeling",
+    "circuits/tracing",
+    "scripts/bonafide",
+]
+exclude = [
+    # These dynamic tracing internals predate the typed artifact/provenance layer.
+    "circuits/tracing/attribution.py",
+    "circuits/tracing/clja.py",
+    "circuits/tracing/grad/__init__.py",
+    "circuits/tracing/trace.py",
+    "circuits/tracing/utils.py",
+]
+
+[tool.ty.rules]
+blanket-ignore-comment = "error"
+missing-override-decorator = "error"
+missing-type-argument = "error"
+possibly-unresolved-reference = "error"
+unused-type-ignore-comment = "error"
+
+# Retain the broader editor configuration while the executable ty gate expands.
 [tool.pyright]
 strict = ["circuits"]
 reportMissingTypeStubs = false

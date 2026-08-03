@@ -44,7 +44,7 @@ def main() -> None:
     circuit.set_tokenizer(tokenizer, num_layers=32)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     canonical_state = OUTPUT_DIR / f"cluster_state_k{args.n_clusters}_{args.combine}.json"
 
     if not args.skip_descriptions:

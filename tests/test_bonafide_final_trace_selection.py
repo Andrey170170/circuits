@@ -8,13 +8,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from circuits.tracing.probe_artifact import ProbeArtifact
 from scripts.bonafide import final_trace_selection as final
 from scripts.bonafide.runner import _sha256, validate_target_selection
 
 
-def _example(example_id: str, response_count: int, phenotype: str = "commission") -> dict:
+def _example(
+    example_id: str, response_count: int, phenotype: str = "commission"
+) -> dict:
     return {
         "example_id": example_id,
         "target_model": "fake/model",
@@ -43,9 +44,15 @@ def _item(
     reasons: list[dict] | None = None,
 ) -> dict:
     target_reason = (
-        {"policy": "all_teacher_forced_response_positions", "full_response_coverage": True}
+        {
+            "policy": "all_teacher_forced_response_positions",
+            "full_response_coverage": True,
+        }
         if role == "dense_full_response_refinement"
-        else {"policy": "semantic_boundary_refinement_candidates", "reasons": reasons or []}
+        else {
+            "policy": "semantic_boundary_refinement_candidates",
+            "reasons": reasons or [],
+        }
     )
     return {
         "artifact_id": f"probe-source-{example['example_id']}-{position}",
@@ -61,7 +68,10 @@ def _item(
                 "target_selection_reason": target_reason,
             },
         },
-        "objective": {"name": "single_selected_logit", "benchmark_only_multi_target": False},
+        "objective": {
+            "name": "single_selected_logit",
+            "benchmark_only_multi_target": False,
+        },
     }
 
 
@@ -82,7 +92,9 @@ def _probe(item: dict, *, probability: float | None = None) -> final.RefinementP
         artifact_id=f"runtime-{item['artifact_id']}",
         token_text=f" token-{position}",
         logit=10.0 + position,
-        probability=float(probability if probability is not None else 0.5 + position / 1000),
+        probability=float(
+            probability if probability is not None else 0.5 + position / 1000
+        ),
         candidate_edge_count=100 + position * 10,
         selected_occurrence_count=20 + position,
         feature_ids=frozenset({(feature_group, feature_group * 100 + position % 3)}),
@@ -93,7 +105,9 @@ def _probe(item: dict, *, probability: float | None = None) -> final.RefinementP
     )
 
 
-def _broad_probes(example_id: str = "broad", phenotype: str = "commission") -> list[final.RefinementProbe]:
+def _broad_probes(
+    example_id: str = "broad", phenotype: str = "commission"
+) -> list[final.RefinementProbe]:
     example = _example(example_id, 64, phenotype)
     probes = []
     for position in range(64):
@@ -152,7 +166,9 @@ def _broad_probes(example_id: str = "broad", phenotype: str = "commission") -> l
     return probes
 
 
-def _refinement_manifest(items: list[dict], prompt_analysis: list[dict] | None = None) -> dict:
+def _refinement_manifest(
+    items: list[dict], prompt_analysis: list[dict] | None = None
+) -> dict:
     return {
         "schema_version": "bonafide-trace-benchmark/v1",
         "artifact_kind": "bonafide_refinement_probe_manifest",
@@ -191,7 +207,9 @@ def test_deduplication_refills_deterministically_and_keeps_all_reasons() -> None
     probes = _broad_probes()
     # Collapse the final-answer anchor onto the first commitment occurrence.
     item = json.loads(json.dumps(probes[55].item))
-    item["target_selection"]["refinement_selection"]["target_selection_reason"]["reasons"] = []
+    item["target_selection"]["refinement_selection"]["target_selection_reason"][
+        "reasons"
+    ] = []
     probes[55] = _probe(item)
     first_item = json.loads(json.dumps(probes[10].item))
     first_item["target_selection"]["refinement_selection"]["target_selection_reason"][
@@ -255,9 +273,9 @@ def test_curated_annotation_beats_earlier_generic_source_marker_for_faithful() -
     ]
     assert source_reasons
     assert {reason["window_center"] for reason in source_reasons} == {30}
-    assert {
-        reason["anchor"]["reason_type"] for reason in source_reasons
-    } == {"bonafide_annotation_anchor"}
+    assert {reason["anchor"]["reason_type"] for reason in source_reasons} == {
+        "bonafide_annotation_anchor"
+    }
 
 
 def test_numeric_answer_anchor_falls_back_to_annotation_and_final_phase() -> None:
@@ -287,9 +305,9 @@ def test_numeric_answer_anchor_falls_back_to_annotation_and_final_phase() -> Non
         if reason["bucket"] == "final_answer_commitment_window"
     ]
     assert {reason["window_center"] for reason in first_reasons} == {30}
-    assert {
-        reason["anchor"]["fallback"] for reason in first_reasons
-    } == {"curated_source_or_annotation_center"}
+    assert {reason["anchor"]["fallback"] for reason in first_reasons} == {
+        "curated_source_or_annotation_center"
+    }
     assert {reason["window_center"] for reason in final_reasons} == {63}
     assert {reason["anchor"]["fallback"] for reason in final_reasons} == {
         "final_phase_control"
@@ -310,9 +328,9 @@ def test_states_substring_is_not_treated_as_source_attribution() -> None:
     ]
     probes[30] = _probe(annotation_item)
     states_item = json.loads(json.dumps(probes[5].item))
-    states_item["target_selection"]["refinement_selection"][
-        "target_selection_reason"
-    ]["reasons"].append(
+    states_item["target_selection"]["refinement_selection"]["target_selection_reason"][
+        "reasons"
+    ].append(
         {
             "reason_type": "answer_or_source_anchor",
             "phrase_type": "source_marker",
@@ -358,7 +376,10 @@ def test_append_only_summary_accepts_complete_then_skipped_duplicate() -> None:
 
 def test_probe_cohort_rejects_mixed_model_config_or_code_identity() -> None:
     probes = _broad_probes()[:2]
-    mixed_identity = {**probes[1].cohort_identity, "code_revision": {"git_commit": "b" * 40}}
+    mixed_identity = {
+        **probes[1].cohort_identity,
+        "code_revision": {"git_commit": "b" * 40},
+    }
     probes[1] = replace(
         probes[1],
         cohort_identity=mixed_identity,
@@ -480,9 +501,10 @@ def test_builds_per_prompt_waves_and_excludes_holdout_from_cluster_fit() -> None
     assert len(by_role["broad_discovery"]["items"]) == 16
     assert len(by_role["broad_confirmatory_holdout"]["items"]) == 16
     assert by_role["broad_confirmatory_holdout"]["cluster_fit_eligible"] is False
-    assert by_role["broad_confirmatory_holdout"][
-        "holdout_excluded_from_cluster_fitting"
-    ] is True
+    assert (
+        by_role["broad_confirmatory_holdout"]["holdout_excluded_from_cluster_fitting"]
+        is True
+    )
     for wave in result["waves"]:
         for item in wave["items"]:
             validate_target_selection(item)
@@ -511,9 +533,16 @@ def test_extreme_workload_target_is_retained_in_isolated_preflight_wave() -> Non
     )
 
     assert len(result["waves"]) == 2
-    routine = next(wave for wave in result["waves"] if not wave["extreme_workload_isolation"])
-    extreme = next(wave for wave in result["waves"] if wave["extreme_workload_isolation"])
+    routine = next(
+        wave for wave in result["waves"] if not wave["extreme_workload_isolation"]
+    )
+    extreme = next(
+        wave for wave in result["waves"] if wave["extreme_workload_isolation"]
+    )
     assert len(routine["items"]) == 1
     assert len(extreme["items"]) == 1
     assert extreme["full_trace_preflight_required"] is True
-    assert extreme["screening_candidate_mlp_edge_count"] == final.EXTREME_EDGE_ISOLATION_THRESHOLD
+    assert (
+        extreme["screening_candidate_mlp_edge_count"]
+        == final.EXTREME_EDGE_ISOLATION_THRESHOLD
+    )

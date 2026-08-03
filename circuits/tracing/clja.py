@@ -5,10 +5,13 @@ and make edge-weight computation tractable.
 """
 
 import math
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, List, Literal
+from typing import Any, Literal
 
 import torch
+from transformers import PreTrainedTokenizer
+
 from circuits.tracing.attribution import (
     _get_global_important_neurons_mask,
     _get_grad_attributions_from_logits,
@@ -34,7 +37,6 @@ from circuits.tracing.instrumentation import (
     record_selection_predictors,
 )
 from circuits.tracing.utils import Edge, NeuronIdx, Node, collect_neuron_acts
-from transformers import PreTrainedTokenizer
 
 BLACKLISTED_NEURONS: dict[str, list[NeuronIdx]] = {
     "meta-llama/Llama-3.1-8B-Instruct": [
@@ -166,7 +168,7 @@ def _selected_probe_occurrences(
             "attribution": float(attribution),
         }
         for (layer, token, neuron), attribution in zip(
-            occurrence_ids, attribution_values
+            occurrence_ids, attribution_values, strict=True
         )
     ]
 
@@ -242,11 +244,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     # SETUP #
     #########
 
-    if disable_stop_grad:
-        if any([use_relp_grad, use_stop_grad_on_mlps]):
-            print(
-                "warning: stop grad is disabled but some stop grad configurations are used"
-            )
+    if disable_stop_grad and (use_relp_grad or use_stop_grad_on_mlps):
+        print(
+            "warning: stop grad is disabled but some stop grad configurations are used"
+        )
 
     objective_weights: tuple[float, ...] | None = None
     contribution_tgt_tokens = tgt_tokens
@@ -278,7 +279,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         except Exception as e:
             print(e)
             max_token_expected = max(focus_positions) + 1
-            raise ValueError(f"failed to get labels for {max_token_expected} tokens.")
+            raise ValueError(
+                f"failed to get labels for {max_token_expected} tokens."
+            ) from e
 
     if probe_only:
         if len(cis) != 1:
@@ -310,10 +313,8 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
 
         # core HF model has stop gradient replacement model
         if not disable_stop_grad:
-            try:
+            with suppress(Exception):
                 _ = revert_stop_nonlinear_grad(model)
-            except Exception:
-                pass
             model = stop_nonlinear_grad(
                 model,
                 use_relp_grad=use_relp_grad,
@@ -745,7 +746,7 @@ def get_all_pairs_cl_ja_effects_with_attributions(
 def _get_cl_ja_based_edges(
     model,
     tokenizer: PreTrainedTokenizer,
-    cis: List[list[int]],
+    cis: list[list[int]],
     mlp_final_attributions: torch.Tensor,
     embed_final_attributions: torch.Tensor,
     global_important_neurons_mask: torch.Tensor,
@@ -757,13 +758,13 @@ def _get_cl_ja_based_edges(
     edge_threshold: float | None = None,
     topk: int | None = None,
     # we use these lists to trace circuit effects
-    keep_tokens: List[int] | None = None,  # the token positions to trace circuits
-    src_tokens: List[int] | None = None,  # the token positions to trace from
-    tgt_tokens: List[int] | None = None,  # the token positions to trace to
+    keep_tokens: list[int] | None = None,  # the token positions to trace circuits
+    src_tokens: list[int] | None = None,  # the token positions to trace from
+    tgt_tokens: list[int] | None = None,  # the token positions to trace to
     focus_positions: (
-        List[int] | None
+        list[int] | None
     ) = None,  # the token positions to consider the logits effect
-    focus_logits: List[int] | None = None,  # the token vocab ids to trace logits
+    focus_logits: list[int] | None = None,  # the token vocab ids to trace logits
     return_cross_edges_only: bool = True,  # only return cross tgt -> src token edges only
     return_absolute: bool = False,
     # we can skip early/late layers by setting these two
@@ -809,9 +810,9 @@ def _get_cl_ja_based_edges(
             return (source, target) in frozen_edges
         if edge_threshold is not None and weight.abs().max() < edge_threshold:
             return False
-        if parent_threshold is not None and weight.abs().max() < parent_threshold:
-            return False
-        return True
+        return not (
+            parent_threshold is not None and weight.abs().max() < parent_threshold
+        )
 
     # caching activations
     if verbose:
@@ -1056,7 +1057,7 @@ def _get_cl_ja_based_edges(
         final_attributions = embed_final_attributions[
             :, src_token, :
         ]  # (batch, logits)
-        for token_type in set([tokens[t][src_token] for t in range(len(tokens))]):
+        for token_type in {tokens[t][src_token] for t in range(len(tokens))}:
             relevant_idxs = [
                 batch_idx
                 for batch_idx in range(len(tokens))
@@ -1558,40 +1559,39 @@ def _compute_cl_ja_layer_jacobian(
             tgt_acts,
         )  # (batch, n_src, n_tgt), (batch, n_src), (batch, n_tgt)
 
-    else:
-        # For regular attribution: gradient * activation
-        jvps = []
-        for src_pos, src_neuron in src_neuron_list:
-            jvps.append(
-                src_ja[:, :, src_pos, src_neuron]
-                * src_acts_full[:, src_pos, src_neuron][None, :].detach()
-            )  # (n_tgt, batch) * (1, batch) -> (n_tgt, batch)
-        jvps = torch.stack(jvps, dim=-1)  # (n_tgt, batch, n_src)
-        jvps = jvps.permute(1, 2, 0).contiguous()  # (batch, n_src, n_tgt)
-        del src_ja
+    # For regular attribution: gradient * activation
+    jvps = []
+    for src_pos, src_neuron in src_neuron_list:
+        jvps.append(
+            src_ja[:, :, src_pos, src_neuron]
+            * src_acts_full[:, src_pos, src_neuron][None, :].detach()
+        )  # (n_tgt, batch) * (1, batch) -> (n_tgt, batch)
+    jvps = torch.stack(jvps, dim=-1)  # (n_tgt, batch, n_src)
+    jvps = jvps.permute(1, 2, 0).contiguous()  # (batch, n_src, n_tgt)
+    del src_ja
 
-        # tgt_activations = (n_tgt, batch)
-        tgt_activations = tgt_activations.detach().permute(1, 0)  # (batch, n_tgt)
-        # Use adaptive epsilon for numerical stability (matching CLSO approach)
-        eps = tgt_activations.abs().mean() * 1e-6
-        relative_attribution = jvps / (
-            tgt_activations[:, None, :] + eps
-        )  # (batch, n_src, n_tgt) / (batch, 1, n_tgt)
-        del jvps
+    # tgt_activations = (n_tgt, batch)
+    tgt_activations = tgt_activations.detach().permute(1, 0)  # (batch, n_tgt)
+    # Use adaptive epsilon for numerical stability (matching CLSO approach)
+    eps = tgt_activations.abs().mean() * 1e-6
+    relative_attribution = jvps / (
+        tgt_activations[:, None, :] + eps
+    )  # (batch, n_src, n_tgt) / (batch, 1, n_tgt)
+    del jvps
 
-        # remove all hooks
-        for handle in handles:
-            handle.remove()
+    # remove all hooks
+    for handle in handles:
+        handle.remove()
 
-        # revert stop grads
-        if not disable_stop_grad:
-            model = layerwise_revert_stop_nonlinear_grad(
-                model,
-                src_layer,
-                tgt_layer,
-            )
+    # revert stop grads
+    if not disable_stop_grad:
+        model = layerwise_revert_stop_nonlinear_grad(
+            model,
+            src_layer,
+            tgt_layer,
+        )
 
-        return relative_attribution  # shape: (batch, n_src, n_tgt)
+    return relative_attribution  # shape: (batch, n_src, n_tgt)
 
 
 def _compute_cl_ja_layer_jacobian_ig(
@@ -1627,7 +1627,7 @@ def _compute_cl_ja_layer_jacobian_ig(
     src_acts_steps = []
     tgt_acts_steps = []
 
-    for step in range(0, ig_steps + 1):
+    for step in range(ig_steps + 1):
         alpha = step / ig_steps
 
         grads, src_acts, tgt_acts = _compute_cl_ja_layer_jacobian(

@@ -4,9 +4,8 @@ from copy import deepcopy
 from dataclasses import replace
 
 import pytest
-
-from scripts.bonafide.topk_manifest import validate_topk_manifest
 from scripts.bonafide.runner import validate_runtime_topk_trace_against_item
+from scripts.bonafide.topk_manifest import validate_topk_manifest
 from tests.test_bonafide_benchmark import _single_item_manifest
 from tests.test_teacher_forced_trace import _topk_trace
 

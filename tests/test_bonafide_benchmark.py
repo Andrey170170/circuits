@@ -10,8 +10,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 import torch
-
-from circuits.tracing.artifact import DATA_FILENAME, load_compact_trace, save_compact_trace
+from circuits.tracing.artifact import (
+    DATA_FILENAME,
+    load_compact_trace,
+    save_compact_trace,
+)
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.trace import CircuitData
 from scripts.bonafide.manifest import (
@@ -30,10 +33,10 @@ from scripts.bonafide.runner import (
     run_wave,
     runtime_artifact_identity,
     trace_warmup_applies,
+    validate_run_config,
+    validate_runtime_trace_against_item,
     validate_target_selection,
     validate_wave_sampling_design,
-    validate_runtime_trace_against_item,
-    validate_run_config,
     wave_stop_reason,
 )
 
@@ -49,7 +52,9 @@ class FakeChatTokenizer:
         self, messages, *, add_generation_prompt: bool, chat_template: str
     ) -> list[int]:
         del chat_template
-        prompt = next(message["content"] for message in messages if message["role"] == "user")
+        prompt = next(
+            message["content"] for message in messages if message["role"] == "user"
+        )
         prefix = [1, *[100 + ord(char) for char in prompt], 2]
         assistant = [message for message in messages if message["role"] == "assistant"]
         if add_generation_prompt:
@@ -90,7 +95,9 @@ def test_dedupe_preserves_all_annotation_provenance(tmp_path: Path) -> None:
         "question_id": "another-question",
         "label_type": "FAITHFUL_COT",
     }
-    _write_csv(csv_path, [duplicate_a, duplicate_b, _row(3, prompt="q", response="other")])
+    _write_csv(
+        csv_path, [duplicate_a, duplicate_b, _row(3, prompt="q", response="other")]
+    )
 
     examples = load_deduplicated_examples(csv_path)
 
@@ -101,7 +108,9 @@ def test_dedupe_preserves_all_annotation_provenance(tmp_path: Path) -> None:
     assert merged.label_types == ("FAITHFUL_COT", "FAITHFUL_STEP")
 
 
-def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: Path) -> None:
+def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(
+    tmp_path: Path,
+) -> None:
     csv_path = tmp_path / "bonafide.csv"
     rows = [
         _row(index, prompt=f"p{index}", response="x" * length)
@@ -136,7 +145,9 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
     wave1, wave2, wave2b, *wave2c_waves = manifest["waves"]
     assert wave1["wave_id"] == "wave1-mixed-final-token"
     assert len(wave1["items"]) == 4
-    assert any("anchor-8" in item["example"]["annotation_row_ids"] for item in wave1["items"])
+    assert any(
+        "anchor-8" in item["example"]["annotation_row_ids"] for item in wave1["items"]
+    )
     for item in wave1["items"]:
         assert item["target_selection"]["response_token_positions"] == [
             item["response_token_count"] - 1
@@ -154,8 +165,7 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
     ]
     assert wave2["items"][0]["objective"]["benchmark_only_multi_target"] is False
     assert all(
-        item["objective"]["benchmark_only_multi_target"]
-        for item in wave2["items"][1:]
+        item["objective"]["benchmark_only_multi_target"] for item in wave2["items"][1:]
     )
 
     assert wave2b["wave_id"] == "wave2b-independent-target-positions"
@@ -168,18 +178,19 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
         item["objective"]["benchmark_only_multi_target"] is False
         for item in wave2b["items"]
     )
-    assert {
-        item["example"]["example_id"] for item in wave2b["items"]
-    } == {wave2["items"][0]["example"]["example_id"]}
+    assert {item["example"]["example_id"] for item in wave2b["items"]} == {
+        wave2["items"][0]["example"]["example_id"]
+    }
     assert len({item["artifact_id"] for item in wave2b["items"]}) == 16
     assert manifest["execution_contract"]["model_load_scope"] == "selected_wave"
 
     assert len(wave2c_waves) == 3
-    assert all(wave["wave_id"].startswith("wave2c-stratified-independent-") for wave in wave2c_waves)
+    assert all(
+        wave["wave_id"].startswith("wave2c-stratified-independent-")
+        for wave in wave2c_waves
+    )
     assert all(len(wave["items"]) == 8 for wave in wave2c_waves)
-    assert {
-        wave["items"][0]["example"]["example_id"] for wave in wave2c_waves
-    } == {
+    assert {wave["items"][0]["example"]["example_id"] for wave in wave2c_waves} == {
         item["example"]["example_id"] for item in wave1["items"]
     } - {wave2["items"][0]["example"]["example_id"]}
     for wave in wave2c_waves:
@@ -192,7 +203,11 @@ def test_manifest_uses_exact_chat_template_lengths_and_separate_waves(tmp_path: 
             assert item["target_selection"]["width"] == 1
             assert item["objective"]["benchmark_only_multi_target"] is False
             assert sampling["stratum_index"] == stratum_index
-            assert sampling["stratum_start"] <= position < sampling["stratum_end_exclusive"]
+            assert (
+                sampling["stratum_start"]
+                <= position
+                < sampling["stratum_end_exclusive"]
+            )
             assert sampling["stratum_size"] == (
                 sampling["stratum_end_exclusive"] - sampling["stratum_start"]
             )
@@ -248,9 +263,9 @@ def test_sample_seed_changes_source_artifact_identity_at_same_positions(
     seed_a = build_manifest(**kwargs, wave2c_seed="seed-a")["waves"][3]["items"]
     seed_b = build_manifest(**kwargs, wave2c_seed="seed-b")["waves"][3]["items"]
 
-    assert [item["target_selection"]["response_token_positions"] for item in seed_a] == [
-        item["target_selection"]["response_token_positions"] for item in seed_b
-    ]
+    assert [
+        item["target_selection"]["response_token_positions"] for item in seed_a
+    ] == [item["target_selection"]["response_token_positions"] for item in seed_b]
     assert [item["artifact_id"] for item in seed_a] != [
         item["artifact_id"] for item in seed_b
     ]
@@ -362,7 +377,9 @@ def test_stratified_random_selection_is_stable_and_records_sampling_design() -> 
         seed="another-seed",
         example_id="bf-example",
     )
-    assert [(item["stratum_start"], item["stratum_end_exclusive"]) for item in selections] == [
+    assert [
+        (item["stratum_start"], item["stratum_end_exclusive"]) for item in selections
+    ] == [
         (0, 21),
         (21, 42),
         (42, 63),
@@ -400,7 +417,10 @@ def test_dry_run_selects_only_requested_wave(tmp_path: Path) -> None:
     csv_path = tmp_path / "bonafide.csv"
     _write_csv(
         csv_path,
-        [_row(index, prompt=f"p{index}", response="x" * length) for index, length in enumerate((8, 40), 1)],
+        [
+            _row(index, prompt=f"p{index}", response="x" * length)
+            for index, length in enumerate((8, 40), 1)
+        ],
     )
     manifest = build_manifest(
         csv_path=csv_path,
@@ -455,15 +475,13 @@ def test_run_config_normalizes_and_validates_trace_warmup() -> None:
     assert not trace_warmup_applies(policy, "wave2b-independent-target-positions")
 
     config["trace_warmup"]["mode"] = "partial_forward"
-    with pytest.raises(ValueError, match="trace_warmup.mode"):
+    with pytest.raises(ValueError, match=r"trace_warmup\.mode"):
         validate_run_config(config)
 
 
 def _valid_runtime_trace(*, response_count: int = 8, token_id: int = 77) -> CircuitData:
     return CircuitData(
-        df_node=pd.DataFrame(
-            {"attribution": [0.1], "activation": [0.2], "layer": [0]}
-        ),
+        df_node=pd.DataFrame({"attribution": [0.1], "activation": [0.2], "layer": [0]}),
         df_edge=pd.DataFrame(
             {"attribution": [0.3], "weight": [0.4], "layer": ["0->1"]}
         ),
@@ -523,7 +541,7 @@ def test_resume_verifies_payload_checksum_before_skipping(tmp_path: Path) -> Non
 
     with (artifact / DATA_FILENAME).open("ab") as handle:
         handle.write(b"corrupt")
-    with pytest.raises(ValueError, match="size mismatch|checksum mismatch"):
+    with pytest.raises(ValueError, match=r"size mismatch|checksum mismatch"):
         _completed_artifact_matches(artifact, identity)
 
 
@@ -676,14 +694,20 @@ def test_runner_persists_instrumentation_in_success_record_and_artifact(
 
     assert records[0]["status"] == "complete"
     assert records[0]["instrumentation"]["counters"]["probe"] == 5
-    summary_record = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[0])
+    summary_record = json.loads(
+        (tmp_path / "summary.jsonl").read_text().splitlines()[0]
+    )
     assert summary_record["instrumentation"]["schema_version"].endswith("v1")
     assert summary_record["target_sampling"]["stratum_index"] == 0
     assert summary_record["target_sampling"]["selection_probability"] == 0.125
     loaded = load_compact_trace(records[0]["artifact_path"])
     assert loaded.metrics["instrumentation"]["counters"]["probe"] == 5
-    assert loaded.circuit_data.trace_metadata["instrumentation"]["counters"]["probe"] == 5
-    assert loaded.manifest["source_target_selection"]["sampling"]["projection_weight"] == 8
+    assert (
+        loaded.circuit_data.trace_metadata["instrumentation"]["counters"]["probe"] == 5
+    )
+    assert (
+        loaded.manifest["source_target_selection"]["sampling"]["projection_weight"] == 8
+    )
 
 
 def test_runner_discards_full_warmup_then_measures_every_planned_item(
@@ -757,7 +781,10 @@ def test_runner_discards_full_warmup_then_measures_every_planned_item(
     assert records[0]["warmup"]["source_artifact_id"] == "source-trace-1"
     assert records[0]["warmup"]["wall_seconds"] >= 0
     assert records[1]["trace_warmup"]["status"] == "complete"
-    summary = [json.loads(line) for line in (tmp_path / "summary.jsonl").read_text().splitlines()]
+    summary = [
+        json.loads(line)
+        for line in (tmp_path / "summary.jsonl").read_text().splitlines()
+    ]
     assert summary[0]["record_type"] == "discarded_trace_warmup"
     assert summary[1]["trace_warmup"]["source_artifact_id"] == "source-trace-1"
     loaded = load_compact_trace(records[1]["artifact_path"])
@@ -827,9 +854,10 @@ def test_filtered_wave_uses_fixed_first_wave_item_as_warmup_source(
         "artifact_identity"
     ]
     assert identity["trace_warmup"]["source_artifact_id"] == fixed_source["artifact_id"]
-    assert identity["trace_warmup"]["source_target_selection"] == fixed_source[
-        "target_selection"
-    ]
+    assert (
+        identity["trace_warmup"]["source_target_selection"]
+        == fixed_source["target_selection"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -948,7 +976,9 @@ def test_runner_retains_partial_instrumentation_in_failure_record(
 
     assert records[0]["status"] == expected_status
     assert records[0]["instrumentation"]["counters"]["selected_neuron_count"] == 12
-    summary_record = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[0])
+    summary_record = json.loads(
+        (tmp_path / "summary.jsonl").read_text().splitlines()[0]
+    )
     assert summary_record["instrumentation"]["counters"]["selected_neuron_count"] == 12
 
 

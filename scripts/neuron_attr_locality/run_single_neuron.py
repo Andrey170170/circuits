@@ -20,6 +20,13 @@ import time
 from pathlib import Path
 
 import torch
+from circuits.tracing.grad import (
+    remove_forward_hooks,
+    revert_stop_nonlinear_grad,
+    stop_nonlinear_grad,
+)
+from circuits.tracing.trace import get_chat_template
+from circuits.utils.constants import RESULTS_DIR
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -30,15 +37,6 @@ sys.stdout.reconfigure(line_buffering=True)
 def log(msg: str):
     t = time.strftime("%H:%M:%S")
     print(f"[{t}] {msg}")
-
-
-from circuits.tracing.grad import (
-    remove_forward_hooks,
-    revert_stop_nonlinear_grad,
-    stop_nonlinear_grad,
-)
-from circuits.tracing.trace import get_chat_template
-from circuits.utils.constants import RESULTS_DIR
 
 
 def prepare_sample(
@@ -205,7 +203,7 @@ def main():
 
         activation_cache: dict[str, torch.Tensor] = {}
 
-        def _hook(module, input, output):
+        def _hook(module, input, output, activation_cache=activation_cache):
             activation_cache["act"] = input[0].detach().cpu()
 
         h = model.model.layers[target_layer].mlp.down_proj.register_forward_hook(_hook)
@@ -238,7 +236,7 @@ def main():
                         heapq.heapreplace(heap, (signed_act, heap_counter, info))
                     heap_counter += 1
 
-        del activation_cache
+        activation_cache.clear()
         torch.cuda.empty_cache()
 
     for sample_idx, sample in enumerate(ds):
@@ -278,7 +276,7 @@ def main():
     # After stop_nonlinear_grad, mlp is wrapped: real down_proj is at mlp.mlp.down_proj
     all_results = []
 
-    for rank, (abs_act, _counter, info) in enumerate(heap_entries):
+    for rank, (_abs_act, _counter, info) in enumerate(heap_entries):
         input_ids_list = info["input_ids_list"]
         token_pos = info["token_pos"]
         seq_len = len(input_ids_list)
@@ -300,7 +298,7 @@ def main():
         # Forward pass with hook to cache the target neuron's activation (in graph)
         neuron_act_cache: dict[str, torch.Tensor] = {}
 
-        def _cache_hook(module, input, output):
+        def _cache_hook(module, input, output, neuron_act_cache=neuron_act_cache):
             neuron_act_cache["act"] = input[0]  # (B, T, D) — keep in graph
 
         h = model.model.layers[target_layer].mlp.mlp.down_proj.register_forward_hook(_cache_hook)
@@ -348,7 +346,8 @@ def main():
 
         # Clean up
         remove_forward_hooks(model.model.layers[target_layer].mlp.mlp.down_proj)
-        del out, logits, embeds, neuron_act_cache, mlp_act_full
+        del out, logits, embeds, mlp_act_full
+        neuron_act_cache.clear()
         torch.cuda.empty_cache()
 
         result = {

@@ -10,7 +10,6 @@ from pathlib import Path
 
 from pydantic import BaseModel
 from torch.utils.data import Dataset
-from tqdm import tqdm
 from util.chat_input import ChatInput
 from util.subject import Subject
 
@@ -150,7 +149,7 @@ class WikipediaAttributeDataset(Dataset[tuple[ChatInput, dict[str, list[str]]]])
     def collate_fn(
         self, batch: list[tuple[ChatInput, dict[str, list[str]]]]
     ) -> tuple[list[ChatInput], list[dict[str, list[str]]]]:
-        cis, attributes = zip(*batch)
+        cis, attributes = zip(*batch, strict=True)
         return cis, attributes
 
 
@@ -158,7 +157,7 @@ def get_wikipedia_dataset_by_split(
     subject: Subject,
     question_types: list[str],
     only_good=False,
-    custom_path: str = None,
+    custom_path: str | None = None,
     seed=42,
 ) -> dict[str, WikipediaAttributeDataset]:
     datapoints = []
@@ -175,7 +174,7 @@ def get_wikipedia_dataset_by_split(
                 len(
                     [
                         x
-                        for x in raw_datapoint["latent_attributes"].keys()
+                        for x in raw_datapoint["latent_attributes"]
                         if x not in question_types
                     ]
                 )

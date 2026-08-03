@@ -5,7 +5,6 @@ import sys
 
 import numpy as np
 import pytest
-
 from scripts.bonafide.candidate_union_c2_analysis import (
     RetrievalRecord,
     TargetProfile,

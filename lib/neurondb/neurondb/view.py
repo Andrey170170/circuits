@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from time import time
-from typing import Any, Iterable, Literal, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import torch
+from util.chat_input import ChatConversation, ModelInput, make_chat_input
+from util.subject import Subject
+from util.types import NDFloatArray, NDIntArray
+
 from neurondb.filters import (
     FILTER_QTILE_TYPE,
     QTILE_KEYS,
@@ -30,9 +35,6 @@ from neurondb.filters import (
 )
 from neurondb.postgres import DBManager
 from neurondb.schemas import SQLANeuron, SQLANeuronDescription, SQLANeuronQuantiles
-from util.chat_input import ChatConversation, ModelInput, make_chat_input
-from util.subject import Subject
-from util.types import NDFloatArray, NDIntArray
 
 ###############
 # Neuron View #
@@ -74,7 +76,7 @@ class NeuronView:
         self._attrs_LTfTsI: dict[tuple[int, int, int | None], list[AttributionResult]] = {}
 
         # Cache percentiles in memory (takes <10MB each)
-        self._percentiles_PLI: dict[str, NDFloatArray] = percentiles_PLI or dict()
+        self._percentiles_PLI: dict[str, NDFloatArray] = percentiles_PLI or {}
         missing_pctiles = cast(
             list[QTILE_KEYS_TYPE], [p for p in QTILE_KEYS if p not in self._percentiles_PLI]
         )
@@ -102,7 +104,7 @@ class NeuronView:
         results = {p: np.full((subject.L, subject.I), np.nan) for p in percentiles}
         for row in pctiles:
             l, n, *values = row
-            for p, v in zip(percentiles, values):
+            for p, v in zip(percentiles, values, strict=True):
                 results[p][l, n] = v
 
         print(" Done")
@@ -144,13 +146,10 @@ class NeuronView:
         if kwargs.get("stream", False):
 
             def _generator():
-                for update in cc.send_message(*args, **kwargs):
-                    yield update
+                yield from cc.send_message(*args, **kwargs)
 
             return _generator()
-        else:
-            ans = cc.send_message(*args, **kwargs)
-            return ans
+        return cc.send_message(*args, **kwargs)
 
     def _update_activations(self):
         if self._model_input.is_empty(self._subject):
@@ -222,7 +221,7 @@ class NeuronView:
                     indices.cpu().numpy(), all_activations_t[:, PREFIX_LEN:].shape  # type: ignore
                 ),
             )
-            indices_N3 = np.asarray(indices_3N).T + [0, PREFIX_LEN, 0]
+            indices_N3 = np.add(np.asarray(indices_3N).T, [0, PREFIX_LEN, 0])
 
             self._attrs_LTfTsI[(target_token_idx, target_token_id, distractor_token_id)] = [
                 AttributionResult(
@@ -313,12 +312,12 @@ class NeuronView:
             desc = neurons_metadata_dict.general[(n.layer, n.neuron)].descriptions[n.polarity]
             if desc is None:
                 return None
-            else:
-                return getattr(desc, description_version)
+            return getattr(desc, description_version)
 
         def _get_activation(n: Neuron):
             if neurons_metadata_dict.run is not None and n.token is not None:
                 return neurons_metadata_dict.run[(n.layer, n.neuron, n.token)].activation
+            return None
 
         def _get_activation_normalized(n: Neuron):
             quantiles = neurons_metadata_dict.general[(n.layer, n.neuron)].activation_percentiles
@@ -334,16 +333,14 @@ class NeuronView:
                     top_quantile > 0
                 ):
                     return activation / top_quantile
-                elif (activation > 0) == (bottom_quantile > 0) and (activation > 0) != (
+                if (activation > 0) == (bottom_quantile > 0) and (activation > 0) != (
                     top_quantile > 0
                 ):
                     return activation / bottom_quantile
                 # If both quantiles have the same sign relationship with activation, choose the closer one
-                else:
-                    if abs(activation - top_quantile) < abs(activation - bottom_quantile):
-                        return activation / top_quantile
-                    else:
-                        return activation / bottom_quantile
+                if abs(activation - top_quantile) < abs(activation - bottom_quantile):
+                    return activation / top_quantile
+                return activation / bottom_quantile
 
             return None
 
@@ -366,7 +363,7 @@ class NeuronView:
     @staticmethod
     def load_neurons(filepath: str, with_tokens: bool = True):
         neurons: list[Neuron] = []
-        with open(filepath, "r") as f:
+        with open(filepath) as f:
             for line in f:
                 d = json.loads(line)
                 if not with_tokens:
@@ -442,9 +439,9 @@ class NeuronView:
 
         # Collect attribution data as requested by the filter
         if self._filter is not None:
-            attributed_tokens = set(
+            attributed_tokens = {
                 f.target_token_idx for f in self._filter.get_attribution_filters()
-            )
+            }
             attrs = [
                 self.get_attribution(target_token_idx) for target_token_idx in attributed_tokens
             ]
@@ -473,7 +470,7 @@ class NeuronView:
         self, neurons: list[Neuron]
     ) -> dict[tuple[int, int], NeuronGeneralMetadata]:
         # Retrieve from DB
-        unique_neuron_tuples = list(set((n.layer, n.neuron) for n in neurons))
+        unique_neuron_tuples = list({(n.layer, n.neuron) for n in neurons})
         descs = self._db.get(
             [
                 SQLANeuron.layer,
@@ -551,15 +548,13 @@ class NeuronView:
             neurons = filter.get_matching_ids(self._db, restrict_to_neurons)
         elif isinstance(filter, TokenFilter):
             if restrict_to_neurons is None:
-                print(f"Warning: applying TokenFilter first is likely very slow")
-                neurons = set(
-                    [
-                        Neuron(layer=l, neuron=n, token=t)
-                        for l in range(self._subject.L)
-                        for n in range(self._subject.I)
-                        for t in filter.tokens
-                    ]
-                )
+                print("Warning: applying TokenFilter first is likely very slow")
+                neurons = {
+                    Neuron(layer=l, neuron=n, token=t)
+                    for l in range(self._subject.L)
+                    for n in range(self._subject.I)
+                    for t in filter.tokens
+                }
             else:
                 neurons = set()
                 for n in restrict_to_neurons:

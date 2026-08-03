@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from circuits.analysis.bonafide.canonical import load_json_object
 from circuits.analysis.bonafide.cluster_execution import fit_clustering_task

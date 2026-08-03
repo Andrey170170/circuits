@@ -8,6 +8,8 @@ from collections import defaultdict
 from typing import Any
 
 import pandas as pd
+from tqdm import tqdm
+
 from circuits.analysis.cluster import NeuronId
 from circuits.descriptions.api_backend import (
     AnthropicAttrExplainer,
@@ -34,7 +36,6 @@ from circuits.descriptions.vllm_backend import (
     generate_attr_explanations,
     score_attr_explanations,
 )
-from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -128,7 +129,9 @@ def build_neuron_activation_records(
         neuron_data[neuron_id] = activation_records
 
         ci_mapping: dict[int, ActivationRecordWithContrib] = {}
-        for (ci_idx, _, _), record in zip(neuron_examples, activation_records):
+        for (ci_idx, _, _), record in zip(
+            neuron_examples, activation_records, strict=True
+        ):
             ci_mapping[ci_idx] = record
         neuron_ci_mapping[neuron_id] = ci_mapping
 
@@ -670,6 +673,7 @@ async def summarize_clusters_rich(
         {cluster_name: short_label}
     """
     from anthropic import AsyncAnthropic
+
     from circuits.descriptions.prompts import (
         CLUSTER_ATTR_CONTRIB_ONLY_SUMMARY_PROMPT,
         CLUSTER_NEURONS_ONLY_SUMMARY_PROMPT,

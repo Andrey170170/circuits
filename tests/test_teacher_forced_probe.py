@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 import copy
-import json
 import inspect
+import json
 import subprocess
 from types import SimpleNamespace
 
 import pytest
 import torch
-
+from circuits.tracing.candidates import CandidateLogitAxis
 from circuits.tracing.clja import (
     ADAGConfig,
     CLJAProbeSelection,
-    get_all_pairs_cl_ja_effects_with_attributions,
     _selected_probe_occurrences,
+    get_all_pairs_cl_ja_effects_with_attributions,
 )
-from circuits.tracing.candidates import CandidateLogitAxis
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.probe_artifact import (
     METRICS_FILENAME,
@@ -31,12 +30,12 @@ from circuits.tracing.trace import (
     PROBE_OCCURRENCE_SCHEMA_VERSION,
     PROBE_SCHEMA_VERSION,
     TeacherForcedProbeResult,
+    _stable_json_hash,
     probe_teacher_forced_response,
     validate_teacher_forced_probe_result,
-    _stable_json_hash,
 )
-from tests.test_teacher_forced_trace import FakeChatTokenizer, FakeModel
 from tests.test_bonafide_benchmark import _config, _single_item_manifest
+from tests.test_teacher_forced_trace import FakeChatTokenizer, FakeModel
 
 
 def _predictor_without_clock(snapshot: dict) -> dict:
@@ -86,18 +85,20 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(
         config=SimpleNamespace(num_hidden_layers=layers, _name_or_path="fake/model"),
         to=lambda _device: model,
     )
-    common = dict(
-        model=model,
-        tokenizer=FakeChatTokenizer(),
-        cis=[[1, 2, 3, 4]],
-        config=ADAGConfig(device="cpu", disable_stop_grad=True, skip_attr_contrib=True),
-        src_tokens=[0, 1, 2],
-        tgt_tokens=[2],
-        keep_tokens=[0, 1, 2, 3],
-        attention_masks=[[1, 1, 1, 1]],
-        focus_positions=[2],
-        focus_logits=[4],
-    )
+    common = {
+        "model": model,
+        "tokenizer": FakeChatTokenizer(),
+        "cis": [[1, 2, 3, 4]],
+        "config": ADAGConfig(
+            device="cpu", disable_stop_grad=True, skip_attr_contrib=True
+        ),
+        "src_tokens": [0, 1, 2],
+        "tgt_tokens": [2],
+        "keep_tokens": [0, 1, 2, 3],
+        "attention_masks": [[1, 1, 1, 1]],
+        "focus_positions": [2],
+        "focus_logits": [4],
+    }
     probe_instrumentation = TraceInstrumentation(device="cpu")
     selection = get_all_pairs_cl_ja_effects_with_attributions(
         **common, instrumentation=probe_instrumentation, probe_only=True
@@ -152,13 +153,12 @@ def test_low_level_candidate_axis_is_distinct_from_target_positions(
     monkeypatch.setattr(
         clja_module, "_get_grad_attributions_from_logits", fake_attribution
     )
+
     def fake_mask(**kwargs):
         captured_mask.update(kwargs)
         return mask
 
-    monkeypatch.setattr(
-        clja_module, "_get_global_important_neurons_mask", fake_mask
-    )
+    monkeypatch.setattr(clja_module, "_get_global_important_neurons_mask", fake_mask)
 
     def fake_graph(*_args, **kwargs):
         captured_graph.update(kwargs)
@@ -198,9 +198,7 @@ def test_low_level_candidate_axis_is_distinct_from_target_positions(
     assert captured_attribution["focus_positions"] == [2, 2]
     assert captured_attribution["focus_logits"] == [[7, 8]]
     assert captured_attribution["objective_weights"] == (1.0, -1.0)
-    assert captured_mask["absolute_attribution_threshold"].item() == pytest.approx(
-        0.2
-    )
+    assert captured_mask["absolute_attribution_threshold"].item() == pytest.approx(0.2)
     assert captured_graph["tgt_tokens"] == [2, 2]
     assert captured_graph["candidate_objective_weights"] == (1.0, -1.0)
 
@@ -247,19 +245,19 @@ def _install_stop_grad_probe_fakes(monkeypatch, *, attribution_error=None):
         "_get_global_important_neurons_mask",
         lambda **_kwargs: mask,
     )
-    kwargs = dict(
-        model=model,
-        tokenizer=FakeChatTokenizer(),
-        cis=[[1, 2]],
-        config=ADAGConfig(device="cpu"),
-        src_tokens=[0],
-        tgt_tokens=[0],
-        keep_tokens=[0],
-        attention_masks=[[1, 1]],
-        focus_positions=[0],
-        focus_logits=[2],
-        probe_only=True,
-    )
+    kwargs = {
+        "model": model,
+        "tokenizer": FakeChatTokenizer(),
+        "cis": [[1, 2]],
+        "config": ADAGConfig(device="cpu"),
+        "src_tokens": [0],
+        "tgt_tokens": [0],
+        "keep_tokens": [0],
+        "attention_masks": [[1, 1]],
+        "focus_positions": [0],
+        "focus_logits": [2],
+        "probe_only": True,
+    }
     return model, cleanup_states, kwargs
 
 
@@ -551,7 +549,7 @@ def test_probe_artifact_roundtrip_and_corruption_detection(tmp_path) -> None:
 
     with (destination / PROBE_FILENAME).open("a", encoding="utf-8") as handle:
         handle.write(" ")
-    with pytest.raises(ValueError, match="size mismatch|checksum mismatch"):
+    with pytest.raises(ValueError, match=r"size mismatch|checksum mismatch"):
         validate_probe_artifact_integrity(destination)
 
 
@@ -565,7 +563,7 @@ def test_probe_artifact_detects_metrics_corruption(tmp_path) -> None:
     with (destination / METRICS_FILENAME).open("a", encoding="utf-8") as handle:
         handle.write(" ")
     with pytest.raises(
-        ValueError, match="metrics size mismatch|metrics checksum mismatch"
+        ValueError, match=r"metrics size mismatch|metrics checksum mismatch"
     ):
         validate_probe_artifact_integrity(destination)
 

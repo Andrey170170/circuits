@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 BASIS_KEY_SCHEMA = "adag.bonafide.signed-basis-key.v1"
 OCCURRENCE_KEY_SCHEMA = "adag.bonafide.occurrence-key.v1"
@@ -26,9 +27,11 @@ def _integer(value: object, field: str, *, minimum: int) -> int:
 
 
 def _polarity(value: object) -> Polarity:
-    if value not in {"+", "-"}:
-        raise ValueError("polarity must be '+' or '-'")
-    return value
+    if value == "+":
+        return "+"
+    if value == "-":
+        return "-"
+    raise ValueError("polarity must be '+' or '-'")
 
 
 def polarity_from_activation(value: object) -> Polarity:
@@ -81,7 +84,7 @@ class SignedBasisKey:
         }
 
     @classmethod
-    def from_record(cls, record: Mapping[str, Any]) -> "SignedBasisKey":
+    def from_record(cls, record: Mapping[str, Any]) -> SignedBasisKey:
         if record.get("schema_version") != BASIS_KEY_SCHEMA:
             raise ValueError("unsupported signed-basis key schema")
         return cls(
@@ -123,7 +126,7 @@ class OccurrenceKey:
         }
 
     @classmethod
-    def from_record(cls, record: Mapping[str, Any]) -> "OccurrenceKey":
+    def from_record(cls, record: Mapping[str, Any]) -> OccurrenceKey:
         if record.get("schema_version") != OCCURRENCE_KEY_SCHEMA:
             raise ValueError("unsupported occurrence-key schema")
         return cls(

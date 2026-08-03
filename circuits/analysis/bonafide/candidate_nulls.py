@@ -44,7 +44,7 @@ def _validated_vector(value: Sequence[float], field: str) -> Vector5:
         _finite_float(component, f"{field}[{index}]")
         for index, component in enumerate(value)
     )
-    return values  # type: ignore[return-value]
+    return values[0], values[1], values[2], values[3], values[4]
 
 
 def _l2_mass(vector: Vector5) -> float:

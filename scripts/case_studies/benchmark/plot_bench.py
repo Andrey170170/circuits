@@ -38,15 +38,15 @@ def main():
         with open(path) as f:
             data = json.load(f)
         gpu_label = f"{data['num_gpus']} GPU"
-        for run in data["runs"]:
-            rows.append(
-                {
+        rows.extend(
+            {
                     "batch_size": run["batch_size"],
                     "per_prompt_s": run["per_prompt_s"],
                     "peak_gpu_gb": run["peak_gpu_gb"] if run["peak_gpu_gb"] >= 0 else None,
                     "gpus": gpu_label,
-                }
-            )
+            }
+            for run in data["runs"]
+        )
 
     df = pd.DataFrame(rows)
     out = Path(args.output_dir)

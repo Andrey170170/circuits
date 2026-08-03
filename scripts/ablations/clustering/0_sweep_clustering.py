@@ -12,7 +12,12 @@ import numpy as np
 from circuits.analysis.circuit_ops import Circuit
 from circuits.utils.constants import RESULTS_DIR
 from numpy.typing import NDArray
-from sklearn.cluster import AgglomerativeClustering, BisectingKMeans, KMeans, SpectralClustering
+from sklearn.cluster import (
+    AgglomerativeClustering,
+    BisectingKMeans,
+    KMeans,
+    SpectralClustering,
+)
 
 
 def cluster_balance_metrics(cluster_col: list[str], n_clusters: int) -> dict:

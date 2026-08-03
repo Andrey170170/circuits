@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 from circuits.analysis.bonafide.canonical import canonical_sha256, write_hashed_json
 from circuits.analysis.bonafide.identity import build_circuit_input_refs

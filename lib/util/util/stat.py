@@ -1,6 +1,6 @@
-from typing import Dict, List
 
 import torch
+
 from util.malloc import malloc_cpu_if_None
 from util.parallel import parallelize_work
 
@@ -59,8 +59,11 @@ def acc_covariance(
     shared_counts_GB: torch.Tensor | None = None,
     shared_means_GBD: torch.Tensor | None = None,
     shared_cmom2s_GBDD: torch.Tensor | None = None,
-    use_gpus: List[int] = list(range(torch.cuda.device_count())),
+    use_gpus: list[int] | None = None,
 ):
+    if use_gpus is None:
+        use_gpus = list(range(torch.cuda.device_count()))
+
     B, G, D = covs._block_size, max(use_gpus) + 1, dirs_NXXXD.size(-1)
 
     ##########
@@ -69,7 +72,7 @@ def acc_covariance(
 
     _m = malloc_cpu_if_None
 
-    print(f"Allocating shared memory... ", end="", flush=True)
+    print("Allocating shared memory... ", end="", flush=True)
     initialized_GB = _m(None, (G, B), torch.bool, shared=True)
 
     print("dirs... ", end="", flush=True)
@@ -115,7 +118,7 @@ def acc_covariance(
     )
 
 
-def _work_fn(_, shared_batch_inputs: Dict[str, torch.Tensor], batch_idx: int, device: str):
+def _work_fn(_, shared_batch_inputs: dict[str, torch.Tensor], batch_idx: int, device: str):
     # Gather inputs
     shared_dirs_SXXXD = shared_batch_inputs["shared_dirs_SXXXD"]
     initialized_S, shared_mem_S, shared_mem_SD, shared_mem_SDD = (
@@ -169,8 +172,8 @@ def _work_fn(_, shared_batch_inputs: Dict[str, torch.Tensor], batch_idx: int, de
 
 
 def handle_output_fn(
-    shared_inputs: Dict[str, torch.Tensor],
-    shared_outputs: Dict[str, torch.Tensor],
+    shared_inputs: dict[str, torch.Tensor],
+    shared_outputs: dict[str, torch.Tensor],
     batch_idx: int,
     covs: ParallelBatchCovariance,
 ):

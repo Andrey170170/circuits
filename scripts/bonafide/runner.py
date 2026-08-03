@@ -7,6 +7,7 @@ artifact.  This runner never combines graphs.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import gc
 import hashlib
 import importlib.metadata
@@ -18,14 +19,16 @@ import resource
 import signal
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import torch
+import torch.version
 from circuits.tracing.artifact import (
     save_compact_trace,
-    validate_topk_trace_data,
     validate_compact_trace_integrity,
+    validate_topk_trace_data,
 )
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.instrumentation import TraceInstrumentation
@@ -36,12 +39,11 @@ from circuits.tracing.trace import (
 )
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from scripts.bonafide.manifest import SCHEMA_VERSION, resolve_pretrained_source
 from scripts.bonafide.execution_plan import (
     sha256_file,
     validate_execution_plan,
 )
-
+from scripts.bonafide.manifest import SCHEMA_VERSION, resolve_pretrained_source
 
 RUN_CONFIG_SCHEMA = "bonafide-trace-run-config/v1"
 WARMUP_MODE = "first_wave_item_full_trace_discard"
@@ -1178,10 +1180,8 @@ def _ensure_execution_cohort(
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        try:
+        with contextlib.suppress(FileExistsError):
             os.link(temporary, path)
-        except FileExistsError:
-            pass
     finally:
         if temporary.exists():
             temporary.unlink()
@@ -1211,9 +1211,19 @@ def _compound_item_lookup(
             available[key] = item
     selected: list[tuple[str, str]] = []
     for ref in refs:
-        key = (ref.get("source_wave_id"), ref.get("source_artifact_id"))
-        if not all(isinstance(value, str) and value for value in key):
-            raise ValueError(f"invalid compound item reference: {key}")
+        source_wave_id = ref.get("source_wave_id")
+        source_artifact_id = ref.get("source_artifact_id")
+        if (
+            not isinstance(source_wave_id, str)
+            or not source_wave_id
+            or not isinstance(source_artifact_id, str)
+            or not source_artifact_id
+        ):
+            raise ValueError(
+                "invalid compound item reference: "
+                f"{(source_wave_id, source_artifact_id)}"
+            )
+        key = (source_wave_id, source_artifact_id)
         if key in selected:
             raise ValueError(f"duplicate compound assignment: {key}")
         if key not in available:

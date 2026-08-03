@@ -21,11 +21,7 @@ def _inputs() -> tuple[dict, dict, dict]:
     )
     results = []
     for case in pool["cases"]:
-        width = (
-            6
-            if case["screen_slot"] == "minimum_probability"
-            else 5
-        )
+        width = 6 if case["screen_slot"] == "minimum_probability" else 5
         source_item = next(
             item
             for wave in source["waves"]
@@ -35,9 +31,7 @@ def _inputs() -> tuple[dict, dict, dict]:
         observed = source_item["target_selection"]["final_target_token_id"]
         results.append(
             {
-                "source_width1_artifact_id": case[
-                    "source_width1_artifact_id"
-                ],
+                "source_width1_artifact_id": case["source_width1_artifact_id"],
                 "corpus_role": case["corpus_role"],
                 "input_token_count": 100 + case["target_response_position"],
                 "candidate_count": width,
@@ -46,10 +40,7 @@ def _inputs() -> tuple[dict, dict, dict]:
                     "observed_token_rank": 7 if width == 6 else 1,
                     "candidates": [
                         {"token_id": observed},
-                        *(
-                            {"token_id": 1000 + index}
-                            for index in range(width - 1)
-                        ),
+                        *({"token_id": 1000 + index} for index in range(width - 1)),
                     ],
                 },
             }
@@ -70,8 +61,7 @@ def test_c2_selection_applies_frozen_width_preference() -> None:
     assert len({(case["example_id"], case["phase_bin"]) for case in cases}) == 245
     assert {case["candidate_count"] for case in cases} == {5, 6}
     assert all(
-        case["candidate_count"] == case["desired_candidate_count"]
-        for case in cases
+        case["candidate_count"] == case["desired_candidate_count"] for case in cases
     )
 
 
@@ -90,18 +80,12 @@ def test_c2_manifests_cover_every_candidate_with_bounded_waves() -> None:
         rank_screen_sha256="c" * 64,
     )
 
-    assert set(manifests) == {
-        *(f"independent-candidate-{index}" for index in range(6))
-    }
+    assert set(manifests) == {*(f"independent-candidate-{index}" for index in range(6))}
     for candidate_index in range(5):
         manifest = manifests[f"independent-candidate-{candidate_index}"]
         assert manifest["phase"] == "c2_scientific_utility"
         assert sum(len(wave["items"]) for wave in manifest["waves"]) == 245
         assert max(len(wave["items"]) for wave in manifest["waves"]) <= 28
-    assert (
-        sum(
-            len(wave["items"])
-            for wave in manifests["independent-candidate-5"]["waves"]
-        )
-        == sum(case["candidate_count"] == 6 for case in cases)
-    )
+    assert sum(
+        len(wave["items"]) for wave in manifests["independent-candidate-5"]["waves"]
+    ) == sum(case["candidate_count"] == 6 for case in cases)

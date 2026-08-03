@@ -85,7 +85,7 @@ def single_user_modelling_country_circuit():
         k=5,
         apply_blacklist=True,
     )
-    out_path = OUTPUT_DIR / f"japan_circuit.pkl"
+    out_path = OUTPUT_DIR / "japan_circuit.pkl"
     circuit.save_to_pickle(str(out_path))
     print(f"Saved Japan circuit with 1 example to {out_path}")
 

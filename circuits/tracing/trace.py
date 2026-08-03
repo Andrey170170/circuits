@@ -6,19 +6,17 @@ import hashlib
 import json
 import math
 import pickle
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-from circuits.tracing.clja import (
-    ADAGConfig,
-    CLJAProbeSelection,
-    FrozenGraphTopology,
-    get_all_pairs_cl_ja_effects_with_attributions,
-)
+from tqdm import tqdm
+from transformers import PreTrainedModel, PreTrainedTokenizer
+
 from circuits.tracing.candidates import (
     CandidateLogitAxis,
     CandidatePolicyId,
@@ -28,13 +26,17 @@ from circuits.tracing.candidates import (
     build_joint_objective,
     select_candidate_logits,
 )
+from circuits.tracing.clja import (
+    ADAGConfig,
+    CLJAProbeSelection,
+    FrozenGraphTopology,
+    get_all_pairs_cl_ja_effects_with_attributions,
+)
 from circuits.tracing.instrumentation import (
     TraceInstrumentation,
     instrumentation_stage,
 )
 from circuits.tracing.utils import Edge, Node
-from tqdm import tqdm
-from transformers import PreTrainedModel, PreTrainedTokenizer
 
 
 @dataclass
@@ -51,9 +53,7 @@ class CircuitData:
     k: int
     config: ADAGConfig
     model_id: str = ""
-    traced_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    traced_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     target_logit_values: list[list[float]] = field(default_factory=list)
     target_provenance: list[dict[str, object]] = field(default_factory=list)
     trace_metadata: dict[str, object] = field(default_factory=dict)
@@ -88,10 +88,10 @@ class CircuitData:
                 return label
 
             df_node["label"] = df_node["label"].apply(
-                lambda l: reindex_label(l, global_offset)
+                lambda label, offset=global_offset: reindex_label(label, offset)
             )
             df_edge["label"] = df_edge["label"].apply(
-                lambda l: reindex_label(l, global_offset)
+                lambda label, offset=global_offset: reindex_label(label, offset)
             )
 
             all_df_node.append(df_node)
@@ -683,7 +683,9 @@ def _teacher_forced_target_scores(
     target_logits: list[float] = []
     target_probs: list[float] = []
     for prediction_position, token_id in zip(
-        prepared.target_prediction_positions, prepared.target_token_ids
+        prepared.target_prediction_positions,
+        prepared.target_token_ids,
+        strict=True,
     ):
         position_logits = logits[prediction_position]
         target_logits.append(float(position_logits[token_id].item()))
@@ -739,6 +741,7 @@ def _teacher_forced_target_provenance(
             prepared.target_token_texts,
             target_logit_values,
             target_probs,
+            strict=True,
         )
     ]
 
@@ -957,7 +960,7 @@ def prepare_ci(
 
     if seed_response is not None and seed_response.endswith(" "):
         space_token = tokenizer.encode(" ")[1]
-        token_ids = token_ids + [space_token]
+        token_ids = [*token_ids, space_token]
     if true_answers is not None:
         # then we create the topk using the first token of every true answer
         topk = [tokenizer.encode(answer)[1] for answer in true_answers]
@@ -984,7 +987,7 @@ def prepare_cis(
     seed_responses: list[str],
     k: int = 5,
     system_prompt: str | None = None,
-    true_answers: list[str] | list[None] | None = None,
+    true_answers: list[list[str] | None] | None = None,
     use_chat_format: bool = True,
     verbose: bool = False,
 ):
@@ -997,7 +1000,7 @@ def prepare_cis(
         prepare_ci(
             model, tokenizer, q, sr, k, system_prompt, ta, use_chat_format, verbose
         )
-        for q, sr, ta in zip(questions, seed_responses, true_answers)
+        for q, sr, ta in zip(questions, seed_responses, true_answers, strict=True)
     ]
     cis = [r[0] for r in res]
     topks = [r[1] for r in res]
@@ -1007,7 +1010,7 @@ def prepare_cis(
     attention_masks = []
     focus_tokens = []
     focus_probs = []
-    for topk, probs in zip(topks, topk_probs_list):
+    for topk, probs in zip(topks, topk_probs_list, strict=True):
         focus_tokens.append(list(topk))
         focus_probs.append(list(probs))
 
@@ -1022,9 +1025,7 @@ def prepare_cis(
     cis = padded_cis
 
     # keep all tokens
-    keep_pos = []
-    for i in range(max_length):
-        keep_pos.append(i)
+    keep_pos = list(range(max_length))
     if verbose:
         print(keep_pos)
         print(attention_masks)
@@ -1057,7 +1058,7 @@ def prepare_ci_with_rollout(
         _strip_starting_at_rindex_in_place(token_ids, tokenizer.eos_token_id)
     if seed_response is not None and seed_response.endswith(" "):
         space_token = tokenizer.encode(" ")[1]
-        token_ids = token_ids + [space_token]
+        token_ids = [*token_ids, space_token]
 
     # generate additional tokens
     input_ids = torch.tensor([token_ids], device=next(model.parameters()).device)
@@ -1095,7 +1096,7 @@ def prepare_cis_with_rollout(
         prepare_ci_with_rollout(
             model, tokenizer, q, seed_response, max_new_tokens, verbose
         )
-        for q, seed_response in zip(questions, seed_responses)
+        for q, seed_response in zip(questions, seed_responses, strict=False)
     ]
     max_length = max(len(ci) for ci in cis)
     all_attention_masks = []
@@ -1133,9 +1134,7 @@ def prepare_cis_with_rollout(
         new_cis.append(padded_ci)
 
     # keep all tokens except the last token due to offset
-    keep_pos = []
-    for i in range(max_length - 1):
-        keep_pos.append(i)
+    keep_pos = list(range(max_length - 1))
 
     if verbose:
         print(keep_pos)
@@ -1153,7 +1152,7 @@ def prepare_cis_with_rollout(
     for batch_i in range(len(new_cis)):
         probs_for_ci: list[float] = []
         for tgt_pos, focus_tok in zip(
-            all_tgt_tokens[batch_i], all_focus_tokens[batch_i]
+            all_tgt_tokens[batch_i], all_focus_tokens[batch_i], strict=True
         ):
             token_probs = torch.softmax(logits[batch_i, tgt_pos], dim=-1)
             probs_for_ci.append(token_probs[focus_tok].item())
@@ -1486,7 +1485,7 @@ def compute_circuits(
     max_new_tokens: int = 1,
     use_rollout: bool = False,
     system_prompt: str | None = None,
-    true_answers: list[str] | None = None,
+    true_answers: list[list[str] | None] | None = None,
 ):
     """
     Compute CLSO graphs for all datapoints in a list of prompts, batched.
@@ -1532,7 +1531,9 @@ def compute_circuits(
                     seed_responses[i : i + bs],
                     k=k,
                     system_prompt=system_prompt,
-                    true_answers=true_answers,
+                    true_answers=(
+                        true_answers[i : i + bs] if true_answers is not None else None
+                    ),
                     verbose=config.verbose,
                 )
             )
@@ -1550,7 +1551,7 @@ def compute_circuits(
         )
         all_nodes.append(nodes)
         all_edges.append(edges)
-        all_focus.append([_ for _ in range(len(focus_tokens))])
+        all_focus.append(list(range(len(focus_tokens))))
         all_starts.append(starts)
         all_focus_tokens.extend(focus_tokens)
         all_focus_probs.extend(focus_probs)
@@ -1612,15 +1613,17 @@ def convert_circuit_to_dataframes(
             start = starts[batch_idx][idx] + (1 if ignore_bos else 0)
 
             def extract_map(
-                map_tensor: torch.Tensor | None, start_idx: int, is_attr: bool
+                map_tensor: torch.Tensor | None,
+                start_idx: int,
+                is_attr: bool,
+                sample_idx: int = idx,
             ) -> list[float] | None:
                 """Extract raw attr_map/contrib_map values (no normalization)."""
                 if map_tensor is None:
                     return None
                 if is_attr:
-                    return map_tensor[idx, start_idx:].tolist()
-                else:
-                    return map_tensor[idx].tolist()
+                    return map_tensor[sample_idx, start_idx:].tolist()
+                return map_tensor[sample_idx].tolist()
 
             d = [
                 (
@@ -1698,7 +1701,13 @@ def convert_circuit_to_dataframes(
 
     # prune edges whose src or tgt node was removed
     surviving_nodes = set(
-        zip(df_node["layer"], df_node["token"], df_node["neuron"], df_node["label"])
+        zip(
+            df_node["layer"],
+            df_node["token"],
+            df_node["neuron"],
+            df_node["label"],
+            strict=True,
+        )
     )
     # edge columns are "src->tgt" strings, split to check membership
     edge_src = df_edge["layer"].str.split("->").str[0].astype(int)
@@ -1711,14 +1720,18 @@ def convert_circuit_to_dataframes(
     src_alive = pd.Series(
         [
             (l, t, n, lb) in surviving_nodes
-            for l, t, n, lb in zip(edge_src, edge_src_tok, edge_src_neu, edge_label)
+            for l, t, n, lb in zip(
+                edge_src, edge_src_tok, edge_src_neu, edge_label, strict=True
+            )
         ],
         index=df_edge.index,
     )
     tgt_alive = pd.Series(
         [
             (l, t, n, lb) in surviving_nodes
-            for l, t, n, lb in zip(edge_tgt, edge_tgt_tok, edge_tgt_neu, edge_label)
+            for l, t, n, lb in zip(
+                edge_tgt, edge_tgt_tok, edge_tgt_neu, edge_label, strict=True
+            )
         ],
         index=df_edge.index,
     )
@@ -1741,7 +1754,7 @@ def convert_inputs_to_circuits(
     ignore_bos: bool = False,
     system_prompt: str | None = None,
     use_rollout: bool = False,
-    true_answers: list[str] | None = None,
+    true_answers: list[list[str] | None] | None = None,
 ) -> CircuitData:
     """
     Convert a list of prompts and seed responses into a CircuitData artifact.
@@ -1760,6 +1773,8 @@ def convert_inputs_to_circuits(
     labels = labels[:num_datapoints]
     if seed_responses is not None and not use_rollout:
         seed_responses = seed_responses[:num_datapoints]
+    if true_answers is not None:
+        true_answers = true_answers[:num_datapoints]
 
     print("Prompt:", prompts[0])
     if seed_responses is not None and not use_rollout:
@@ -1767,7 +1782,7 @@ def convert_inputs_to_circuits(
     print("Number of datapoints:", len(prompts))
 
     # compute circuits
-    nodes, edges, _, focus, starts, cis, attention_masks, focus_tokens, focus_probs = (
+    nodes, edges, _, _focus, starts, cis, attention_masks, focus_tokens, focus_probs = (
         compute_circuits(
             model,
             tokenizer,
