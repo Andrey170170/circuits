@@ -407,24 +407,28 @@ def _rewrite_message(outputs: Sequence[Mapping[str, Any]]) -> ChatMessage:
     return ChatMessage(role="user", content=content)
 
 
-def _construct_rewrite_request(
+def construct_candidate_labeling_rewrite_request(
     *,
     cohort_manifest_sha256: str,
     dependency: RewriteDependency,
     semantic_requests: Sequence[PreparedCandidateLabelingRequest],
-    semantic_events: Sequence[CandidateLabelingFakeEvent],
+    semantic_outputs: Sequence[Mapping[str, Any]],
+    semantic_output_sha256_in_order: Sequence[str],
     max_output_tokens: int,
     temperature: float | None,
     reasoning: Mapping[str, Any],
     provider_parameters: Mapping[str, Any],
 ) -> CandidateLabelingRewriteRequest:
-    if len(semantic_requests) != 5 or len(semantic_events) != 5:
+    """Construct one rewrite request from five validated, ordered outputs."""
+
+    if (
+        len(semantic_requests) != 5
+        or len(semantic_outputs) != 5
+        or len(semantic_output_sha256_in_order) != 5
+    ):
         raise ValueError("rewrite dependency is not satisfied by exactly five outputs")
     request_ids = [request.request_id for request in semantic_requests]
-    if (
-        request_ids != dependency.required_semantic_request_ids
-        or [event.request_id for event in semantic_events] != request_ids
-    ):
+    if request_ids != dependency.required_semantic_request_ids:
         raise ValueError("rewrite semantic request ordering or identity drift")
     source = semantic_requests[0]
     if any(
@@ -437,13 +441,16 @@ def _construct_rewrite_request(
         raise ValueError("rewrite semantic prompt/sample graph drift")
     parsed = [
         _validate_output(
-            event.parsed,
+            output,
             expected_schema=source.expected_output_json_schema,
             typed_fields=source.typed_output_fields,
             status_enum=source.status_enum,
         )
-        for event in semantic_events
+        for output in semantic_outputs
     ]
+    observed_output_hashes = [canonical_sha256(output) for output in parsed]
+    if observed_output_hashes != list(semantic_output_sha256_in_order):
+        raise ValueError("rewrite semantic output hash binding drift")
     messages = [*source.messages, _rewrite_message(parsed)]
     payload = {
         "schema_version": REWRITE_REQUEST_SCHEMA,
@@ -464,9 +471,9 @@ def _construct_rewrite_request(
         "source_prompt_sha256": dependency.source_prompt_sha256,
         "source_message_payload_sha256": dependency.source_message_payload_sha256,
         "required_semantic_request_ids": request_ids,
-        "validated_semantic_output_sha256_in_order": [
-            event.parsed_sha256 for event in semantic_events
-        ],
+        "validated_semantic_output_sha256_in_order": list(
+            semantic_output_sha256_in_order
+        ),
         "provider": dependency.provider,
         "model": dependency.model,
         "transport": dependency.transport,
@@ -493,6 +500,37 @@ def _construct_rewrite_request(
     if any(field in serialized_messages for field in HELDOUT_FORBIDDEN_INPUTS):
         raise ValueError("rewrite request violates the held-out input firewall")
     return request
+
+
+def _construct_rewrite_request(
+    *,
+    cohort_manifest_sha256: str,
+    dependency: RewriteDependency,
+    semantic_requests: Sequence[PreparedCandidateLabelingRequest],
+    semantic_events: Sequence[CandidateLabelingFakeEvent],
+    max_output_tokens: int,
+    temperature: float | None,
+    reasoning: Mapping[str, Any],
+    provider_parameters: Mapping[str, Any],
+) -> CandidateLabelingRewriteRequest:
+    """Compatibility wrapper for deterministic fake execution."""
+
+    request_ids = [request.request_id for request in semantic_requests]
+    if [event.request_id for event in semantic_events] != request_ids:
+        raise ValueError("rewrite semantic request ordering or identity drift")
+    return construct_candidate_labeling_rewrite_request(
+        cohort_manifest_sha256=cohort_manifest_sha256,
+        dependency=dependency,
+        semantic_requests=semantic_requests,
+        semantic_outputs=[event.parsed for event in semantic_events],
+        semantic_output_sha256_in_order=[
+            event.parsed_sha256 for event in semantic_events
+        ],
+        max_output_tokens=max_output_tokens,
+        temperature=temperature,
+        reasoning=reasoning,
+        provider_parameters=provider_parameters,
+    )
 
 
 def _construct_rewrites(
