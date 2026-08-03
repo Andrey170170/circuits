@@ -349,7 +349,7 @@ def _make_sources(tmp_path: Path) -> tuple[Path, Path, Path]:
         [
             {
                 "global_atlas_ci_index": 0,
-                "atlas_trace_index": 0,
+                "atlas_trace_index": 2,
                 "trace_unit_id": "trace-a",
                 "local_ci_index": 0,
                 "local_label": "response-a",
@@ -357,7 +357,9 @@ def _make_sources(tmp_path: Path) -> tuple[Path, Path, Path]:
         ],
     )
     dense_target = {
-        "atlas_trace_index": 0,
+        # Atlas trace indices retain the source inventory identity and may have
+        # gaps when traces are excluded; they are ordered and unique, not dense.
+        "atlas_trace_index": 2,
         "trace_unit_id": "trace-a",
         "source_artifact_id": "source-a",
         "response_id": "response-a",
@@ -384,7 +386,7 @@ def _make_sources(tmp_path: Path) -> tuple[Path, Path, Path]:
     occurrences = [
         {
             "occurrence_index": index,
-            "atlas_trace_index": 0,
+            "atlas_trace_index": 2,
             "trace_unit_id": "trace-a",
             "token_position": index + 10,
             "signed_basis_index": 0,

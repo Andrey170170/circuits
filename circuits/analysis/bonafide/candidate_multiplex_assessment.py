@@ -449,8 +449,11 @@ def _validate_dense_relations(root: Path, manifest: Mapping[str, Any]) -> None:
         CIRCUIT_INPUT_INDEX_SCHEMA,
         label="dense multiplex",
     ).to_pylist()
-    if [int(row["atlas_trace_index"]) for row in targets] != list(range(len(targets))):
-        raise ValueError("dense target primary-key ordering drift")
+    target_indices = [int(row["atlas_trace_index"]) for row in targets]
+    if target_indices != sorted(target_indices) or len(set(target_indices)) != len(
+        target_indices
+    ):
+        raise ValueError("dense target primary-key ordering or uniqueness drift")
     if [int(row["signed_basis_index"]) for row in bases] != list(range(len(bases))):
         raise ValueError("dense basis primary-key ordering drift")
     if [int(row["occurrence_index"]) for row in occurrences] != list(
