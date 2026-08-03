@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.labeling.io import atomic_write_json, atomic_write_jsonl
 from circuits.labeling.runtime import (

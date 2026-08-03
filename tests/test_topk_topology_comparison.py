@@ -5,7 +5,6 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
-
 from circuits.tracing.candidates import CandidateSelection, build_joint_objective
 from circuits.tracing.topology_comparison import (
     compare_joint_to_independent_candidates,

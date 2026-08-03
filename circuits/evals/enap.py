@@ -9,12 +9,17 @@ import time
 from typing import Literal
 
 import torch as t
-from circuits.tracing.clja import ADAGConfig, get_all_pairs_cl_ja_effects_with_attributions
+from tqdm import tqdm
+from util.subject import Subject
+
+from circuits.core.core import get_all_pairs_cl_so_effects_with_attributions
+from circuits.tracing.clja import (
+    ADAGConfig,
+    get_all_pairs_cl_ja_effects_with_attributions,
+)
 from circuits.tracing.trace import prepare_cis
 from circuits.utils.dictionary_loading_utils import load_saes_and_submodules
 from circuits.utils.modeling_utils import SparseAct
-from tqdm import tqdm
-from util.subject import Subject
 
 from .base import BaseMethod
 
@@ -23,12 +28,11 @@ def _aggregate_weights(weight_lists: list[t.Tensor], batch_aggregation: str) -> 
     """Helper function to aggregate weight tensors across batches."""
     if batch_aggregation == "mean":
         return t.cat(weight_lists, dim=0).mean().item()
-    elif batch_aggregation == "max":
+    if batch_aggregation == "max":
         return t.cat(weight_lists, dim=0).max().item()
-    elif batch_aggregation == "sum":
+    if batch_aggregation == "sum":
         return t.cat(weight_lists, dim=0).sum().item()
-    else:
-        raise ValueError(f"Invalid batch aggregation type: {batch_aggregation}")
+    raise ValueError(f"Invalid batch aggregation type: {batch_aggregation}")
 
 
 def _process_weights_for_node(
@@ -41,7 +45,7 @@ def _process_weights_for_node(
 ) -> None:
     """Helper function to process and store weights for a single node."""
     aggregated_weights = []
-    for _, weight_list in weight_dict.items():
+    for weight_list in weight_dict.values():
         aggregated_weight = _aggregate_weights(weight_list, batch_aggregation)
         aggregated_weights.append(aggregated_weight)
 
@@ -145,8 +149,8 @@ def enap_mlp_nodes_to_sparse_act_nodes(
     if topk_edges is not None:
         # Collect all edge weights to determine threshold
         all_edge_weights = []
-        for tgt_key, src_dict in global_per_tgt_edge_raw.items():
-            for src_key, weight_list in src_dict.items():
+        for src_dict in global_per_tgt_edge_raw.values():
+            for weight_list in src_dict.values():
                 aggregated_weight = _aggregate_weights(weight_list, batch_aggregation)
                 all_edge_weights.append(abs(aggregated_weight))
 
@@ -184,7 +188,7 @@ def enap_mlp_nodes_to_sparse_act_nodes(
 
     # Now apply aggregation after processing all batches
     # Process incoming edges
-    for tgt_key in global_per_tgt_edge_raw.keys():
+    for tgt_key in global_per_tgt_edge_raw:
         tgt_layer_idx, tgt_token_pos, tgt_neuron_idx = tgt_key
         tgt_layer_key = ensure_layer(tgt_layer_idx)
         _process_weights_for_node(
@@ -197,7 +201,7 @@ def enap_mlp_nodes_to_sparse_act_nodes(
         )
 
     # Process outgoing edges
-    for src_key in global_per_src_edge_raw.keys():
+    for src_key in global_per_src_edge_raw:
         src_layer_idx, src_token_pos, src_neuron_idx = src_key
         src_layer_key = ensure_layer(src_layer_idx)
         _process_weights_for_node(
@@ -214,9 +218,9 @@ def enap_mlp_nodes_to_sparse_act_nodes(
         ensure_layer(i)
 
     # Set edge weights for all SparseAct nodes
-    for key in sparse_act_nodes:
-        sparse_act_nodes[key].incoming_edge_weights = incoming_edge_weights_store.get(key, {})
-        sparse_act_nodes[key].outgoing_edge_weights = outgoing_edge_weights_store.get(key, {})
+    for key, sparse_act in sparse_act_nodes.items():
+        sparse_act.incoming_edge_weights = incoming_edge_weights_store.get(key, {})
+        sparse_act.outgoing_edge_weights = outgoing_edge_weights_store.get(key, {})
     return sparse_act_nodes
 
 
@@ -285,8 +289,6 @@ class ENAP(BaseMethod):
 
     def make_dataloader(self, examples, **kwargs):
 
-        batches = []
-
         # process once for all
         clean_prefixes = [e["clean_prefix"] for e in examples]
         clean_answers = [[e["clean_answer"].strip()] for e in examples]
@@ -303,17 +305,18 @@ class ENAP(BaseMethod):
             verbose=False,
         )
 
-        for i in tqdm(range(0, len(examples), self.batch_size), desc="Processing batches"):
-            batches.append(
-                (
-                    cis[i : i + self.batch_size],
-                    attention_masks[i : i + self.batch_size],
-                    focus_tokens[i : i + self.batch_size],
-                    keep_pos,
-                    starts,
-                )
+        return [
+            (
+                cis[i : i + self.batch_size],
+                attention_masks[i : i + self.batch_size],
+                focus_tokens[i : i + self.batch_size],
+                keep_pos,
+                starts,
             )
-        return batches
+            for i in tqdm(
+                range(0, len(examples), self.batch_size), desc="Processing batches"
+            )
+        ]
 
     def train(self, examples, **kwargs):
         # Check if running in distributed mode
@@ -328,7 +331,7 @@ class ENAP(BaseMethod):
         desc = f"Training (Rank {rank})" if is_distributed else "Training"
         for batch in tqdm(dataloader, desc=desc, disable=(is_distributed and rank != 0)):
 
-            cis, attention_masks, focus_tokens, keep_pos, starts = batch
+            cis, attention_masks, focus_tokens, keep_pos, _starts = batch
 
             if "jvp" in self.effect_method:
                 # JVP method uses ADAGConfig
@@ -437,4 +440,4 @@ class ENAP(BaseMethod):
         # relies on neuron_dicts for ENAP, so we skip creating it.
 
         circuit = t.load(dump_dir, map_location=self.device)
-        self.nodes = circuit["nodes_weight"] if "nodes_weight" in circuit else None
+        self.nodes = circuit.get("nodes_weight")

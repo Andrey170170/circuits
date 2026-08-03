@@ -7,8 +7,6 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from scipy.sparse import csr_matrix
-
 from circuits.analysis.bonafide import (
     candidate_labelability_evaluation as evaluation_module,
 )
@@ -32,6 +30,7 @@ from circuits.analysis.bonafide.candidate_profiles import (
     WIDTH_PROFILE_SCHEMA,
 )
 from circuits.analysis.bonafide.canonical import canonical_sha256
+from scipy.sparse import csr_matrix
 
 STATES = ("W", "C", "F", "S")
 
@@ -146,25 +145,25 @@ def _baseline(
     for view in STATES:
         seeds = (17, 29) if duplicate_medoid and view == "W" else (17,)
         for seed in seeds:
-            for basis_index in range(4):
-                rows.append(
-                    {
-                        "state_index": state_index,
-                        "view": view,
-                        "n_clusters": 2,
-                        "seed": seed,
-                        "fit_valid": True,
-                        "seed_valid": True,
-                        "is_medoid": True,
-                        "assignment_fraction": 1.0,
-                        "fit_error": None,
-                        **_basis_row(basis_index),
-                        "eligible": True,
-                        "assigned": True,
-                        "cluster_id": 0 if basis_index < 2 else 1,
-                        "assignment_status": "assigned",
-                    }
-                )
+            rows.extend(
+                {
+                    "state_index": state_index,
+                    "view": view,
+                    "n_clusters": 2,
+                    "seed": seed,
+                    "fit_valid": True,
+                    "seed_valid": True,
+                    "is_medoid": True,
+                    "assignment_fraction": 1.0,
+                    "fit_error": None,
+                    **_basis_row(basis_index),
+                    "eligible": True,
+                    "assigned": True,
+                    "cluster_id": 0 if basis_index < 2 else 1,
+                    "assignment_status": "assigned",
+                }
+                for basis_index in range(4)
+            )
             state_index += 1
     return LoadedCandidateClusteringBaseline(
         root=Path("/baseline"),
@@ -261,7 +260,8 @@ def test_full_adapter_is_label_free_and_derives_only_preliminary_gates(
     )
     readiness = report["cluster_labeling_readiness"]["W"]
     assert readiness["support_policy"] == "candidate_and_width_frozen_thresholds"
-    assert "candidate_support" in readiness and "width_support" in readiness
+    assert "candidate_support" in readiness
+    assert "width_support" in readiness
     gates = report["pre_null_pre_jackknife_gates"]
     assert gates["final_pass_claimed"] is False
     assert gates["status"] == "pending_direction_null_and_generation_family_jackknife"
@@ -365,7 +365,7 @@ def test_exclusive_report_writer_never_replaces(tmp_path: Path) -> None:
 
 def test_missing_scoreable_family_persists_unavailable_bootstrap() -> None:
     families = [f"family-{index}" for index in range(8)]
-    effects = {family: 0.1 for family in families[:-1]}
+    effects = dict.fromkeys(families[:-1], 0.1)
     coherence = {
         "partition": "audit",
         "expected_family_ids": families,

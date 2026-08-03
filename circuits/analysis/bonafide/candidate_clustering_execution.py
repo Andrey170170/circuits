@@ -21,11 +21,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
-from typing import Any
+from typing import Any, SupportsFloat, SupportsIndex, cast
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from numpy.typing import NDArray
 from scipy.sparse import csr_matrix, load_npz, save_npz
 from scipy.sparse.csgraph import connected_components
 
@@ -325,7 +326,7 @@ def _resolution_record(fit: ResolutionFit) -> dict[str, Any]:
 def _fit_states(
     fit: GenerationClusterFit,
 ) -> list[tuple[str, int | None, ResolutionFit | None]]:
-    states = [
+    states: list[tuple[str, int | None, ResolutionFit | None]] = [
         (view, count, fit.directional[view][count])
         for view in ("W", "C", "F")
         for count in CLUSTER_COUNTS
@@ -362,7 +363,7 @@ def _cross_view_ari(fit: GenerationClusterFit) -> dict[str, Any]:
     assert fit.support is not None
     resolutions = {view: fit.directional[view][chosen] for view in ("W", "C", "F")}
     resolutions["S"] = fit.support
-    labels: dict[str, np.ndarray] = {}
+    labels: dict[str, NDArray[np.int64]] = {}
     for view, resolution in resolutions.items():
         value = resolution.labels
         if value is None:
@@ -453,13 +454,14 @@ def _assignment_rows(
     state_index = 0
     for view, n_clusters, resolution in _fit_states(fit):
         for seed in RANDOM_SEEDS:
-            seed_fit = None if resolution is None else resolution.seeds[seed]
-            result = None if seed_fit is None else seed_fit.result
-            state_error = (
-                "no_common_chosen_cluster_count"
-                if resolution is None
-                else seed_fit.error
-            )
+            if resolution is None:
+                seed_fit = None
+                result = None
+                state_error = "no_common_chosen_cluster_count"
+            else:
+                seed_fit = resolution.seeds[seed]
+                result = seed_fit.result
+                state_error = seed_fit.error
             state_record = {
                 "state_index": state_index,
                 "view": view,
@@ -888,7 +890,12 @@ def _validate_assignment_rows(
     for expected_index, state in enumerate(states):
         if not isinstance(state, Mapping) or state.get("state_index") != expected_index:
             raise ValueError("candidate clustering state index is invalid")
-        fraction = float(state.get("assignment_fraction", float("nan")))
+        state_record = cast(Mapping[str, Any], state)
+        fraction_value = cast(
+            str | SupportsFloat | SupportsIndex,
+            state_record.get("assignment_fraction", float("nan")),
+        )
+        fraction = float(fraction_value)
         if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
             raise ValueError("candidate clustering assignment fraction is invalid")
         block = rows[expected_index * basis_count : (expected_index + 1) * basis_count]
@@ -914,7 +921,7 @@ def _validate_assignment_rows(
                 "assignment_fraction",
                 "fit_error",
             ):
-                if row[field] != state[field]:
+                if row[field] != state_record[field]:
                     raise ValueError(
                         "candidate clustering assignment state metadata drift"
                     )
@@ -951,7 +958,7 @@ def _validate_assignment_rows(
         eligible = np.asarray(
             [bool(row["common_eligible"]) for row in common_rows], dtype=np.bool_
         )
-        labels: dict[str, np.ndarray] = {}
+        labels: dict[str, NDArray[np.int64]] = {}
         for view in ("W", "C", "F", "S"):
             medoid = next(
                 state
@@ -1043,7 +1050,7 @@ def _validate_resolution_diagnostics(
         ] != list(RANDOM_SEEDS):
             raise ValueError("candidate clustering seed diagnostic grid drift")
 
-        labels_by_seed: dict[int, np.ndarray] = {}
+        labels_by_seed: dict[int, NDArray[np.int64]] = {}
         affinity_active = np.asarray(affinities[view].sum(axis=1)).ravel() > 0
         actual_component_count = (
             int(

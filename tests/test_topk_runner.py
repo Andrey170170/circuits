@@ -4,14 +4,14 @@ import json
 from copy import deepcopy
 from types import SimpleNamespace
 
+import pytest
 from circuits.tracing.trace import TOPK_TRACE_FAMILY_ID
 from scripts.bonafide.execution_plan import sha256_file
 from scripts.bonafide.topk_runner import (
     run_topk_wave,
     topk_runtime_artifact_identity,
 )
-from tests.test_bonafide_benchmark import _config
-from tests.test_bonafide_benchmark import _single_item_manifest
+from tests.test_bonafide_benchmark import _config, _single_item_manifest
 from tests.test_teacher_forced_trace import _topk_trace
 from tests.test_topk_manifest import _manifest
 
@@ -158,7 +158,7 @@ def test_topk_wave_rejects_implicit_logit_centering(tmp_path) -> None:
     config = _cpu_config()
     config["adag_config"]["center_logits"] = True
 
-    try:
+    with pytest.raises(ValueError, match="center_logits=false"):
         run_topk_wave(
             config=config,
             manifest=_runner_manifest(),
@@ -170,10 +170,6 @@ def test_topk_wave_rejects_implicit_logit_centering(tmp_path) -> None:
             _code_revision=_code_revision(),
             _runtime_environment=_runtime_environment(),
         )
-    except ValueError as error:
-        assert "center_logits=false" in str(error)
-    else:
-        raise AssertionError("implicit logit centering was not rejected")
 
 
 def test_topk_wave_verifies_items_against_hashed_width1_source(tmp_path) -> None:
@@ -199,7 +195,7 @@ def test_topk_wave_verifies_items_against_hashed_width1_source(tmp_path) -> None
 
     assert [record["status"] for record in records] == ["planned"]
     manifest["waves"][0]["items"][0]["example"]["prompt"] = "drifted"
-    try:
+    with pytest.raises(ValueError, match="drifted from width-one source"):
         run_topk_wave(
             config=_cpu_config(),
             manifest=manifest,
@@ -210,10 +206,6 @@ def test_topk_wave_verifies_items_against_hashed_width1_source(tmp_path) -> None
             _code_revision=_code_revision(),
             _runtime_environment=_runtime_environment(),
         )
-    except ValueError as error:
-        assert "drifted from width-one source" in str(error)
-    else:
-        raise AssertionError("source-item drift was not rejected")
 
 
 def test_topk_wave_saves_and_checksum_validates_resume(monkeypatch, tmp_path) -> None:

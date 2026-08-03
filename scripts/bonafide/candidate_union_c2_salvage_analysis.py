@@ -13,6 +13,7 @@ Run from the repository root, for example::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -22,13 +23,13 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
+from numpy.typing import NDArray
 
 from scripts.bonafide import candidate_union_c2_analysis as c2
 from scripts.bonafide.runner import collect_code_revision, collect_runtime_environment
-
 
 REPORT_SCHEMA_VERSION = "bonafide-candidate-union-c2-salvage-analysis/v2"
 EXPECTED_PROTOCOL_SHA256 = (
@@ -82,13 +83,35 @@ class ScoreTables:
     anchors: tuple[Anchor, ...]
     responses: tuple[str, ...]
     response_families: tuple[str, ...]
-    planned: np.ndarray
-    scores: Mapping[str, np.ndarray]
+    planned: NDArray[np.bool_]
+    scores: Mapping[str, NDArray[np.float64]]
+
+
+class BootstrapEffects(TypedDict):
+    method: str
+    replicates: int
+    seed: int
+    family_count: int
+    lower_95: float
+    upper_95: float
+
+
+class EndpointReport(TypedDict):
+    observed: float
+    permutation_null_mean: float
+    observed_minus_permutation_null_mean: float
+    permutation_null_percentiles: dict[str, float]
+    one_sided_empirical_p: float
+    holm_adjusted_one_sided_p: float
+    family_effects: dict[str, float]
+    family_block_bootstrap: BootstrapEffects
+    leave_one_family_out: dict[str, Any]
+    promising: bool
 
 
 def _profile_score(
-    left: Mapping[c2.Basis, float | np.ndarray],
-    right: Mapping[c2.Basis, float | np.ndarray],
+    left: Mapping[c2.Basis, float | NDArray[Any]],
+    right: Mapping[c2.Basis, float | NDArray[Any]],
     *,
     channel: int | None = None,
     min_common_bases: int = MIN_COMMON_BASES,
@@ -100,7 +123,9 @@ def _profile_score(
     if support < min_common_bases:
         return PairScore(None, support, "fewer_than_minimum_common_bases")
 
-    def vector(profile: Mapping[c2.Basis, float | np.ndarray]) -> np.ndarray:
+    def vector(
+        profile: Mapping[c2.Basis, float | NDArray[Any]],
+    ) -> NDArray[np.float64]:
         values = []
         for key in common:
             value = np.asarray(profile[key], dtype=np.float64).reshape(-1)
@@ -233,7 +258,9 @@ def pair_rows_to_tables(rows: Sequence[PairRow]) -> ScoreTables:
     return ScoreTables(anchors, responses, response_families, planned, scores)
 
 
-def midrank_reciprocal_and_top_one(scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def midrank_reciprocal_and_top_one(
+    scores: NDArray[Any],
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Rank every valid cell descending; missing truths receive structural zero."""
 
     values = np.asarray(scores, dtype=np.float64)
@@ -254,7 +281,7 @@ def midrank_reciprocal_and_top_one(scores: np.ndarray) -> tuple[np.ndarray, np.n
     return reciprocal, top_one
 
 
-def mid_ecdf_percentiles(scores: np.ndarray) -> np.ndarray:
+def mid_ecdf_percentiles(scores: NDArray[Any]) -> NDArray[np.float64]:
     """Convert valid scores to within-row mid empirical-CDF percentiles."""
 
     values = np.asarray(scores, dtype=np.float64)
@@ -272,11 +299,11 @@ def mid_ecdf_percentiles(scores: np.ndarray) -> np.ndarray:
 
 
 def width_preferred_backoff(
-    width_scores: np.ndarray,
-    candidate_scores: np.ndarray,
+    width_scores: NDArray[Any],
+    candidate_scores: NDArray[Any],
     *,
     percentile_calibrated: bool = True,
-) -> np.ndarray:
+) -> NDArray[np.float64]:
     width = np.asarray(width_scores, dtype=np.float64)
     candidate = np.asarray(candidate_scores, dtype=np.float64)
     if width.shape != candidate.shape:
@@ -287,7 +314,9 @@ def width_preferred_backoff(
     return np.where(np.isfinite(width), width, candidate)
 
 
-def _group_indices(anchors: Sequence[Anchor]) -> dict[str, dict[str, np.ndarray]]:
+def _group_indices(
+    anchors: Sequence[Anchor],
+) -> dict[str, dict[str, NDArray[np.int64]]]:
     grouped: dict[str, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
     for index, anchor in enumerate(anchors):
         grouped[anchor.family_id][anchor.response_id].append(index)
@@ -301,9 +330,9 @@ def _group_indices(anchors: Sequence[Anchor]) -> dict[str, dict[str, np.ndarray]
 
 
 def hierarchical_mean(
-    values: np.ndarray,
+    values: NDArray[Any],
     anchors: Sequence[Anchor],
-    subset: np.ndarray | None = None,
+    subset: NDArray[Any] | None = None,
 ) -> float:
     """Equal-family, then response, then retained-anchor mean."""
 
@@ -328,9 +357,9 @@ def hierarchical_mean(
 
 
 def family_means(
-    values: np.ndarray,
+    values: NDArray[Any],
     anchors: Sequence[Anchor],
-    subset: np.ndarray | None = None,
+    subset: NDArray[Any] | None = None,
 ) -> dict[str, float]:
     value = np.asarray(values, dtype=np.float64)
     mask = np.ones(len(anchors), dtype=bool) if subset is None else np.asarray(subset)
@@ -347,10 +376,10 @@ def family_means(
 
 
 def analytic_chance(
-    scores: np.ndarray,
-    planned: np.ndarray,
+    scores: NDArray[Any],
+    planned: NDArray[Any],
     anchors: Sequence[Anchor],
-    subset: np.ndarray | None = None,
+    subset: NDArray[Any] | None = None,
 ) -> dict[str, float]:
     """Uniform-truth chance using the actual midranks, including exact ties."""
 
@@ -415,7 +444,7 @@ def constrained_response_permutations(
     *,
     replicates: int,
     seed: int,
-) -> tuple[np.ndarray, int]:
+) -> tuple[NDArray[np.int16], int]:
     """Uniform permutations conditional on avoiding same-family alternatives."""
 
     if len(responses) != len(families) or len(set(responses)) != len(responses):
@@ -439,7 +468,9 @@ def constrained_response_permutations(
     return result, rejected
 
 
-def _truth_columns(tables: ScoreTables, mapping: np.ndarray) -> np.ndarray:
+def _truth_columns(
+    tables: ScoreTables, mapping: NDArray[Any]
+) -> NDArray[np.integer[Any]]:
     response_index = {value: index for index, value in enumerate(tables.responses)}
     source = np.asarray(
         [response_index[anchor.response_id] for anchor in tables.anchors],
@@ -448,7 +479,7 @@ def _truth_columns(tables: ScoreTables, mapping: np.ndarray) -> np.ndarray:
     return mapping[..., source]
 
 
-def _gather(table: np.ndarray, columns: np.ndarray) -> np.ndarray:
+def _gather(table: NDArray[Any], columns: NDArray[Any]) -> NDArray[Any]:
     anchor_index = np.arange(table.shape[0])
     if columns.ndim == 1:
         return table[anchor_index, columns]
@@ -456,10 +487,10 @@ def _gather(table: np.ndarray, columns: np.ndarray) -> np.ndarray:
 
 
 def _batch_hierarchical(
-    values: np.ndarray,
+    values: NDArray[Any],
     anchors: Sequence[Anchor],
-    subset: np.ndarray | None = None,
-) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    subset: NDArray[Any] | None = None,
+) -> tuple[NDArray[np.float64], dict[str, NDArray[np.float64]]]:
     """Vectorized hierarchy; empty subset families/replicates remain NaN."""
 
     data = np.asarray(values, dtype=np.float64)
@@ -501,10 +532,10 @@ def _batch_hierarchical(
 
 def permutation_inference(
     tables: ScoreTables,
-    permutations: np.ndarray,
+    permutations: NDArray[Any],
     *,
     chunk_size: int = 5_000,
-) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float]]]:
+) -> tuple[dict[str, NDArray[np.float64]], dict[str, dict[str, float]]]:
     """Evaluate the three frozen endpoints without reconstructing profiles."""
 
     candidate_rr, _ = midrank_reciprocal_and_top_one(tables.scores["candidate"])
@@ -607,7 +638,7 @@ def _observed_metrics(
         }.items()
     }
 
-    def summary(name: str, subset: np.ndarray | None = None) -> dict[str, Any]:
+    def summary(name: str, subset: NDArray[Any] | None = None) -> dict[str, Any]:
         rr, top = gathered[name]
         base = np.ones(len(rr), dtype=bool) if subset is None else subset
         scored = base & valid[name]
@@ -697,7 +728,7 @@ def _observed_metrics(
 
 def _bootstrap_effects(
     effects: Mapping[str, float], *, replicates: int, seed: int
-) -> dict[str, Any]:
+) -> BootstrapEffects:
     families = sorted(effects)
     values = np.asarray([effects[family] for family in families], dtype=np.float64)
     if not len(values) or not np.isfinite(values).all():
@@ -737,9 +768,7 @@ def _lofo(effects: Mapping[str, float]) -> dict[str, Any]:
 
 def _derived_seed(audited_report_sha256: str, protocol_sha256: str) -> int:
     digest = hashlib.sha256(
-        (
-            f"{audited_report_sha256}:{protocol_sha256}:" f"{REPORT_SCHEMA_VERSION}"
-        ).encode("utf-8")
+        (f"{audited_report_sha256}:{protocol_sha256}:{REPORT_SCHEMA_VERSION}").encode()
     ).digest()
     return int.from_bytes(digest[:8], "big", signed=False)
 
@@ -920,7 +949,7 @@ def analyze_salvage(
         for endpoint in PRIMARY_ENDPOINTS
     }
     adjusted_p = holm_adjust(raw_p)
-    endpoint_reports = {}
+    endpoint_reports: dict[str, EndpointReport] = {}
     for endpoint_index, endpoint in enumerate(PRIMARY_ENDPOINTS):
         common_families = sorted(
             set(family_observed[endpoint]).intersection(family_null[endpoint])
@@ -939,12 +968,21 @@ def analyze_salvage(
             )
         bootstrap_seed = permutation_seed ^ (0x9E3779B97F4A7C15 + endpoint_index)
         bootstrap_seed &= (1 << 64) - 1
+        null_mean = float(np.mean(null[endpoint]))
+        observed_minus_null = float(observed_endpoints[endpoint] - null_mean)
+        bootstrap = _bootstrap_effects(
+            effects, replicates=BOOTSTRAP_REPLICATES, seed=bootstrap_seed
+        )
+        threshold_value = (
+            observed_endpoints[endpoint]
+            if endpoint == "backoff_delta"
+            else observed_minus_null
+        )
+        effect_threshold = 0.02 if endpoint == "backoff_delta" else 0.03
         endpoint_reports[endpoint] = {
             "observed": observed_endpoints[endpoint],
-            "permutation_null_mean": float(np.mean(null[endpoint])),
-            "observed_minus_permutation_null_mean": float(
-                observed_endpoints[endpoint] - np.mean(null[endpoint])
-            ),
+            "permutation_null_mean": null_mean,
+            "observed_minus_permutation_null_mean": observed_minus_null,
             "permutation_null_percentiles": {
                 "2.5": float(np.percentile(null[endpoint], 2.5)),
                 "50": float(np.percentile(null[endpoint], 50)),
@@ -953,31 +991,14 @@ def analyze_salvage(
             "one_sided_empirical_p": raw_p[endpoint],
             "holm_adjusted_one_sided_p": adjusted_p[endpoint],
             "family_effects": effects,
-            "family_block_bootstrap": _bootstrap_effects(
-                effects, replicates=BOOTSTRAP_REPLICATES, seed=bootstrap_seed
-            ),
+            "family_block_bootstrap": bootstrap,
             "leave_one_family_out": _lofo(effects),
+            "promising": bool(
+                threshold_value >= effect_threshold
+                and adjusted_p[endpoint] < 0.05
+                and bootstrap["lower_95"] > 0.0
+            ),
         }
-    endpoint_reports["candidate_all"]["promising"] = bool(
-        endpoint_reports["candidate_all"]["observed_minus_permutation_null_mean"]
-        >= 0.03
-        and adjusted_p["candidate_all"] < 0.05
-        and endpoint_reports["candidate_all"]["family_block_bootstrap"]["lower_95"]
-        > 0.0
-    )
-    endpoint_reports["candidate_rescue"]["promising"] = bool(
-        endpoint_reports["candidate_rescue"]["observed_minus_permutation_null_mean"]
-        >= 0.03
-        and adjusted_p["candidate_rescue"] < 0.05
-        and endpoint_reports["candidate_rescue"]["family_block_bootstrap"]["lower_95"]
-        > 0.0
-    )
-    endpoint_reports["backoff_delta"]["promising"] = bool(
-        observed_endpoints["backoff_delta"] >= 0.02
-        and adjusted_p["backoff_delta"] < 0.05
-        and endpoint_reports["backoff_delta"]["family_block_bootstrap"]["lower_95"]
-        > 0.0
-    )
     row_json = [_pair_row_json(row) for row in rows]
     module_path = Path(__file__).resolve()
     return {
@@ -1049,10 +1070,8 @@ def _write_json_atomic_no_overwrite(path: Path, value: Mapping[str, Any]) -> Non
         os.link(temporary_name, path)
         os.unlink(temporary_name)
     except BaseException:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
         raise
 
 

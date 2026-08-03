@@ -7,8 +7,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from scipy.sparse import csr_matrix
-
 from circuits.analysis.bonafide.candidate_clustering import (
     _validate_profile_rows,
     _validated_manifest,
@@ -38,6 +36,7 @@ from circuits.analysis.bonafide.clustering import (
     TargetProfileBlock,
     accumulate_pair_evidence,
 )
+from scipy.sparse import csr_matrix
 
 
 def _block(
@@ -327,7 +326,7 @@ def test_bundle_manifest_rejects_manifest_and_file_hash_drift(tmp_path) -> None:
 
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
     (tmp_path / "targets.parquet").write_bytes(b"tampered")
-    with pytest.raises(ValueError, match="file hash mismatch: targets.parquet"):
+    with pytest.raises(ValueError, match=r"file hash mismatch: targets\.parquet"):
         _validated_manifest(tmp_path)
 
 

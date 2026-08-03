@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 from circuits.analysis.bonafide.canonical import canonical_sha256
 from circuits.analysis.bonafide.identity import SignedBasisKey
@@ -72,24 +73,24 @@ def build_profile_observations(
             raise ValueError("analysis target/target slice response_id mismatch")
         if target.response_position != target_slice.target_response_position:
             raise ValueError("analysis target/target slice response position mismatch")
-        for summary in target_slice.basis_summaries:
-            observations.append(
-                BasisProfileObservation(
-                    basis=summary.basis,
-                    trace_unit_id=target_slice.trace_unit_id,
-                    source_artifact_id=target.source_artifact_id,
-                    base_question_id=target.base_question_id,
-                    response_id=target.response_id,
-                    target_response_position=target.response_position,
-                    profile=summary.attribution_map,
-                    support=summary.attribution_support,
-                    signed_attribution=summary.signed_attribution,
-                    absolute_attribution_mass=summary.absolute_attribution_mass,
-                    occurrence_count=summary.occurrence_count,
-                    mean_activation=summary.mean_activation,
-                    fit_weight=weights[target.source_artifact_id],
-                )
+        observations.extend(
+            BasisProfileObservation(
+                basis=summary.basis,
+                trace_unit_id=target_slice.trace_unit_id,
+                source_artifact_id=target.source_artifact_id,
+                base_question_id=target.base_question_id,
+                response_id=target.response_id,
+                target_response_position=target.response_position,
+                profile=summary.attribution_map,
+                support=summary.attribution_support,
+                signed_attribution=summary.signed_attribution,
+                absolute_attribution_mass=summary.absolute_attribution_mass,
+                occurrence_count=summary.occurrence_count,
+                mean_activation=summary.mean_activation,
+                fit_weight=weights[target.source_artifact_id],
             )
+            for summary in target_slice.basis_summaries
+        )
     return tuple(
         sorted(
             observations,

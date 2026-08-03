@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from scripts.bonafide.build_candidate_union_c2_plan import (
     C2_BUNDLE_SCHEMA,
     MAX_CASES_PER_WAVE,
@@ -15,11 +14,9 @@ from scripts.bonafide.build_candidate_union_c2_plan import (
 )
 from scripts.bonafide.execution_plan import sha256_file
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_PATH = (
-    REPO_ROOT
-    / "scripts/bonafide/manifests/"
+    REPO_ROOT / "scripts/bonafide/manifests/"
     "qwen3_4b_instruct_topk_c2_launch_bundle_v1.json"
 )
 
@@ -48,17 +45,17 @@ def test_c2_balanced_shards_are_bounded_and_deterministic() -> None:
     assert len(first) == 11
     assert sum(len(shard) for shard in first) == 168
     assert max(len(shard) for shard in first) <= MAX_CASES_PER_WAVE
-    assert max(
-        sum(
-            sum(case["frozen_union_candidate_edge_counts"]) for case in shard
+    assert (
+        max(
+            sum(sum(case["frozen_union_candidate_edge_counts"]) for case in shard)
+            for shard in first
         )
-        for shard in first
-    ) / min(
-        sum(
-            sum(case["frozen_union_candidate_edge_counts"]) for case in shard
+        / min(
+            sum(sum(case["frozen_union_candidate_edge_counts"]) for case in shard)
+            for shard in first
         )
-        for shard in first
-    ) < 1.1
+        < 1.1
+    )
 
 
 def test_c2_bundle_contract_binds_all_manifests_and_rejects_cohort_drift(

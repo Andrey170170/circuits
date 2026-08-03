@@ -25,8 +25,8 @@ def _empty_api_bucket() -> dict[str, Any]:
     return {
         "event_count": 0,
         "parse_status_counts": {},
-        "usage": {field: 0 for field in USAGE_FIELDS},
-        "usage_missing_event_counts": {field: 0 for field in USAGE_FIELDS},
+        "usage": dict.fromkeys(USAGE_FIELDS, 0),
+        "usage_missing_event_counts": dict.fromkeys(USAGE_FIELDS, 0),
         "known_cost_usd": 0.0,
         "complete_cost_event_count": 0,
         "incomplete_cost_event_count": 0,

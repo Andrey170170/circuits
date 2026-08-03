@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from circuits.analysis.bonafide.canonical import load_json_object
 from circuits.analysis.bonafide.cluster_execution import (
@@ -43,9 +43,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if task_index < 0 or task_index >= len(evidence_tasks):
         raise ValueError("pair-evidence task index is out of range")
     task = evidence_tasks[task_index]
+    weighting_value = str(task["weighting"])
+    if weighting_value == "hierarchical":
+        weighting = "hierarchical"
+    elif weighting_value == "unweighted":
+        weighting = "unweighted"
+    else:
+        raise ValueError(f"unsupported pair-evidence weighting: {weighting_value!r}")
     build = build_pair_evidence_from_feature_store(
         Path(str(plan["feature_store"]["path"])),
-        weighting=str(task["weighting"]),  # type: ignore[arg-type]
+        weighting=weighting,
     )
     manifest = write_pair_evidence_build(
         Path(str(task["output_path"])),

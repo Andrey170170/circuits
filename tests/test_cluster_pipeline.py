@@ -65,10 +65,12 @@ class TestNodePipelineStages:
         with pytest.raises(ValueError, match="Missing columns"):
             NodePipeline(df_missing, NodeStage.RAW)
 
-    def test_raw_to_indexed(self, raw_df_node: pd.DataFrame, raw_df_edge: pd.DataFrame) -> None:
+    def test_raw_to_indexed(
+        self, raw_df_node: pd.DataFrame, raw_df_edge: pd.DataFrame
+    ) -> None:
         """Test RAW → INDEXED transition."""
         pipeline = NodePipeline(raw_df_node, NodeStage.RAW)
-        indexed_pipeline, df_edge_indexed = pipeline.to_indexed(raw_df_edge)
+        indexed_pipeline, _ = pipeline.to_indexed(raw_df_edge)
 
         assert indexed_pipeline.stage == NodeStage.INDEXED
         df = indexed_pipeline.df
@@ -95,7 +97,7 @@ class TestNodePipelineStages:
         pipeline = NodePipeline(raw_df_node, NodeStage.RAW)
         indexed_pipeline, _ = pipeline.to_indexed(raw_df_edge)
         embedded_pipeline = indexed_pipeline.to_embedded(mode="attr + contrib")
-        processed_pipeline, cache = embedded_pipeline.to_processed(
+        processed_pipeline, _ = embedded_pipeline.to_processed(
             n_clusters=2, tokenizer=None, get_desc=False
         )
 
@@ -104,7 +106,9 @@ class TestNodePipelineStages:
         assert "cluster" in df.columns
         assert all(isinstance(c, str) for c in df["cluster"])
 
-    def test_wrong_stage_raises(self, raw_df_node: pd.DataFrame, raw_df_edge: pd.DataFrame) -> None:
+    def test_wrong_stage_raises(
+        self, raw_df_node: pd.DataFrame, raw_df_edge: pd.DataFrame
+    ) -> None:
         """Test that calling wrong transition raises ValueError."""
         pipeline = NodePipeline(raw_df_node, NodeStage.RAW)
 
@@ -201,9 +205,9 @@ class TestManualClusters:
         df = processed_pipeline.df
 
         # Middle layer neurons not in manual_clusters should be unclustered
-        unclustered = df[df["cluster"] == UNCLUSTERED_CLUSTER_ID]
         # At least some neurons should be unclustered (layer 1 neuron 1 with "-" polarity)
         # Note: boundary layers (-1 and 2) get their NeuronId as cluster, not UNCLUSTERED
+        assert not df[df["cluster"] == UNCLUSTERED_CLUSTER_ID].empty
 
     def test_boundary_layers_get_neuronid_cluster(
         self, indexed_pipeline: tuple[NodePipeline, pd.DataFrame]
@@ -256,16 +260,20 @@ class TestManualClusters:
             # Placeholder should be zeros
             assert np.allclose(emb, np.zeros_like(emb))
 
-    def test_wrong_stage_raises(self, indexed_pipeline: tuple[NodePipeline, pd.DataFrame]) -> None:
+    def test_wrong_stage_raises(
+        self, indexed_pipeline: tuple[NodePipeline, pd.DataFrame]
+    ) -> None:
         """Test that calling from wrong stage raises ValueError."""
-        pipeline, df_edge = indexed_pipeline
+        pipeline, _ = indexed_pipeline
 
         # Go to EMBEDDED stage
         embedded_pipeline = pipeline.to_embedded()
 
         # Can't call to_processed_from_indexed from EMBEDDED
         with pytest.raises(ValueError, match="Expected INDEXED stage"):
-            embedded_pipeline.to_processed_from_indexed(manual_clusters={}, tokenizer=None)
+            embedded_pipeline.to_processed_from_indexed(
+                manual_clusters={}, tokenizer=None
+            )
 
 
 class TestAutomaticClustering:
@@ -308,7 +316,9 @@ class TestAutomaticClustering:
         # Should have at most n_clusters unique clusters for middle layers
         assert len(middle_layer_clusters) <= 2
 
-    def test_n_clusters_zero_skips_clustering(self, embedded_pipeline: NodePipeline) -> None:
+    def test_n_clusters_zero_skips_clustering(
+        self, embedded_pipeline: NodePipeline
+    ) -> None:
         """Test that n_clusters=0 assigns all to '-1'."""
         processed_pipeline, _ = embedded_pipeline.to_processed(
             n_clusters=0, tokenizer=None, get_desc=False
@@ -341,10 +351,8 @@ class TestValidation:
             }
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Missing columns"):
             NodePipeline(df, NodeStage.RAW)
-
-        assert "Missing columns" in str(exc_info.value)
 
     def test_indexed_stage_missing_column(self) -> None:
         """Test INDEXED stage validation catches missing columns."""
@@ -355,10 +363,8 @@ class TestValidation:
             }
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Missing columns"):
             NodePipeline(df, NodeStage.INDEXED)
-
-        assert "Missing columns" in str(exc_info.value)
 
     def test_embedded_stage_missing_column(self) -> None:
         """Test EMBEDDED stage validation catches missing columns."""
@@ -369,10 +375,8 @@ class TestValidation:
             }
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Missing columns"):
             NodePipeline(df, NodeStage.EMBEDDED)
-
-        assert "Missing columns" in str(exc_info.value)
 
     def test_validation_can_be_disabled(self) -> None:
         """Test that validate=False skips validation."""

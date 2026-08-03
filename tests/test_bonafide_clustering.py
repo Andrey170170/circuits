@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
-from scipy.sparse import csr_matrix
-
 from circuits.analysis.bonafide.clustering import (
     TargetProfileBlock,
     accumulate_pair_evidence,
@@ -15,13 +14,6 @@ from circuits.analysis.bonafide.clustering import (
     mean_similarity_matrix,
     sparse_spectral_cluster,
     target_pairwise_profile_similarity,
-)
-from circuits.analysis.bonafide.clustering_store import (
-    BasisSupport,
-    PairEvidenceBuild,
-    build_pair_evidence_from_feature_store,
-    load_pair_evidence,
-    write_pair_evidence_build,
 )
 from circuits.analysis.bonafide.clustering_evaluation import (
     LoadedClusterState,
@@ -43,6 +35,14 @@ from circuits.analysis.bonafide.clustering_selection import (
     _family_partitions,
     _percentile_ranks,
 )
+from circuits.analysis.bonafide.clustering_store import (
+    BasisSupport,
+    PairEvidenceBuild,
+    build_pair_evidence_from_feature_store,
+    load_pair_evidence,
+    write_pair_evidence_build,
+)
+from scipy.sparse import csr_matrix
 
 
 def _block(
@@ -393,17 +393,17 @@ def test_seed_stability_selects_assignment_medoid_and_ignores_unassigned() -> No
 def test_projection_summary_enforces_labelability_and_temporal_contract() -> None:
     rows = []
     for response_index in range(3):
-        for ordinal in range(7):
-            rows.append(
-                {
-                    "cluster_id": 0,
-                    "response_id": f"response-{response_index}",
-                    "base_question_id": f"family-{response_index}",
-                    "response_target_ordinal": ordinal,
-                    "response_phase_bin": _phase_bin(ordinal, 10),
-                    "absolute_attribution_mass": float(ordinal + 1),
-                }
-            )
+        rows.extend(
+            {
+                "cluster_id": 0,
+                "response_id": f"response-{response_index}",
+                "base_question_id": f"family-{response_index}",
+                "response_target_ordinal": ordinal,
+                "response_phase_bin": _phase_bin(ordinal, 10),
+                "absolute_attribution_mass": float(ordinal + 1),
+            }
+            for ordinal in range(7)
+        )
     rows.append(
         {
             "cluster_id": 1,
@@ -475,7 +475,7 @@ def test_feature_store_evidence_family_selection_is_explicit(
     class FakeFeatureStoreReader:
         basis_count = 2
         compacted_root = tmp_path
-        manifest = {
+        manifest: ClassVar[dict[str, str]] = {
             "manifest_sha256": "feature",
             "plan_sha256": "plan",
             "schema_version": "feature",
@@ -513,9 +513,7 @@ def test_checkpoint_family_sets_use_deterministic_whole_family_prefixes() -> Non
             "base_question_id": f"family-{family}",
             "trace_unit_id": f"trace-{family}-{target}",
         }
-        for family, target_count in enumerate(
-            [100, 150, 200, 250, 300, 350, 400, 450]
-        )
+        for family, target_count in enumerate([100, 150, 200, 250, 300, 350, 400, 450])
         for target in range(target_count)
     ]
 
@@ -532,9 +530,7 @@ def test_checkpoint_family_sets_use_deterministic_whole_family_prefixes() -> Non
         1350,
     ]
     for item in checkpoints:
-        assert item["included_family_ids"] == sorted(
-            item["included_family_ids"]
-        )
+        assert item["included_family_ids"] == sorted(item["included_family_ids"])
 
 
 def test_selection_percentile_ranks_handle_ties_and_direction() -> None:

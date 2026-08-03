@@ -48,11 +48,14 @@ def _canonical_frame(
 
 def _without_timing(value: Any) -> Any:
     if isinstance(value, dict):
-        return {
-            key: _without_timing(item)
-            for key, item in sorted(value.items())
-            if not key.endswith("_seconds") and key not in {"stages", "candidate_count"}
-        }
+        normalized: dict[str, Any] = {}
+        for key, item in sorted(value.items()):
+            if not isinstance(key, str):
+                raise TypeError("instrumentation keys must be strings")
+            if key.endswith("_seconds") or key in {"stages", "candidate_count"}:
+                continue
+            normalized[key] = _without_timing(item)
+        return normalized
     if isinstance(value, list):
         return [_without_timing(item) for item in value]
     return value

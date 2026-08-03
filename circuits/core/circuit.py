@@ -5,11 +5,11 @@ Utilities for representing and visualizing CLSO circuits.
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
 
 import numpy as np
-from circuits.core.utils import Order
 from pydantic import BaseModel
+
+from circuits.core.utils import Order
 
 
 class CircuitNode(BaseModel):
@@ -53,26 +53,26 @@ class CircuitGraph:
     """
 
     def __init__(self, db=None, neuron_label_cache=None, token_strings=None, focus_tokens=None):
-        self.nodes: Set[CircuitNode] = set()
-        self.edges: List[CircuitEdge] = []
+        self.nodes: set[CircuitNode] = set()
+        self.edges: list[CircuitEdge] = []
         self.db = db  # Database connection for querying neuron labels
         self.neuron_label_cache = neuron_label_cache or {}  # Pre-fetched neuron labels
         self.token_strings = token_strings  # Token strings for each node
         self.focus_tokens = focus_tokens
 
         # For efficient lookups - using node keys for compatibility with existing code
-        self._node_by_key: Dict[Tuple[int, int, int], CircuitNode] = {}
-        self._incoming_edges: Dict[CircuitNode, List[CircuitEdge]] = defaultdict(list)
-        self._outgoing_edges: Dict[CircuitNode, List[CircuitEdge]] = defaultdict(list)
+        self._node_by_key: dict[tuple[int, int, int], CircuitNode] = {}
+        self._incoming_edges: dict[CircuitNode, list[CircuitEdge]] = defaultdict(list)
+        self._outgoing_edges: dict[CircuitNode, list[CircuitEdge]] = defaultdict(list)
         self._built = False
 
-    def _get_node_key(self, node: CircuitNode) -> Tuple[int, int, int]:
+    def _get_node_key(self, node: CircuitNode) -> tuple[int, int, int]:
         """Get the tuple key for a node."""
         return (node.layer, node.position, node.neuron_idx)
 
     def add_node(
         self,
-        node: Tuple[int, int, int] | CircuitNode,
+        node: tuple[int, int, int] | CircuitNode,
         activations: list[float] | None = None,
         attribution: list[float] | None = None,
         polarity: str | None = None,
@@ -105,8 +105,8 @@ class CircuitGraph:
 
     def add_edge(
         self,
-        source: Tuple[int, int, int] | CircuitNode,
-        target: Tuple[int, int, int] | CircuitNode,
+        source: tuple[int, int, int] | CircuitNode,
+        target: tuple[int, int, int] | CircuitNode,
         weight: float,
         order: Order,
         absolute_weight: float | None = None,
@@ -160,14 +160,14 @@ class CircuitGraph:
 
         self._built = True
 
-    def get_incoming_edges(self, node: Tuple[int, int, int] | CircuitNode) -> List[CircuitEdge]:
+    def get_incoming_edges(self, node: tuple[int, int, int] | CircuitNode) -> list[CircuitEdge]:
         """Get all incoming edges to a node."""
         self._build_adjacency_maps()
         if isinstance(node, tuple):
             node = self._node_by_key[node]
         return self._incoming_edges[node].copy()
 
-    def get_outgoing_edges(self, node: Tuple[int, int, int] | CircuitNode) -> List[CircuitEdge]:
+    def get_outgoing_edges(self, node: tuple[int, int, int] | CircuitNode) -> list[CircuitEdge]:
         """Get all outgoing edges from a node."""
         self._build_adjacency_maps()
         if isinstance(node, tuple):
@@ -175,45 +175,42 @@ class CircuitGraph:
         return self._outgoing_edges[node].copy()
 
     def get_parents(
-        self, node: Tuple[int, int, int] | CircuitNode
-    ) -> List[Tuple[CircuitNode, float]]:
+        self, node: tuple[int, int, int] | CircuitNode
+    ) -> list[tuple[CircuitNode, float]]:
         """Get all parent nodes with edge weights."""
         incoming_edges = self.get_incoming_edges(node)
         return [(edge.source, edge.weight) for edge in incoming_edges]
 
     def get_children(
-        self, node: Tuple[int, int, int] | CircuitNode
-    ) -> List[Tuple[CircuitNode, float]]:
+        self, node: tuple[int, int, int] | CircuitNode
+    ) -> list[tuple[CircuitNode, float]]:
         """Get all child nodes with edge weights."""
         outgoing_edges = self.get_outgoing_edges(node)
         return [(edge.target, edge.weight) for edge in outgoing_edges]
 
-    def get_nodes_by_layer(self, layer: int) -> List[CircuitNode]:
+    def get_nodes_by_layer(self, layer: int) -> list[CircuitNode]:
         """Get all nodes in a specific layer."""
         return [node for node in self.nodes if node.layer == layer]
 
-    def get_nodes_by_position(self, position: int) -> List[CircuitNode]:
+    def get_nodes_by_position(self, position: int) -> list[CircuitNode]:
         """Get all nodes at a specific position."""
         return [node for node in self.nodes if node.position == position]
 
-    def get_leaves(self) -> List[CircuitNode]:
+    def get_leaves(self) -> list[CircuitNode]:
         """Get all nodes that have no parents."""
         return [node for node in self.nodes if len(self.get_parents(node)) == 0]
 
-    def get_layers(self) -> List[int]:
+    def get_layers(self) -> list[int]:
         """Get all unique layers in the graph, sorted."""
-        return sorted(list(set(node.layer for node in self.nodes)))
+        return sorted({node.layer for node in self.nodes})
 
-    def get_positions(self) -> List[int]:
+    def get_positions(self) -> list[int]:
         """Get all unique positions in the graph, sorted."""
-        return sorted(list(set(node.position for node in self.nodes)))
+        return sorted({node.position for node in self.nodes})
 
-    def get_node_info(self, node: Tuple[int, int, int] | CircuitNode) -> Dict:
+    def get_node_info(self, node: tuple[int, int, int] | CircuitNode) -> dict:
         """Get comprehensive information about a node."""
-        if isinstance(node, tuple):
-            circuit_node = self._node_by_key[node]
-        else:
-            circuit_node = node
+        circuit_node = self._node_by_key[node] if isinstance(node, tuple) else node
 
         parents = self.get_parents(circuit_node)
         children = self.get_children(circuit_node)
@@ -232,24 +229,21 @@ class CircuitGraph:
             "polarity": circuit_node.polarity,
         }
 
-    def get_node_label(self, node: Tuple[int, int, int] | CircuitNode) -> str:
+    def get_node_label(self, node: tuple[int, int, int] | CircuitNode) -> str:
         """Get the label for a specific node."""
-        if isinstance(node, tuple):
-            circuit_node = self._node_by_key[node]
-        else:
-            circuit_node = node
+        circuit_node = self._node_by_key[node] if isinstance(node, tuple) else node
         return circuit_node.label
 
     def get_strongest_paths(
-        self, start_node: Tuple[int, int, int] | CircuitNode, max_depth: int = 3
-    ) -> List[List[CircuitNode]]:
+        self, start_node: tuple[int, int, int] | CircuitNode, max_depth: int = 3
+    ) -> list[list[CircuitNode]]:
         """Get the strongest paths starting from a node (by absolute weight)."""
         if isinstance(start_node, tuple):
             start_node = self._node_by_key[start_node]
 
         paths = []
 
-        def dfs(current_path: List[CircuitNode], current_node: CircuitNode, depth: int):
+        def dfs(current_path: list[CircuitNode], current_node: CircuitNode, depth: int):
             if depth >= max_depth:
                 return
 
@@ -262,7 +256,7 @@ class CircuitGraph:
             # Sort children by absolute weight (strongest first)
             children.sort(key=lambda x: abs(x[1]), reverse=True)
 
-            for child_node, weight in children[:3]:  # Take top 3 strongest children
+            for child_node, _weight in children[:3]:  # Take top 3 strongest children
                 if child_node not in current_path:  # Avoid cycles
                     current_path.append(child_node)
                     dfs(current_path, child_node, depth + 1)
@@ -271,15 +265,15 @@ class CircuitGraph:
         dfs([start_node], start_node, 0)
         return paths
 
-    def list_all_nodes(self) -> List[CircuitNode]:
+    def list_all_nodes(self) -> list[CircuitNode]:
         """List all nodes in the graph, sorted by layer, then position, then neuron_idx."""
-        return sorted(list(self.nodes), key=lambda n: (n.layer, n.position, n.neuron_idx))
+        return sorted(self.nodes, key=lambda n: (n.layer, n.position, n.neuron_idx))
 
     def _node_to_id(self, node: CircuitNode) -> str:
         """Convert a node to a string ID for JSON serialization."""
         return f"{node.layer}_{node.position}_{node.neuron_idx}"
 
-    def _id_to_node_key(self, node_id: str) -> Tuple[int, int, int]:
+    def _id_to_node_key(self, node_id: str) -> tuple[int, int, int]:
         """Convert a string ID back to a node key tuple for JSON deserialization."""
         parts = node_id.split("_")
         return (int(parts[0]), int(parts[1]), int(parts[2]))
@@ -353,7 +347,7 @@ class CircuitGraph:
         """
         filepath = Path(filepath)
 
-        with open(filepath, "r") as f:
+        with open(filepath) as f:
             graph_data = json.load(f)
 
         # Create new CircuitGraph instance
@@ -387,7 +381,7 @@ class CircuitGraph:
 
         return circuit
 
-    def summary(self) -> Dict:
+    def summary(self) -> dict:
         """Get summary statistics of the graph."""
         layers = self.get_layers()
         positions = self.get_positions()
@@ -426,11 +420,14 @@ def generate_circuit_html(
     circuit: CircuitGraph,
     output_path: str | Path = "circuit_visualization.html",
     title: str = "Circuit Visualization",
-    batch_labels: List[str] = [],
+    batch_labels: list[str] | None = None,
 ) -> str:
     """
     Generate an interactive HTML visualization of a CircuitGraph with right-aligned node positioning.
     """
+
+    if batch_labels is None:
+        batch_labels = []
 
     # Prepare data for visualization
     nodes_data = []
@@ -488,7 +485,6 @@ def generate_circuit_html(
                 normalized_weights[target_id].append(min(1.0, np.mean(np.abs(w))))
 
     # Second pass: create edge data with normalized opacity
-    edge_idx = 0
     for edge in circuit.edges:
         source_id = f"{edge.source.layer}_{edge.source.position}_{edge.source.neuron_idx}"
         target_id = f"{edge.target.layer}_{edge.target.position}_{edge.target.neuron_idx}"
@@ -515,10 +511,8 @@ def generate_circuit_html(
                 "absolute_weight": edge.absolute_weight,
             }
         )
-        edge_idx += 1
-
     # Get token positions for x-axis
-    token_positions = sorted(list(set(node.position for node in circuit.nodes)))
+    token_positions = sorted({node.position for node in circuit.nodes})
     token_labels = []
     for pos in token_positions:
         if circuit.token_strings and pos < len(circuit.token_strings):
@@ -528,11 +522,11 @@ def generate_circuit_html(
 
     # Read the HTML template
     template_path = Path(__file__).parent / "circuit_template.html"
-    with open(template_path, "r", encoding="utf-8") as f:
+    with open(template_path, encoding="utf-8") as f:
         html_template = f.read()
 
     # Format the template with the data
-    mapping: Dict[str, str] = {
+    mapping: dict[str, str] = {
         "title": title,
         "nodes_data": json.dumps(nodes_data),
         "edges_data": json.dumps(edges_data),

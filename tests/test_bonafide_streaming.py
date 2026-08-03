@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pandas as pd
 import pyarrow.parquet as pq
-
 from circuits.analysis.bonafide import streaming as streaming_module
 from circuits.analysis.bonafide.build_plan import (
     build_downstream_plan,

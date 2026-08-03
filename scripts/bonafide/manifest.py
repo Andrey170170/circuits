@@ -11,15 +11,15 @@ import csv
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, cast
 
 from circuits.tracing.trace import tokenize_teacher_forced_response
 from huggingface_hub import snapshot_download
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
-
+from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerBase
 
 SCHEMA_VERSION = "bonafide-trace-benchmark/v1"
 DEFAULT_WAVE2_WIDTHS = (1, 2, 4, 8, 16, 32)
@@ -29,9 +29,9 @@ DEFAULT_WAVE2C_SEED = "bonafide-wave2c-v1"
 
 
 def _canonical_json(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def _sha256(value: bytes) -> str:
@@ -110,14 +110,18 @@ def response_trace_tokens(
 ) -> list[int]:
     """Return exact response IDs under the tracing chat-template boundary."""
 
-    tokenized = tokenize_teacher_forced_response(tokenizer, prompt, response)
+    tokenized = tokenize_teacher_forced_response(
+        cast(PreTrainedTokenizer, tokenizer), prompt, response
+    )
     return tokenized.response_ids
 
 
 def _find_example_by_annotation_id(
     examples: Sequence[BonaFideExample], annotation_id: str
 ) -> BonaFideExample:
-    matches = [example for example in examples if annotation_id in example.annotation_row_ids]
+    matches = [
+        example for example in examples if annotation_id in example.annotation_row_ids
+    ]
     if len(matches) != 1:
         raise ValueError(
             f"Expected exactly one deduplicated example for annotation {annotation_id!r}; "
@@ -145,7 +149,9 @@ def select_varied_lengths(
     for anchor in anchors:
         item = by_id.get(anchor.example_id)
         if item is None:
-            raise ValueError(f"Anchor {anchor.annotation_row_ids[0]!r} is outside the candidates")
+            raise ValueError(
+                f"Anchor {anchor.annotation_row_ids[0]!r} is outside the candidates"
+            )
         if anchor.example_id not in selected_ids:
             selected.append(item)
             selected_ids.add(anchor.example_id)
@@ -161,7 +167,8 @@ def select_varied_lengths(
         )
         for index in desired:
             candidates = sorted(
-                range(len(ordered)), key=lambda candidate: (abs(candidate - index), candidate)
+                range(len(ordered)),
+                key=lambda candidate: (abs(candidate - index), candidate),
             )
             for candidate in candidates:
                 item = ordered[candidate]
@@ -192,7 +199,9 @@ def select_evenly_spaced_positions(response_length: int, count: int) -> list[int
         )
     if count == 1:
         return [response_length - 1]
-    return [round(index * (response_length - 1) / (count - 1)) for index in range(count)]
+    return [
+        round(index * (response_length - 1) / (count - 1)) for index in range(count)
+    ]
 
 
 def select_stratified_random_positions(
@@ -242,7 +251,9 @@ def select_stratified_random_positions(
                 "stratum_index": stratum_index,
                 "counter": counter,
             }
-            draw = int.from_bytes(hashlib.sha256(_canonical_json(draw_key)).digest(), "big")
+            draw = int.from_bytes(
+                hashlib.sha256(_canonical_json(draw_key)).digest(), "big"
+            )
             if draw < rejection_limit:
                 break
             counter += 1
@@ -358,11 +369,15 @@ def build_manifest(
             tokenizer, wave2_example.prompt, wave2_example.response
         )
     else:
-        eligible = [item for item in wave1_examples if len(item[1]) >= max(wave2_widths)]
+        eligible = [
+            item for item in wave1_examples if len(item[1]) >= max(wave2_widths)
+        ]
         if not eligible:
             eligible = [item for item in tokenized if len(item[1]) >= max(wave2_widths)]
         if not eligible:
-            raise ValueError(f"No response is long enough for wave 2 width {max(wave2_widths)}")
+            raise ValueError(
+                f"No response is long enough for wave 2 width {max(wave2_widths)}"
+            )
         # A median-length selected sample avoids making sequence length itself an extreme.
         eligible = sorted(eligible, key=lambda item: (len(item[1]), item[0].example_id))
         wave2_example, wave2_ids = eligible[len(eligible) // 2]
@@ -410,7 +425,9 @@ def build_manifest(
 
     wave2c_waves: list[dict[str, Any]] = []
     wave2c_examples = [
-        item for item in wave1_examples if item[0].example_id != wave2_example.example_id
+        item
+        for item in wave1_examples
+        if item[0].example_id != wave2_example.example_id
     ]
     for prompt_index, (example, ids) in enumerate(wave2c_examples, start=1):
         stratum_count = min(wave2c_stratum_count, len(ids))
@@ -458,7 +475,7 @@ def build_manifest(
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "dataset": {
             "path": str(csv_path),
             "sha256": _file_sha256(csv_path),
@@ -500,7 +517,9 @@ def build_manifest(
 def write_manifest(manifest: dict[str, Any], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
-    temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     temporary.replace(output_path)
 
 
@@ -531,7 +550,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--csv", type=Path, default=Path("BonaFide.csv"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-id", default="Qwen/Qwen3-4B-Instruct-2507")
-    parser.add_argument("--revision", required=True, help="Exact Hugging Face model revision")
+    parser.add_argument(
+        "--revision", required=True, help="Exact Hugging Face model revision"
+    )
     parser.add_argument(
         "--tokenizer-path",
         type=Path,
@@ -544,9 +565,15 @@ def parse_args() -> argparse.Namespace:
         default=2048,
         help="Safety cap for Wave 1 candidates (default: 2048 exact chat-template tokens)",
     )
-    parser.add_argument("--anchor-id", action="append", default=[], help="BonaFide annotation row ID")
-    parser.add_argument("--wave2-id", help="Annotation row ID to use for progressive windows")
-    parser.add_argument("--wave2-widths", nargs="+", type=int, default=list(DEFAULT_WAVE2_WIDTHS))
+    parser.add_argument(
+        "--anchor-id", action="append", default=[], help="BonaFide annotation row ID"
+    )
+    parser.add_argument(
+        "--wave2-id", help="Annotation row ID to use for progressive windows"
+    )
+    parser.add_argument(
+        "--wave2-widths", nargs="+", type=int, default=list(DEFAULT_WAVE2_WIDTHS)
+    )
     parser.add_argument(
         "--wave2b-target-count",
         type=int,

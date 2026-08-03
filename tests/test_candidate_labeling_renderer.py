@@ -8,7 +8,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from circuits.analysis.bonafide.candidate_labeling_comparison import (
     EXPECTED_W_ANCHORS,
     LoadedCandidateLabelingComparison,
@@ -497,7 +496,8 @@ def test_renderer_publishes_no_overwrite_and_loader_detects_tampering(
         load_candidate_labeling_renderer(output, verify_sources=True).manifest
         == manifest
     )
-    assert source_roots and all(path == tmp_path for path in source_roots)
+    assert source_roots
+    assert all(path == tmp_path for path in source_roots)
     core = dict(manifest)
     assert core.pop("manifest_sha256") == canonical_sha256(core)
     with pytest.raises(FileExistsError, match="refusing to replace"):

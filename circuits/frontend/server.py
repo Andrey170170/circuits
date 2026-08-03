@@ -10,6 +10,7 @@ import threading
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import override
 
 logger = logging.getLogger(__name__)
 logger.propagate = False
@@ -24,6 +25,7 @@ class ListHandler(logging.Handler):
         super().__init__()
         self.log_list = log_list
 
+    @override
     def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
         self.log_list.append(msg)
@@ -38,12 +40,17 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
         self.data_dir = str(data_dir)
         super().__init__(*args, directory=str(frontend_dir), **kwargs)
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+    @override
+    def log_message(self, format: str, *args: object) -> None:
         message = format % args
         logger.info(
-            "%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), message)
+            "%s - - [%s] %s",
+            self.address_string(),
+            self.log_date_time_string(),
+            message,
         )
 
+    @override
     def do_GET(self) -> None:
         try:
             self._do_GET()
@@ -110,13 +117,19 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
                 global_max = max_act
             train_idx = acts.index(max_act) if acts else 0
             examples.append(
-                {"tokens": tokens, "tokens_acts_list": acts, "train_token_ind": train_idx}
+                {
+                    "tokens": tokens,
+                    "tokens_acts_list": acts,
+                    "train_token_ind": train_idx,
+                }
             )
 
         result = {
             "act_min": 0,
             "act_max": global_max if global_max > 0 else 1.0,
-            "examples_quantiles": [{"quantile_name": "Max activating", "examples": examples}],
+            "examples_quantiles": [
+                {"quantile_name": "Max activating", "examples": examples}
+            ],
             "top_logits": [],
             "bottom_logits": [],
         }
@@ -200,7 +213,9 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
 
 
 class Server:
-    def __init__(self, httpd: ReusableTCPServer, server_thread: threading.Thread) -> None:
+    def __init__(
+        self, httpd: ReusableTCPServer, server_thread: threading.Thread
+    ) -> None:
         self.httpd = httpd
         self.server_thread = server_thread
         self.logs: list[str] = []
@@ -263,15 +278,21 @@ def serve(
     Returns:
         Server object with a stop() method to shut down the server.
     """
-    frontend_dir = Path(frontend_dir).resolve() if frontend_dir else DEFAULT_FRONTEND_DIR
+    frontend_dir = (
+        Path(frontend_dir).resolve() if frontend_dir else DEFAULT_FRONTEND_DIR
+    )
 
     frontend_dir_path = Path(frontend_dir)
     if not frontend_dir_path.exists() or not frontend_dir_path.is_dir():
-        raise ValueError(f"Got frontend dir {frontend_dir} but this is not a valid directory")
+        raise ValueError(
+            f"Got frontend dir {frontend_dir} but this is not a valid directory"
+        )
 
     logger.info(f"Serving files from: {frontend_dir}")
 
-    handler = functools.partial(CircuitGraphHandler, frontend_dir=frontend_dir, data_dir=data_dir)
+    handler = functools.partial(
+        CircuitGraphHandler, frontend_dir=frontend_dir, data_dir=data_dir
+    )
 
     httpd = ReusableTCPServer(("", port), handler)
 

@@ -59,7 +59,8 @@ def test_width_one_parser_requires_explicit_limit_and_status_fields() -> None:
         "bonafide-width-one-cluster-summary-v2",
     )
     assert status == "success"
-    assert parsed is not None and parsed["status"] == "provisional_label"
+    assert parsed is not None
+    assert parsed["status"] == "provisional_label"
     assert (
         parse_json_output(
             '{"label":"","rationale":"r","confidence":0.3,'

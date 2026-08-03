@@ -232,11 +232,11 @@ def main() -> None:
         all_attr = h_attrs + a_attrs
         attr_best = best_idx(all_attr)
 
-        for i, (name, val) in enumerate(zip(human_names, h_attrs)):
+        for i, (name, val) in enumerate(zip(human_names, h_attrs, strict=True)):
             row += f" & {fmt(val, bold=(attr_best == i))}"
             if val is not None:
                 attr_means[name].append(val)
-        for i, (name, a_attr) in enumerate(zip(auto_names, a_attrs)):
+        for i, (name, a_attr) in enumerate(zip(auto_names, a_attrs, strict=True)):
             row += f" & {fmt(a_attr, bold=(attr_best == len(human_names) + i))}"
             if a_attr is not None:
                 attr_means[name].append(a_attr)
@@ -249,11 +249,13 @@ def main() -> None:
         all_contrib = h_contribs + a_contribs
         contrib_best = best_idx(all_contrib)
 
-        for i, (name, val) in enumerate(zip(human_names, h_contribs)):
+        for i, (name, val) in enumerate(zip(human_names, h_contribs, strict=True)):
             row += f" & {fmt(val, bold=(contrib_best == i))}"
             if val is not None:
                 contrib_means[name].append(val)
-        for i, (name, a_contrib) in enumerate(zip(auto_names, a_contribs)):
+        for i, (name, a_contrib) in enumerate(
+            zip(auto_names, a_contribs, strict=True)
+        ):
             row += f" & {fmt(a_contrib, bold=(contrib_best == len(human_names) + i))}"
             if a_contrib is not None:
                 contrib_means[name].append(a_contrib)

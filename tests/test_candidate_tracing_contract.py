@@ -4,8 +4,6 @@ import math
 
 import pytest
 import torch
-from torch import nn
-
 from circuits.tracing.attribution import _get_grad_attributions_from_logits
 from circuits.tracing.candidates import (
     CandidateLogit,
@@ -14,6 +12,7 @@ from circuits.tracing.candidates import (
     reduce_candidate_contributions,
     select_candidate_logits,
 )
+from torch import nn
 
 
 def _decode(token_id: int) -> str:

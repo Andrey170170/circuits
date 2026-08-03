@@ -67,8 +67,7 @@ def sparse_reshape(x, shape):
 def sparse_mean(x, dim):
     if isinstance(dim, int):
         return x.sum(dim=dim) / x.shape[dim]
-    else:
-        return x.sum(dim=dim) / _prod(x.shape[d] for d in dim)
+    return x.sum(dim=dim) / _prod(x.shape[d] for d in dim)
 
 
 def sparse_repeat(x, repeat_sizes):
@@ -87,11 +86,11 @@ def sparse_repeat(x, repeat_sizes):
     old_indices = x.indices()
     old_values = x.values()
 
-    new_shape = tuple(s * r for s, r in zip(old_shape, repeat_sizes))
+    new_shape = tuple(s * r for s, r in zip(old_shape, repeat_sizes, strict=True))
     total_repeat = _prod(repeat_sizes)
 
     new_indices = []
-    for dim, (size, repeat) in enumerate(zip(old_shape, repeat_sizes)):
+    for dim, (size, repeat) in enumerate(zip(old_shape, repeat_sizes, strict=True)):
         indices = old_indices[dim].repeat(total_repeat)
 
         offsets = t.arange(repeat, device=x.device)

@@ -84,7 +84,7 @@ def main():
     cluster_attr: dict[str, np.ndarray] = {}
     for (layer, neuron), sub in grouped.groupby(["layer", "neuron"]):
         cl = cluster_map.get((int(layer), int(neuron)), "?")
-        attr_by_label = dict(zip(sub["label"], sub["total_attr"]))
+        attr_by_label = dict(zip(sub["label"], sub["total_attr"], strict=False))
         attr_vec = np.array([attr_by_label.get(l, 0.0) for l in all_labels])
         if cl not in cluster_attr:
             cluster_attr[cl] = np.zeros(len(all_labels))
@@ -102,14 +102,14 @@ def main():
         attr_vec = cluster_attr[cl]
         sl = summary_labels.get(cl, "")
         facet_label = f"{cl}: {sl}" if sl else cl
-        for i in range(len(all_labels)):
-            rows.append(
-                {
+        rows.extend(
+            {
                     "cluster": facet_label,
                     "attribution": float(attr_vec[i]),
                     "asr": float(np.clip(asr_vec[i], 0.0, 1.0)),
-                }
-            )
+            }
+            for i in range(len(all_labels))
+        )
 
     plot_df = pd.DataFrame(rows)
     if len(plot_df) == 0:

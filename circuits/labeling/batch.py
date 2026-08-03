@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from circuits.labeling.api import (
     anthropic_usage,
@@ -182,9 +183,7 @@ def collect_openai_batch(
         raise ValueError(f"required API key environment variable is missing: {key_env}")
     client = OpenAI(api_key=api_key)
     batch = client.batches.retrieve(batch_id)
-    if batch.status != "completed" or not (
-        batch.output_file_id or batch.error_file_id
-    ):
+    if batch.status != "completed" or not (batch.output_file_id or batch.error_file_id):
         raise ValueError(f"OpenAI batch is not collectable: status={batch.status!r}")
     results: dict[str, GenerationResult] = {}
     raw_files: dict[str, dict[str, Any]] = {}
@@ -210,8 +209,7 @@ def collect_openai_batch(
                 row = json.loads(line)
             except json.JSONDecodeError as error:
                 raise ValueError(
-                    f"OpenAI batch {source} file has invalid JSON on line "
-                    f"{line_number}"
+                    f"OpenAI batch {source} file has invalid JSON on line {line_number}"
                 ) from error
             request_id = row.get("custom_id")
             if request_id not in requests:
@@ -296,7 +294,7 @@ def parse_openai_batch_row(
         raw_text=text,
         raw_response_sha256=_sha256(text),
         parsed=parsed,
-        parse_status=status,  # type: ignore[arg-type]
+        parse_status=status,
         usage=openai_usage(body.get("usage")),
         stop_reason=openai_stop_reason(body),
     )
@@ -355,7 +353,7 @@ def parse_anthropic_batch_result(
         raw_text=text,
         raw_response_sha256=_sha256(text),
         parsed=parsed,
-        parse_status=status,  # type: ignore[arg-type]
+        parse_status=status,
         usage=anthropic_usage(message.usage),
         stop_reason=message.stop_reason,
     )
@@ -366,9 +364,11 @@ def _openai_response_text(body: dict[str, Any]) -> str:
     for item in body.get("output", []):
         if item.get("type") != "message":
             continue
-        for content in item.get("content", []):
-            if content.get("type") in ("output_text", "text"):
-                texts.append(str(content.get("text", "")))
+        texts.extend(
+            str(content.get("text", ""))
+            for content in item.get("content", [])
+            if content.get("type") in ("output_text", "text")
+        )
     return "".join(texts)
 
 

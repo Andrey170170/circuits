@@ -72,7 +72,7 @@ class MultiNeuronSteeringHook:
         else:
             for ni in self.neuron_idxs:
                 x[:, :, ni] *= self.multiplier
-        return (x,) + input[1:]
+        return (x, *input[1:])
 
     def register(self, model, layer: int):
         self.handle = model.model.layers[layer].mlp.down_proj.register_forward_pre_hook(
@@ -126,29 +126,6 @@ async def judge_responses(raw_prompt: str, responses: list[str]) -> tuple[list[s
         for r in all_results[n:]
     ]
     return outcomes, coherence
-
-
-def generate_with_hooks(model, input_ids, hooks, num_generations, max_new_tokens) -> list[str]:
-    for h in hooks:
-        pass  # already registered
-    try:
-        outputs = model.generate(
-            input_ids,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
-            num_return_sequences=num_generations,
-        )
-    finally:
-        for h in hooks:
-            h.remove()
-    input_ids.shape[1]
-    return (
-        [model.config._name_or_path and "" or ""]  # dummy to avoid linter
-        or [AutoTokenizer.from_pretrained("x")]  # never runs
-        or []
-    )  # never runs
 
 
 def main():
@@ -235,7 +212,6 @@ def main():
                 continue
             neuron = int(row["neuron"])
             token = int(row["token"]) - pad_offset
-            (layer, neuron)
             cl = None
             for nid, c_name in c._cluster_map.items():
                 if int(nid.layer) == layer and int(nid.neuron) == neuron:
@@ -365,8 +341,11 @@ def main():
             }
 
     # Print table
-    n_unique_fn = lambda cl: sum(len(ns) for ns in cluster_neurons[cl].values())
-    n_pos_fn = lambda cl: sum(len(ps) for ps in cluster_pos_neurons.get(cl, {}).values())
+    def n_unique_fn(cl):
+        return sum(len(ns) for ns in cluster_neurons[cl].values())
+
+    def n_pos_fn(cl):
+        return sum(len(ps) for ps in cluster_pos_neurons.get(cl, {}).values())
     mode = "token-pos" if args.use_token_pos else "all-pos"
     print(f"\n{'='*110}")
     print(

@@ -5,7 +5,8 @@ Utilities for clustering neurons in a circuit.
 import json
 import logging
 import os
-from typing import Any, Literal, Mapping, NamedTuple, cast
+from collections.abc import Mapping
+from typing import Any, Literal, NamedTuple, cast
 
 import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
@@ -235,7 +236,10 @@ def compute_embeddings(
     attr_row_sums = cast(
         list[NDArray[np.float32]], [x.sum(axis=-1, keepdims=True) for x in attr_map]
     )
-    attr_map = [x / np.where(y == 0, 1.0, y) for x, y in zip(attr_map, attr_row_sums)]
+    attr_map = [
+        x / np.where(y == 0, 1.0, y)
+        for x, y in zip(attr_map, attr_row_sums, strict=True)
+    ]
 
     # unit normalize
     if do_unit_norm:
@@ -245,24 +249,28 @@ def compute_embeddings(
     # compute embeddings
     if mode == "attr":
         return attr_map
-    elif mode == "contrib":
+    if mode == "contrib":
         return contrib_map
-    elif mode == "attr + contrib":
-        return [np.concatenate([x, y], axis=-1) for x, y in zip(attr_map, contrib_map)]
-    elif mode == "attr x contrib":
-        return [np.outer(x, y) for x, y in zip(attr_map, contrib_map)]
-    elif mode == "random":
+    if mode == "attr + contrib":
+        return [
+            np.concatenate([x, y], axis=-1)
+            for x, y in zip(attr_map, contrib_map, strict=True)
+        ]
+    if mode == "attr x contrib":
+        return [np.outer(x, y) for x, y in zip(attr_map, contrib_map, strict=True)]
+    if mode == "random":
         return [
             np.random.randn(x.shape[0] + y.shape[0]).astype(np.float32)
-            for x, y in zip(attr_map, contrib_map)
+            for x, y in zip(attr_map, contrib_map, strict=True)
         ]
+    raise ValueError(f"Unsupported embedding mode: {mode}")
 
 
 def export_neuron_graph(data: dict, out_html: str):
     """Export visualization data to standalone HTML file."""
     current_dir = os.path.dirname(os.path.abspath(__file__))
     visualization_path = os.path.join(current_dir, "visualization.html")
-    with open(visualization_path, "r", encoding="utf-8") as f:
+    with open(visualization_path, encoding="utf-8") as f:
         html = f.read()
     html = html.replace("__GRAPH_JSON__", json.dumps(data))
     html = html.replace("__DEFAULT_METRIC__", "Average")

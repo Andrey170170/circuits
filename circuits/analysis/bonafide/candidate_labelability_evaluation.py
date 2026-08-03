@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -73,6 +74,7 @@ _PARTITIONS = ("generation", "selection_scoring", "audit")
 _HELDOUT_PARTITIONS = ("selection_scoring", "audit")
 _STATE_NAMES = tuple(FROZEN_CANDIDATE_STATES)
 _COMPARISONS = ("C_minus_W", "F_minus_W", "C_minus_S", "F_minus_S")
+type _IntArray = npt.NDArray[np.int64]
 
 _SOURCE_BINDINGS = {
     "canonical": "circuits/analysis/bonafide/canonical.py",
@@ -213,7 +215,7 @@ def extract_chosen_medoid_assignments(
     baseline: LoadedCandidateClusteringBaseline,
     *,
     basis_count: int,
-) -> dict[str, np.ndarray]:
+) -> dict[str, _IntArray]:
     """Extract exactly one chosen, valid medoid assignment for W/C/F/S."""
 
     manifest = baseline.manifest
@@ -228,7 +230,7 @@ def extract_chosen_medoid_assignments(
         raise ValueError("candidate baseline and input basis counts disagree")
 
     rows = baseline.assignments.to_pylist()
-    output: dict[str, np.ndarray] = {}
+    output: dict[str, _IntArray] = {}
     for state in _STATE_NAMES:
         selected = [
             row
@@ -357,7 +359,14 @@ def _partition_records(
 
 def _bootstrap_reports(coherence: Mapping[str, Any]) -> dict[str, Any]:
     partition = str(coherence["partition"])
-    family_ids = tuple(coherence["expected_family_ids"])
+    raw_family_ids = coherence["expected_family_ids"]
+    if not isinstance(raw_family_ids, Sequence) or isinstance(raw_family_ids, str):
+        raise TypeError("coherence report family IDs are invalid")
+    family_ids: tuple[str, ...] = tuple(
+        family_id for family_id in raw_family_ids if isinstance(family_id, str)
+    )
+    if len(family_ids) != len(raw_family_ids):
+        raise TypeError("coherence report family IDs are invalid")
     expected_family_ids = set(family_ids)
     comparisons = coherence["comparisons"]
     result: dict[str, Any] = {}
@@ -368,7 +377,13 @@ def _bootstrap_reports(coherence: Mapping[str, Any]) -> dict[str, Any]:
         effects = report.get("per_family_effect")
         if not isinstance(effects, Mapping):
             raise TypeError(f"coherence comparison {comparison} lacks family effects")
-        observed_family_ids = set(effects)
+        observed_family_ids: set[str] = set()
+        for family_id in effects:
+            if not isinstance(family_id, str):
+                raise TypeError(
+                    f"coherence comparison {comparison} has an invalid family ID"
+                )
+            observed_family_ids.add(family_id)
         if observed_family_ids != expected_family_ids:
             result[comparison] = {
                 "available": False,

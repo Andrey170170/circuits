@@ -58,7 +58,7 @@ def compute_cluster_correlations(
     cluster_attr: dict[str, np.ndarray] = {}
     for (layer, neuron), sub in grouped.groupby(["layer", "neuron"]):
         cl = cluster_map.get((int(layer), int(neuron)), "?")
-        attr_by_label = dict(zip(sub["label"], sub["total_attr"]))
+        attr_by_label = dict(zip(sub["label"], sub["total_attr"], strict=False))
         attr_vec = np.array([attr_by_label.get(l, 0.0) for l in all_labels])
         if cl not in cluster_attr:
             cluster_attr[cl] = np.zeros(len(all_labels))
@@ -126,13 +126,7 @@ def main():
         return max(abs(a0 - a1), abs(a2 - a1))
 
     clusters_sorted = sorted(clusters, key=effect_size, reverse=True)
-
-    # Get unsteered (1x) data from any cluster (they're all the same)
-    first_cl = clusters_sorted[0]
-    unsteered = sweep[first_cl].get("1.0", {})
-    n_total = (
-        unsteered.get("n_yes", 0) + unsteered.get("n_no", 0) + unsteered.get("n_incoherent", 0)
-    )
+    unsteered = sweep[clusters_sorted[0]].get("1.0", {})
 
     def color_cell(asr: float, sd: float) -> str:
         if asr < 0:

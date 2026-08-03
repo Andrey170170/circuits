@@ -5,13 +5,14 @@ Utilities for processing a dataset of inputs into serialized CLSO circuits.
 import numpy as np
 import pandas as pd
 import torch
-from circuits.core.jvp import ADAGConfig, get_all_pairs_cl_ja_effects_with_attributions
-from circuits.core.utils import Edge, Node
 from tqdm import tqdm
 from transformers import PreTrainedTokenizer
 from user_modeling.datasets.wikipedia import get_wikipedia_dataset_by_split
 from util.chat_input import ChatInput, IdsInput
 from util.subject import Subject, llama31_8B_instruct_config
+
+from circuits.core.jvp import ADAGConfig, get_all_pairs_cl_ja_effects_with_attributions
+from circuits.core.utils import Edge, Node
 
 
 def prepare_ci(
@@ -44,7 +45,7 @@ def prepare_ci(
     token_ids = ci.tokenize(subject)
     if seed_response is not None and seed_response.endswith(" "):
         space_token = tokenizer.encode(" ")[1]
-        token_ids = token_ids + [space_token]
+        token_ids = [*token_ids, space_token]
     ci = IdsInput(input_ids=token_ids)
 
     if true_answers is not None:
@@ -68,7 +69,7 @@ def prepare_cis(
     seed_responses: list[str],
     k: int = 5,
     system_prompt: str | None = None,
-    true_answers: list[str] | list[None] | None = None,
+    true_answers: list[list[str] | None] | None = None,
     use_chat_format: bool = True,
     verbose: bool = False,
 ):
@@ -79,16 +80,14 @@ def prepare_cis(
         true_answers = [None] * len(questions)
     res = [
         prepare_ci(subject, tokenizer, q, sr, k, system_prompt, ta, use_chat_format, verbose)
-        for q, sr, ta in zip(questions, seed_responses, true_answers)
+        for q, sr, ta in zip(questions, seed_responses, true_answers, strict=True)
     ]
     cis = [ci[0] for ci in res]
     topks = [ci[1] for ci in res]
     max_length = max(len(ci.input_ids) for ci in cis)
 
     attention_masks = []
-    focus_tokens = []
-    for topk in topks:
-        focus_tokens.append(list(topk))
+    focus_tokens = [list(topk) for topk in topks]
 
     # pad on left
     starts = []
@@ -101,9 +100,7 @@ def prepare_cis(
         attention_masks.append(attention_mask)
 
     # keep all tokens
-    keep_pos = []
-    for i in range(max_length):
-        keep_pos.append(i)
+    keep_pos = list(range(max_length))
     if verbose:
         print(keep_pos)
         print(attention_masks)
@@ -131,7 +128,7 @@ def prepare_ci_with_rollout(
     token_ids = ci.tokenize(subject)
     if seed_response is not None and seed_response.endswith(" "):
         space_token = tokenizer.encode(" ")[1]
-        token_ids = token_ids + [space_token]
+        token_ids = [*token_ids, space_token]
 
     # generate additional tokens
     outputs = subject.generate(ci, max_new_tokens=max_new_tokens, verbose=verbose)
@@ -147,9 +144,7 @@ def prepare_ci_with_rollout(
     if verbose:
         print("Prepared:", question, "->", tokenizer.decode(rollout_token_ids))
 
-    ci = IdsInput(input_ids=token_ids + rollout_token_ids)
-
-    return ci
+    return IdsInput(input_ids=token_ids + rollout_token_ids)
 
 
 def prepare_cis_with_rollout(
@@ -167,7 +162,7 @@ def prepare_cis_with_rollout(
         seed_responses = [None] * len(questions)
     cis = [
         prepare_ci_with_rollout(subject, tokenizer, q, seed_response, max_new_tokens, verbose)
-        for q, seed_response in zip(questions, seed_responses)
+        for q, seed_response in zip(questions, seed_responses, strict=True)
     ]
     max_length = max(len(ci.input_ids) for ci in cis)
     all_attention_masks = []
@@ -198,9 +193,7 @@ def prepare_cis_with_rollout(
         new_cis.append(ci)
 
     # keep all tokens except the last token due to offset
-    keep_pos = []
-    for i in range(max_length - 1):
-        keep_pos.append(i)
+    keep_pos = list(range(max_length - 1))
 
     if verbose:
         print(keep_pos)
@@ -223,7 +216,7 @@ def compute_circuits(
     max_new_tokens: int = 1,
     use_rollout: bool = False,
     system_prompt: str | None = None,
-    true_answers: list[str] | None = None,
+    true_answers: list[list[str] | None] | None = None,
 ):
     """
     Compute CLSO graphs for all datapoints in a list of prompts, batched.
@@ -258,7 +251,9 @@ def compute_circuits(
                 seed_responses[i : i + bs],
                 k=k,
                 system_prompt=system_prompt,
-                true_answers=true_answers,
+                true_answers=(
+                    true_answers[i : i + bs] if true_answers is not None else None
+                ),
                 verbose=config.verbose,
             )
         nodes, edges = get_all_pairs_cl_ja_effects_with_attributions(
@@ -272,7 +267,7 @@ def compute_circuits(
         )
         all_nodes.append(nodes)
         all_edges.append(edges)
-        all_focus.append([_ for _ in range(len(focus_tokens))])
+        all_focus.append(list(range(len(focus_tokens))))
         all_starts.append(starts)
         all_cis.extend(cis)
         all_attention_masks.extend(attention_masks)
@@ -394,7 +389,7 @@ def convert_inputs_to_circuits(
     system_prompt: str | None = None,
     use_rollout: bool = False,
     return_cis: bool = False,
-    true_answers: list[str] | None = None,
+    true_answers: list[list[str] | None] | None = None,
 ) -> (
     tuple[pd.DataFrame, pd.DataFrame]
     | tuple[pd.DataFrame, pd.DataFrame, list[IdsInput], list[list[int]]]
@@ -416,6 +411,8 @@ def convert_inputs_to_circuits(
     labels = labels[:num_datapoints]
     if seed_responses is not None and not use_rollout:
         seed_responses = seed_responses[:num_datapoints]
+    if true_answers is not None:
+        true_answers = true_answers[:num_datapoints]
 
     print("Prompt:", prompts[0])
     if seed_responses is not None and not use_rollout:
@@ -423,7 +420,7 @@ def convert_inputs_to_circuits(
     print("Number of datapoints:", len(prompts))
 
     # compute circuits
-    nodes, edges, _, focus, starts, cis, attention_masks = compute_circuits(
+    nodes, edges, _, _focus, starts, cis, attention_masks = compute_circuits(
         subject,
         tokenizer,
         prompts,
@@ -464,7 +461,7 @@ def example_countries(
 
     # prepare inputs
     # countries = ["France"]
-    prompts = [f"What is the capital of the state containing Los Angeles?"]
+    prompts = ["What is the capital of the state containing Los Angeles?"]
     seed_responses = ["Answer:"] * len(prompts)
     labels = ["Sacramento"]
 

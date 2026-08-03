@@ -7,15 +7,15 @@ work item is probed and atomically persisted as plain JSON.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import json
 import sys
 import time
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import torch
-
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.probe_artifact import (
@@ -23,6 +23,7 @@ from circuits.tracing.probe_artifact import (
     validate_probe_artifact_integrity,
 )
 from circuits.tracing.trace import probe_teacher_forced_response
+
 from scripts.bonafide.runner import (
     _append_jsonl,
     _directory_size,
@@ -330,7 +331,7 @@ def run_probe_wave(
 
 
 def summarize_probe_wave(
-    results: list[Mapping[str, Any]],
+    results: Sequence[Mapping[str, Any]],
     *,
     wave_id: str,
     artifact_root: Path,

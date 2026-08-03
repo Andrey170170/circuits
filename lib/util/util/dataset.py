@@ -1,8 +1,9 @@
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, List, Tuple, TypedDict
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import datasets  # type: ignore
 from torch.utils.data import Dataset
+
 from util.chat_input import ModelInput
 
 # For type checking
@@ -21,12 +22,20 @@ class SimpleDataset(Dataset[Any]):
         return self.data[index]
 
 
-class Split(str, Enum):
+class Split(StrEnum):
     """The split of the dataset."""
 
     TRAIN = "train"
     VALID = "valid"
     TEST = "test"
+
+    def __str__(self) -> str:
+        """Retain the string representation of the previous ``str, Enum`` definition."""
+        return f"{type(self).__name__}.{self.name}"
+
+    def __format__(self, format_spec: str) -> str:
+        """Retain the formatting behavior of the previous ``str, Enum`` definition."""
+        return format(str(self), format_spec)
 
 
 class DatasetElement(TypedDict):
@@ -37,7 +46,7 @@ class DatasetElement(TypedDict):
 
 def construct_dataset(
     subject: "Subject",
-    samples: List[Tuple[ModelInput, ModelInput]],
+    samples: list[tuple[ModelInput, ModelInput]],
     max_len: int | None = None,
     shift_labels: bool = True,
     prompt_attn_mask: list[list[int]] | None = None,
@@ -71,7 +80,7 @@ def construct_dataset(
         max_len = max(
             max(
                 len(q) + len(a) - (1 if shift_labels else 0)
-                for q, a in zip(prompt_tokens, completion_tokens)
+                for q, a in zip(prompt_tokens, completion_tokens, strict=True)
             ),
             0,
         )
@@ -83,15 +92,15 @@ def construct_dataset(
     concat = {
         "input_ids": [
             _pad_and_truncate(q + a[: (-1 if shift_labels else None)], subject.pad_token_id)
-            for q, a in zip(prompt_tokens, completion_tokens)
+            for q, a in zip(prompt_tokens, completion_tokens, strict=True)
         ],
         "attention_mask": [
             _pad_and_truncate(q + a[: (-1 if shift_labels else None)], 0)
-            for q, a in zip(prompt_attn_mask, completion_attn_mask)
+            for q, a in zip(prompt_attn_mask, completion_attn_mask, strict=True)
         ],
         "labels": [
             _pad_and_truncate([-100] * (len(q) - (1 if shift_labels else 0)) + a, -100)
-            for q, a in zip(prompt_tokens, completion_tokens)
+            for q, a in zip(prompt_tokens, completion_tokens, strict=True)
         ],
     }
 
@@ -99,6 +108,8 @@ def construct_dataset(
 
 
 def pretty_print_dataset_element(subject: "Subject", x: DatasetElement):
-    d: Callable[[int], str] = lambda f: (repr(subject.decode(f)) if f != -100 else "").rjust(20)
+    def d(token_id: int) -> str:
+        return (repr(subject.decode(token_id)) if token_id != -100 else "").rjust(20)
+
     for i in range(min(len(x["input_ids"]), len(x["labels"]))):
         print(f"{str(i).zfill(3)} | {d(x['input_ids'][i])} -> {d(x['labels'][i])}")

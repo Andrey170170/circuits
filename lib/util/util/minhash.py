@@ -74,10 +74,7 @@ def minhash_deduplication(
                 return sha1_hash(byte_data, d=min(HASH_BITS, 32))
 
         case "xxh3":
-            if HASH_BITS == 16:
-                hash_func = xxh3_16hash
-            else:
-                hash_func = xxh3_32hash
+            hash_func = xxh3_16hash if HASH_BITS == 16 else xxh3_32hash
 
     timer = Timer()
 
@@ -150,9 +147,9 @@ def minhash_deduplication(
         with timer("Clustering"):
             edges = []
             for i in tqdm(
-                range(0, NUM_SHARDS),
+                range(NUM_SHARDS),
                 dynamic_ncols=True,
-                desc="Iterating MinHashes...",  # noqa: E501
+                desc="Iterating MinHashes...",
             ):
                 embedded_shard = embedded.shard(
                     num_shards=NUM_SHARDS,
@@ -160,7 +157,11 @@ def minhash_deduplication(
                     contiguous=True,
                     writer_batch_size=meta_args.batch_size,
                 )
-                for key, Hs in zip(embedded_shard[INDEX_COLUMN], embedded_shard[SIGNATURE_COLUMN]):
+                for key, Hs in zip(
+                    embedded_shard[INDEX_COLUMN],
+                    embedded_shard[SIGNATURE_COLUMN],
+                    strict=True,
+                ):
                     for i, H in enumerate(Hs):
                         HASH_TABLES[i][H].add(key)
 

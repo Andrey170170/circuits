@@ -6,6 +6,7 @@ Usage:
     torchrun --nproc_per_node=4 train.py --config sweep/simple.yaml  # Multi-GPU
 """
 
+import contextlib
 import os
 import pickle
 import time
@@ -13,7 +14,6 @@ from datetime import timedelta
 
 import torch
 import torch.distributed as dist
-from args.args import get_args, make_save_path, print_args
 from circuits.tracing.grad import revert_stop_nonlinear_grad, stop_nonlinear_grad
 from circuits.utils.constants import (
     DTYPE_MAPPING,
@@ -26,6 +26,8 @@ from circuits.utils.data_loading_utils import load_examples_helper
 from nnsight import LanguageModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from util.subject import Subject, llama31_8B_instruct_config
+
+from args.args import get_args, make_save_path, print_args
 
 
 def setup_distributed():
@@ -107,10 +109,8 @@ def main():
             tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
             tokenizer.pad_token = tokenizer.eos_token
             # core HF model has stop gradient replacement model
-            try:
+            with contextlib.suppress(Exception):
                 _ = revert_stop_nonlinear_grad(model)
-            except Exception:
-                pass
             model = stop_nonlinear_grad(
                 model,
                 use_relp_grad=args.use_relp_grad,

@@ -1,7 +1,18 @@
-from typing import Any, List, Literal
+from contextlib import suppress
+from typing import Any, Literal
 
 import torch
-from circuits.core.attribution import EmbedBuffer, LogitsBuffer, MLPBuffer, attribute_lightweight
+from opt_einsum import contract
+from tqdm import tqdm
+from util.chat_input import IdsInput, ModelInput
+from util.subject import Subject, construct_dataset
+
+from circuits.core.attribution import (
+    EmbedBuffer,
+    LogitsBuffer,
+    MLPBuffer,
+    attribute_lightweight,
+)
 from circuits.core.grad import (
     layerwise_revert_stop_nonlinear_grad_for_llama,
     layerwise_stop_nonlinear_grad_for_llama,
@@ -10,16 +21,12 @@ from circuits.core.grad import (
     stop_nonlinear_grad_for_llama,
 )
 from circuits.core.utils import Edge, NeuronIdx, Node, collect_acts
-from opt_einsum import contract
-from tqdm import tqdm
-from util.chat_input import IdsInput, ModelInput
-from util.subject import Subject, construct_dataset
 
 
 def precompute_cross_layer_headwise_OV(
     subject: Subject,
-    layers: List[int],
-    collect_layers: List[int],
+    layers: list[int],
+    collect_layers: list[int],
     device: str = "cuda:0",
 ):
     """
@@ -33,7 +40,7 @@ def precompute_cross_layer_headwise_OV(
     attn_os_LDD = {
         layer: subject.attn_os[layer].weight.detach().to(device) for layer in collect_layers
     }
-    K, Q, D, L = subject.K, subject.Q, subject.D, subject.L
+    K, Q, D = subject.K, subject.Q, subject.D
 
     # Repeat W_V matrices into (D, D); originally (X, D) where X<D due to multi-query attention
     attn_vs_LDD = {
@@ -82,8 +89,7 @@ def get_layer_headwise_OV(
         attn_v_DD = attn_vs.view(K, H, D).repeat_interleave(Q // K, dim=0).view(H * Q, D)
         attn_v_QHD = attn_v_DD.reshape(Q, H, D)
         attn_o_DQH = attn_o_DD.reshape(D, Q, H)
-    attn_ov_result = torch.bmm(attn_o_DQH.permute(1, 0, 2), attn_v_QHD)
-    return attn_ov_result
+    return torch.bmm(attn_o_DQH.permute(1, 0, 2), attn_v_QHD)
 
 
 def _get_grad_attributions_from_logits(
@@ -259,7 +265,7 @@ def _get_ig_attributions_from_logits(
     mlp_final_acts = []
     embed_final_acts = []
     goal_value = []
-    for step in range(0, ig_steps + 1):
+    for step in range(ig_steps + 1):
         alpha = step / ig_steps
         (
             mlp_step_attributions,
@@ -531,16 +537,16 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
 
         cache = {}
 
-        def _hook(lid):
+        def _hook(lid, layer_cache):
             def fn(_, input, output):
-                cache[lid] = input[0]
+                layer_cache[lid] = input[0]
 
             return fn
 
         if hasattr(model.model.layers[lid].mlp, "mlp"):
-            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(_hook(lid))
+            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(_hook(lid, cache))
         else:
-            model.model.layers[lid].mlp.down_proj.register_forward_hook(_hook(lid))
+            model.model.layers[lid].mlp.down_proj.register_forward_hook(_hook(lid, cache))
 
         # differentiable embeds
         # shape: (batch, seq, d)
@@ -719,16 +725,16 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
 
         cache = {}
 
-        def _hook(lid):
+        def _hook(lid, layer_cache):
             def fn(_, input, output):
-                cache[lid] = input[0]
+                layer_cache[lid] = input[0]
 
             return fn
 
         if hasattr(model.model.layers[lid].mlp, "mlp"):
-            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(_hook(lid))
+            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(_hook(lid, cache))
         else:
-            model.model.layers[lid].mlp.down_proj.register_forward_hook(_hook(lid))
+            model.model.layers[lid].mlp.down_proj.register_forward_hook(_hook(lid, cache))
 
         # differentiable embeds
         # shape: (batch, seq, d)
@@ -1133,7 +1139,7 @@ def _get_neuron_attr_and_contrib_ig(
     embeds_steps = []
     neuron_tags = None
 
-    for step in range(0, ig_steps + 1):
+    for step in range(ig_steps + 1):
         alpha = step / ig_steps
 
         attr, contrib, embed_grad_contrib, tags, neuron_acts, embeds = _get_neuron_attr_and_contrib(
@@ -1250,7 +1256,7 @@ def _get_neuron_attr_and_contrib_ig(
 @torch.no_grad()
 def _get_all_pairs_cl_so_effects_with_attributions(
     subject: Subject,
-    cis: List[ModelInput],
+    cis: list[ModelInput],
     mlp_final_attributions: torch.Tensor,
     embed_final_attributions: torch.Tensor,
     global_important_neurons_mask: torch.Tensor,
@@ -1262,11 +1268,11 @@ def _get_all_pairs_cl_so_effects_with_attributions(
     edge_threshold: float | None = None,
     topk: int | None = None,
     # we use these lists to trace circuit effects
-    keep_tokens: List[int] | None = None,  # the token positions to trace circuits
-    src_tokens: List[int] | None = None,  # the token positions to trace from
-    tgt_tokens: List[int] | None = None,  # the token positions to trace to
-    focus_positions: List[int] | None = None,  # the token positions to consider the logits effect
-    focus_logits: List[int] | None = None,  # the token vocab ids to trace logits
+    keep_tokens: list[int] | None = None,  # the token positions to trace circuits
+    src_tokens: list[int] | None = None,  # the token positions to trace from
+    tgt_tokens: list[int] | None = None,  # the token positions to trace to
+    focus_positions: list[int] | None = None,  # the token positions to consider the logits effect
+    focus_logits: list[int] | None = None,  # the token vocab ids to trace logits
     return_cross_edges_only: bool = True,  # only return cross tgt -> src token edges only
     return_absolute: bool = False,
     # we can skip early/late layers by setting these two
@@ -1308,7 +1314,7 @@ def _get_all_pairs_cl_so_effects_with_attributions(
     collect_layers = list(range(subject.L))
     (
         resids_LBTD,
-        attn_outs_LBTD,
+        _,
         attn_maps_LBQTT,
         neurons_LBTI,
         mlp_gate_LBTI,
@@ -1411,7 +1417,7 @@ def _get_all_pairs_cl_so_effects_with_attributions(
 
         # process this buffer's nodes
         activations = target.get_activations()
-        if isinstance(target, MLPBuffer) or isinstance(target, LogitsBuffer):
+        if isinstance(target, (MLPBuffer, LogitsBuffer)):
             # skip if no important neurons or no outgoing edges
             if len(target.neuron_indices_map) == 0 or len(target.keep_indices) == 0:
                 continue
@@ -1434,7 +1440,7 @@ def _get_all_pairs_cl_so_effects_with_attributions(
                     )
                 )
         elif isinstance(target, EmbedBuffer):
-            for token_type in set([tokens[t][target.token] for t in range(len(tokens))]):
+            for token_type in {tokens[t][target.token] for t in range(len(tokens))}:
                 relevant_idxs = [
                     batch_idx
                     for batch_idx in range(len(tokens))
@@ -1542,7 +1548,7 @@ def _get_all_pairs_cl_so_effects_with_attributions(
                         layer=layer,
                         token=source_token,
                         embed_B1D=input_embeddings_BTD[:, source_token : source_token + 1, :],
-                        keep_indices=set([0]),
+                        keep_indices={0},
                         final_attribution_BNsNf=final_attributions.unsqueeze(1),
                         frozen_final_attribution_BNsNf=final_attributions.unsqueeze(1),
                     )
@@ -1625,9 +1631,9 @@ def _get_all_pairs_cl_so_effects_with_attributions(
                                     )
                                 )
                     elif isinstance(source, EmbedBuffer):
-                        for token_type in set(
-                            [tokens[t][source.token] for t in range(len(tokens))]
-                        ):
+                        for token_type in {
+                            tokens[t][source.token] for t in range(len(tokens))
+                        }:
                             relevant_idxs = [
                                 batch_idx
                                 for batch_idx in range(len(tokens))
@@ -1680,7 +1686,7 @@ def _get_all_pairs_cl_so_effects_with_attributions(
 
 def get_all_pairs_cl_so_effects_with_attributions(
     subject: Subject,
-    cis: List[ModelInput],
+    cis: list[ModelInput],
     # where to trace from and to
     src_tokens: list[int],
     tgt_tokens: list[int],
@@ -1707,7 +1713,7 @@ def get_all_pairs_cl_so_effects_with_attributions(
     batch_aggregation: Literal["mean", "max", "max_abs", "any"] = "mean",
     return_absolute: bool = False,
     # more circuit settings
-    keep_tokens: List[int] | None = None,
+    keep_tokens: list[int] | None = None,
     focus_positions: list[int] | None = None,
     focus_logits: list[list[int]] | list[int] | None = None,
     focus_last_residual: bool = False,
@@ -1728,10 +1734,10 @@ def get_all_pairs_cl_so_effects_with_attributions(
     if focus_logits is None and not focus_last_residual:
         try:
             focus_logits = [cis[0].tokenize(subject)[0][pos_idx + 1] for pos_idx in focus_positions]
-        except Exception as e:
-            print(e)
+        except Exception as exc:
+            print(exc)
             max_token_expected = max(focus_positions) + 1
-            raise ValueError(f"failed to get labels for {max_token_expected} tokens.")
+            raise ValueError(f"failed to get labels for {max_token_expected} tokens.") from exc
 
     if keep_tokens is None:
         keep_tokens = list(range(max(tgt_tokens) + 1))
@@ -1759,10 +1765,8 @@ def get_all_pairs_cl_so_effects_with_attributions(
     ########
 
     # core HF model has stop gradient replacement model
-    try:
+    with suppress(Exception):
         _ = revert_stop_nonlinear_grad_for_llama(subject.model._model)
-    except Exception:
-        pass
     model = stop_nonlinear_grad_for_llama(
         subject.model._model, use_shapley_grad, use_shapley_qk, use_relp_grad, not disable_half_rule
     )

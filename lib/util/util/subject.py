@@ -1,17 +1,19 @@
 import gc
 import threading
 from collections import defaultdict
+from collections.abc import Callable, Generator, Sequence
 from queue import Queue
-from typing import Any, Callable, Generator, Literal, Sequence, cast
+from typing import Any, Literal, cast
 
 import torch
-from env_util import ENV
 from nnsight import LanguageModel  # type: ignore
 from nnsight.models.LanguageModel import LanguageModelProxy  # type: ignore
 from nnsight.util import fetch_attr  # type: ignore
 from pydantic import BaseModel
 from transformers import AutoConfig, AutoTokenizer  # type: ignore
 from transformers.generation.streamers import BaseStreamer  # type: ignore
+
+from env_util import ENV
 from util.activations import ModelActivations
 from util.chat_input import IdsInput, ModelInput
 from util.dataset import construct_dataset
@@ -46,7 +48,7 @@ class TokenIdStreamer(BaseStreamer):
 
         if len(value.shape) > 1 and value.shape[0] > 1:
             raise ValueError("TokenIdStreamer only supports batch size 1")
-        elif len(value.shape) > 1:
+        if len(value.shape) > 1:
             value = value[0]  # Discard future batches
 
         tokens: list[int] = value.tolist()  # type: ignore
@@ -66,8 +68,7 @@ class TokenIdStreamer(BaseStreamer):
         value = self.token_id_queue.get(timeout=self.timeout)
         if value == self.stop_signal:
             raise StopIteration()
-        else:
-            return value
+        return value
 
 
 def pad_matrix_with_last_row(matrix: torch.Tensor, target_size: int) -> torch.Tensor:
@@ -215,7 +216,7 @@ class Subject:
         self,
         config: LMConfig,
         cast_to_hf_config_dtype: bool = True,
-        nnsight_lm_kwargs: dict[str, Any] = {},
+        nnsight_lm_kwargs: dict[str, Any] | None = None,
         preloaded_model: torch.nn.Module | None = None,
         preloaded_tokenizer: AutoTokenizer | None = None,
     ):
@@ -224,7 +225,7 @@ class Subject:
         # Load model + tokenizer
         kwargs = {"dispatch": False, "device_map": "auto", "token": ENV.HF_TOKEN}
         kwargs.update({"torch_dtype": hf_config.torch_dtype} if cast_to_hf_config_dtype else {})  # type: ignore
-        kwargs.update(nnsight_lm_kwargs)
+        kwargs.update(nnsight_lm_kwargs or {})
         kwargs.update({"attn_implementation": "eager"})
         if preloaded_model is None:
             self.model = LanguageModel(config.hf_model_id, **kwargs)
@@ -475,7 +476,7 @@ class Subject:
         n_top_logprobs: int = 5,
         stream: bool = False,
         verbose: bool = False,
-    ) -> GenerateOutput | Generator[int | None | GenerateOutput, None, None]:
+    ) -> GenerateOutput | Generator[int | GenerateOutput | None, None, None]:
         """
         Generate text using the model with optional neuron and hidden state interventions.
         """
@@ -497,7 +498,7 @@ class Subject:
 
             intervention_tensors_by_layer = {}
             for layer, intervs in interventions_by_layer.items():
-                tokens, neurons, values = zip(*intervs)
+                tokens, neurons, values = zip(*intervs, strict=True)
                 assert all(t is not None for t in tokens), "Cannot intervene on None tokens"
                 intervention_tensors_by_layer[layer] = (
                     torch.tensor(tokens),
@@ -514,17 +515,19 @@ class Subject:
             nonlocal output_ids_BT, log_probs_BV, tokenwise_log_probs, all_acts
 
             acts_by_layer: list[list[torch.Tensor]] = []
-            with torch.no_grad():
-                with self.model.generate(  # type: ignore
+            with (
+                torch.no_grad(),
+                self.model.generate(  # type: ignore
                     inputs,  # type: ignore
                     max_new_tokens=max_new_tokens,  # type: ignore
                     temperature=temperature,  # type: ignore
                     num_return_sequences=num_return_sequences,  # type: ignore
-                    do_sample=(False if temperature == 0.0 else True),  # type: ignore
+                    do_sample=temperature != 0.0,  # type: ignore
                     streamer=streamer,  # type: ignore
                     scan=False,  # type: ignore
                     validate=False,  # type: ignore
-                ):
+                ),
+            ):
                     # Save next-token logits and all output IDs
                     log_probs_BV = _ct(torch.log_softmax(self.model.lm_head.output[:, -1].float(), dim=-1).detach().cpu().save())  # type: ignore
                     output_ids_BT = _ct(self.model.generator.output.detach().cpu().save())  # type: ignore
@@ -592,7 +595,7 @@ class Subject:
                             layer_acts = [_ct(module.input.detach().cpu().save())]
 
                             # Maybe intervene on things that are outside the prompt
-                            for i_next in range(max_new_tokens - 1):
+                            for _ in range(max_new_tokens - 1):
                                 # Advance the nnsight object to the next token
                                 module = module.next()
                                 layer_acts.append(_ct(module.input.detach().cpu().save()))
@@ -642,19 +645,17 @@ class Subject:
 
         if stream:
 
-            def _generator() -> Generator[int | None | GenerateOutput, None, None]:
+            def _generator() -> Generator[int | GenerateOutput | None, None, None]:
                 thread = threading.Thread(target=_generate_impl)
                 thread.start()
-                for token_id in streamer:
-                    yield token_id
+                yield from streamer
                 thread.join()
 
                 yield _get_output()
 
             return _generator()
-        else:
-            _generate_impl()
-            return _get_output()
+        _generate_impl()
+        return _get_output()
 
     def do_batched_interventions(
         self,
@@ -708,16 +709,18 @@ class Subject:
             nonlocal output_ids_BT, log_probs_BV, tokenwise_log_probs, all_acts
 
             acts_by_layer: list[list[torch.Tensor]] = []
-            with torch.no_grad():
-                with self.model.generate(  # type: ignore
+            with (
+                torch.no_grad(),
+                self.model.generate(  # type: ignore
                     input_ids_list,  # type: ignore
                     max_new_tokens=max_new_tokens,  # type: ignore
                     temperature=temperature,  # type: ignore
-                    do_sample=(False if temperature == 0.0 else True),
+                    do_sample=temperature != 0.0,
                     num_return_sequences=1,  # type: ignore
                     scan=False,  # type: ignore
                     validate=False,  # type: ignore
-                ):
+                ),
+            ):
                     # Save next-token logits and all output IDs
                     log_probs_BV = _ct(torch.log_softmax(self.model.lm_head.output[:, -1].float(), dim=-1).detach().cpu().save())  # type: ignore
                     output_ids_BT = _ct(self.model.generator.output.detach().cpu().save())  # type: ignore
@@ -790,7 +793,7 @@ class Subject:
                             layer_acts = [_ct(module.input.detach().cpu().save())]
 
                             # Maybe intervene on things that are outside the prompt
-                            for i_next in range(max_new_tokens - 1):
+                            for _ in range(max_new_tokens - 1):
                                 # Advance the nnsight object to the next token
                                 module = module.next()
                                 layer_acts.append(_ct(module.input.detach().cpu().save()))
@@ -861,7 +864,7 @@ class Subject:
         top_logits, top_probs = logits_V[top_indices], probs_V[top_indices]
 
         if verbose:
-            for index, prob, logit in zip(top_indices, top_probs, top_logits):
+            for index, prob, logit in zip(top_indices, top_probs, top_logits, strict=True):
                 token = repr(self.decode(index))
                 print(f"Index: {index}, Token: {token}, Prob: {prob.item()}, Logit: {logit.item()}")
 
@@ -1147,21 +1150,20 @@ gemma2_tiny_random_instruct_config = Gemma2Config(
 def get_subject_config(hf_model_id: str):
     if hf_model_id == "meta-llama/Meta-Llama-3-8B":
         return llama3_8B_config
-    elif hf_model_id == "meta-llama/Llama-3.1-8B":
+    if hf_model_id == "meta-llama/Llama-3.1-8B":
         return llama31_8B_config
-    elif hf_model_id == "meta-llama/Llama-3.1-8B-Instruct":
+    if hf_model_id == "meta-llama/Llama-3.1-8B-Instruct":
         return llama31_8B_instruct_config
-    elif hf_model_id == "meta-llama/Llama-3.1-70B-Instruct":
+    if hf_model_id == "meta-llama/Llama-3.1-70B-Instruct":
         return llama31_70B_instruct_config
-    elif hf_model_id == "google/gemma-2-2b":
+    if hf_model_id == "google/gemma-2-2b":
         return gemma2_2b_config
     # tiny random models for testing
-    elif hf_model_id == "yujiepan/gemma-2-tiny-random":
+    if hf_model_id == "yujiepan/gemma-2-tiny-random":
         return gemma2_tiny_random_instruct_config
-    elif hf_model_id == "yujiepan/llama-3.1-tiny-random":
+    if hf_model_id == "yujiepan/llama-3.1-tiny-random":
         return llama31_tiny_random_instruct_config
-    else:
-        raise ValueError(f"Unsupported hf_model_id={hf_model_id}")
+    raise ValueError(f"Unsupported hf_model_id={hf_model_id}")
 
 
 def make_subject(config: LMConfig, cast_to_hf_config_dtype: bool = True, dispatch: bool = True):

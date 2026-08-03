@@ -8,7 +8,8 @@ not doing it now.
 
 import asyncio
 import traceback
-from typing import Any, Callable, Protocol, TypedDict
+from collections.abc import Callable
+from typing import Any, Protocol, TypedDict
 
 from env_util import ENV
 from util import anthropic, openai, together
@@ -105,7 +106,7 @@ class LLMManager:
         # Reorder provider_order to put default_provider first
         if rotate_providers:
             self.provider_order = [default_provider] + [
-                p for p in self.providers.keys() if p != default_provider
+                p for p in self.providers if p != default_provider
             ]
         else:
             self.provider_order = [default_provider]
@@ -190,7 +191,9 @@ class LLMManager:
 
                     # Parse completions and update cache
                     parser = self.provider["completion_parser"]
-                    for i, (messages, completion) in enumerate(zip(uncached_messages, completions)):
+                    for i, (messages, completion) in enumerate(
+                        zip(uncached_messages, completions, strict=True)
+                    ):
                         parsed = parser(completion)
                         if parsed is not None and self.cache is not None:
                             self.cache.set(messages, model_name, parsed)
@@ -221,20 +224,18 @@ class LLMManager:
             provider_name = self.provider_order[self.current_provider_index]
             print(f"Switched to next key for provider '{provider_name}'.")
             return True
-        else:
-            # No more keys in the current provider, reset and move to next provider
-            self.provider["current_key_index"] = 0  # Reset key index for this provider
-            self.current_provider_index += 1
-            if self.current_provider_index < len(self.provider_order):
-                # Move to next provider
-                provider_name = self.provider_order[self.current_provider_index]
-                self.provider = self.providers[provider_name]
-                print(f"Switched to next provider '{provider_name}'.")
-                return True
-            else:
-                # All providers and their keys have been exhausted
-                print("All providers and their keys have been exhausted.")
-                return False
+        # No more keys in the current provider, reset and move to next provider
+        self.provider["current_key_index"] = 0  # Reset key index for this provider
+        self.current_provider_index += 1
+        if self.current_provider_index < len(self.provider_order):
+            # Move to next provider
+            provider_name = self.provider_order[self.current_provider_index]
+            self.provider = self.providers[provider_name]
+            print(f"Switched to next provider '{provider_name}'.")
+            return True
+        # All providers and their keys have been exhausted
+        print("All providers and their keys have been exhausted.")
+        return False
 
 
 async def get_llm_completions_async(

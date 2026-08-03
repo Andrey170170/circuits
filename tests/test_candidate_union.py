@@ -4,7 +4,6 @@ from copy import deepcopy
 from pathlib import Path
 
 import pandas as pd
-
 from circuits.tracing.artifact import TopKCompactTraceArtifact
 from circuits.tracing.candidate_union import (
     assemble_candidate_union,
@@ -40,7 +39,9 @@ def _references_and_refinements():
     refinements = []
     embed = (-1, 0, 11)
     mlp = (0, 0, 10)
-    for index, (reference, candidate_id) in enumerate(zip(references, candidate_ids)):
+    for index, (reference, candidate_id) in enumerate(
+        zip(references, candidate_ids, strict=True)
+    ):
         trace = deepcopy(reference.topk_trace)
         trace.circuit_data.df_node = _node_rows([candidate_id], [float(index + 1)])
         trace.circuit_data.df_edge = pd.DataFrame(

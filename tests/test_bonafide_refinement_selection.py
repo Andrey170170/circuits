@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from scripts.bonafide import refinement_selection as selection
 from scripts.bonafide.runner import validate_target_selection
 
@@ -88,7 +87,9 @@ def _example(
     }
 
 
-def _aggregate(example: dict, inventory: str, workload_bin: str) -> selection.PromptAggregate:
+def _aggregate(
+    example: dict, inventory: str, workload_bin: str
+) -> selection.PromptAggregate:
     return selection.PromptAggregate(
         example=example,
         inventory=inventory,
@@ -180,7 +181,9 @@ def _dense() -> list[selection.PromptAggregate]:
             example["selection_membership"].update(
                 {"dense_inventory": True, "broad_eligible_inventory": False}
             )
-        result.append(_aggregate(example, "dense_inventory", ("low", "middle", "high")[index % 3]))
+        result.append(
+            _aggregate(example, "dense_inventory", ("low", "middle", "high")[index % 3])
+        )
     return result
 
 
@@ -213,7 +216,9 @@ def test_frozen_broad_membership_fails_closed_on_workload_drift() -> None:
         selection.validate_frozen_broad_prompts(aggregates)
 
 
-def test_broad_refinement_targets_preserve_semantic_windows_and_phase_controls() -> None:
+def test_broad_refinement_targets_preserve_semantic_windows_and_phase_controls() -> (
+    None
+):
     tokenizer = CharTokenizer()
     example = _frozen_broad()[0].example
     response = example["response"]
@@ -227,7 +232,9 @@ def test_broad_refinement_targets_preserve_semantic_windows_and_phase_controls()
 
     assert 16 <= len(targets) <= 32
     reasons = [reason for _, target in targets for reason in target["reasons"]]
-    assert any(reason["reason_type"] == "bonafide_annotation_anchor" for reason in reasons)
+    assert any(
+        reason["reason_type"] == "bonafide_annotation_anchor" for reason in reasons
+    )
     assert any(reason["reason_type"] == "answer_or_source_anchor" for reason in reasons)
     phase_indices = {
         reason["phase_index"]
@@ -237,7 +244,9 @@ def test_broad_refinement_targets_preserve_semantic_windows_and_phase_controls()
     assert phase_indices == set(range(16))
 
 
-def test_screening_aggregation_fails_before_loading_incomplete_artifacts(tmp_path: Path) -> None:
+def test_screening_aggregation_fails_before_loading_incomplete_artifacts(
+    tmp_path: Path,
+) -> None:
     example = _example(
         "screened",
         phenotype="faithful",
@@ -317,7 +326,9 @@ def test_builds_one_resident_refinement_wave_and_leaves_final_targets_unfrozen(
     monkeypatch.setattr(
         selection,
         "_runtime_response_ids",
-        lambda tokenizer, example: [ord(character) for character in example["response"]],
+        lambda tokenizer, example: [
+            ord(character) for character in example["response"]
+        ],
     )
     candidate = {"dataset": {"sha256": "d" * 64}}
     screening = {"tokenizer": {"model_id": "fake/model", "revision": "r1"}}
@@ -339,7 +350,9 @@ def test_builds_one_resident_refinement_wave_and_leaves_final_targets_unfrozen(
 
     assert manifest["artifact_kind"] == "bonafide_refinement_probe_manifest"
     assert manifest["selection_contract"]["prompt_membership_frozen"] is True
-    assert manifest["selection_contract"]["final_trace_target_membership_frozen"] is False
+    assert (
+        manifest["selection_contract"]["final_trace_target_membership_frozen"] is False
+    )
     assert len(manifest["waves"]) == 1
     wave = manifest["waves"][0]
     assert wave["refinement_design"]["dense_probe_count"] == sum(

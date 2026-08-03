@@ -19,6 +19,10 @@ from collections import defaultdict
 from pathlib import Path
 
 import torch
+from circuits.tracing.attribution import _get_neuron_attr_and_contrib
+from circuits.tracing.grad import revert_stop_nonlinear_grad, stop_nonlinear_grad
+from circuits.tracing.trace import get_chat_template
+from circuits.utils.constants import RESULTS_DIR
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -29,12 +33,6 @@ sys.stdout.reconfigure(line_buffering=True)
 def log(msg: str):
     t = time.strftime("%H:%M:%S")
     print(f"[{t}] {msg}")
-
-
-from circuits.tracing.attribution import _get_neuron_attr_and_contrib
-from circuits.tracing.grad import revert_stop_nonlinear_grad, stop_nonlinear_grad
-from circuits.tracing.trace import get_chat_template
-from circuits.utils.constants import RESULTS_DIR
 
 
 def prepare_sample(
@@ -64,9 +62,6 @@ def prepare_sample(
     chat_template = get_chat_template(tokenizer)
     ids_no_gen = tokenizer.apply_chat_template(
         [user_msg], add_generation_prompt=False, chat_template=chat_template
-    )
-    ids_with_gen = tokenizer.apply_chat_template(
-        [user_msg], add_generation_prompt=True, chat_template=chat_template
     )
     full_ids = tokenizer.apply_chat_template(
         [user_msg, asst_msg], tokenize=True, chat_template=chat_template
@@ -244,8 +239,7 @@ def main():
         sampled_neurons: list[tuple[int, int]] = []
         for layer_idx in range(num_layers):
             neuron_indices = torch.randint(0, intermediate_dim, (args.neurons_per_layer,))
-            for nid in neuron_indices:
-                sampled_neurons.append((layer_idx, nid.item()))
+            sampled_neurons.extend((layer_idx, nid.item()) for nid in neuron_indices)
         log(f"Randomly sampled {len(sampled_neurons)} neurons across {num_layers} layers")
     else:
         # ==================== PASS 0: Screen neurons for separator preference ====================
@@ -277,7 +271,7 @@ def main():
             hooks = []
             for lid in range(num_layers):
 
-                def _make_hook(lid: int):
+                def _make_hook(lid: int, all_acts=all_acts):
                     def hook_fn(module, input, output):
                         all_acts[lid] = input[0][0].detach().cpu()  # (seq_len, intermediate)
 
@@ -297,7 +291,7 @@ def main():
                 is_sep = sep_mask[argmax_pos]  # (intermediate,) bool
                 sep_argmax_count[lid] += is_sep.long()
 
-            del all_acts
+            all_acts.clear()
             torch.cuda.empty_cache()
 
             if p0_processed % 5 == 0 or p0_processed == 1:
@@ -308,7 +302,7 @@ def main():
         for lid in range(num_layers):
             counts = sep_argmax_count[lid]
             topk_vals, topk_ids = counts.topk(args.neurons_per_layer)
-            for nid, cnt in zip(topk_ids.tolist(), topk_vals.tolist()):
+            for nid, _cnt in zip(topk_ids.tolist(), topk_vals.tolist(), strict=False):
                 sampled_neurons.append((lid, nid))
             if lid % 8 == 0:
                 log(
@@ -338,7 +332,7 @@ def main():
     else:
         ds = load_dataset("allenai/WildChat", split="train").shuffle(seed=args.seed)
 
-    layers_needed = sorted(set(l for l, _ in sampled_neurons))
+    layers_needed = sorted({layer for layer, _ in sampled_neurons})
 
     # Pre-collect samples, then process in batches
     batch_buf: list[tuple[int, list[int], list[int]]] = []  # (sample_idx, ids, allowed_pos)
@@ -360,7 +354,7 @@ def main():
         hooks = []
         for layer_idx in layers_needed:
 
-            def _make_hook(lid: int):
+            def _make_hook(lid: int, activations=activations):
                 def hook_fn(module, input, output):
                     activations[lid] = input[0].detach().cpu()
 
@@ -403,7 +397,7 @@ def main():
                                 heapq.heapreplace(heap, (signed_act, heap_counter, info))
                             heap_counter += 1
 
-        del activations
+        activations.clear()
         torch.cuda.empty_cache()
 
     for sample_idx, sample in enumerate(ds):
@@ -467,7 +461,7 @@ def main():
         candidate_tuples = [(e["layer"], e["neuron"], e["token_pos"]) for e in entries]
         attr_vecs = compute_neuron_attrs_batched(model, input_ids, seq_len, candidate_tuples)
 
-        for entry, attr_vec in zip(entries, attr_vecs):
+        for entry, attr_vec in zip(entries, attr_vecs, strict=False):
             metrics = compute_attr_metrics(attr_vec, entry["token_pos"])
             result = {
                 "layer": entry["layer"],

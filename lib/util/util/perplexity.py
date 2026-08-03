@@ -7,10 +7,11 @@ from typing import cast
 
 import backoff
 from backoff.types import Details
-from env_util import ENV
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from tqdm.asyncio import tqdm_asyncio
+
+from env_util import ENV
 from util.types import ChatMessage
 
 

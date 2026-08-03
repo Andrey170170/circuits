@@ -81,9 +81,7 @@ def main() -> None:
 
     # Build label -> example index mapping
     # Labels are "x + y = z" format, examples are x*100+y order
-    label_to_idx: dict[str, int] = {}
-    for i, lbl in enumerate(circuit.labels):
-        label_to_idx[lbl] = i
+    label_to_idx = {lbl: i for i, lbl in enumerate(circuit.labels)}
 
     n_examples = len(circuit.labels)
     logger.info("Circuit has %d examples", n_examples)
@@ -114,7 +112,7 @@ def main() -> None:
             cluster_attr[cl][idx] += float(row["attribution"])
 
     # Determine grid size: sqrt(n_examples) if it's a perfect square
-    grid_size = int(math.isqrt(n_examples))
+    grid_size = math.isqrt(n_examples)
     if grid_size * grid_size != n_examples:
         logger.warning(
             "n_examples=%d is not a perfect square, using %dx%d grid (truncating)",
@@ -141,7 +139,7 @@ def main() -> None:
 
         # Diverging colormap centered at 0
         vmax = max(abs(heatmap.max()), abs(heatmap.min()), 1e-8)
-        im = ax.imshow(
+        ax.imshow(
             heatmap,
             cmap="RdBu",
             vmin=-vmax,

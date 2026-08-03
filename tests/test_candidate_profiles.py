@@ -3,10 +3,9 @@ from __future__ import annotations
 import hashlib
 from types import SimpleNamespace
 
+import circuits.analysis.bonafide.candidate_profiles as candidate_profiles_module
 import pandas as pd
 import pytest
-
-import circuits.analysis.bonafide.candidate_profiles as candidate_profiles_module
 from circuits.analysis.bonafide.candidate_profiles import (
     PARTITION_CAPACITIES,
     CandidateBasisProfile,
@@ -153,19 +152,18 @@ def test_candidate_profiles_use_observed_activation_sign_and_sum_occurrences(
     ranks: list[int], contributions: list[float], expected: tuple[float, ...]
 ) -> None:
     width = len(ranks)
-    rows = []
-    for token in (2, 3):
-        rows.append(
-            {
-                "layer": 1,
-                "token": token,
-                "neuron": 9,
-                "candidate_activation": [2.0] * width,
-                "candidate_attribution": [0.5] * width,
-                "candidate_contribution": contributions,
-                "applicable_by_candidate": [True] * width,
-            }
-        )
+    rows = [
+        {
+            "layer": 1,
+            "token": token,
+            "neuron": 9,
+            "candidate_activation": [2.0] * width,
+            "candidate_attribution": [0.5] * width,
+            "candidate_contribution": contributions,
+            "applicable_by_candidate": [True] * width,
+        }
+        for token in (2, 3)
+    ]
     rows.extend(
         [
             {
@@ -364,14 +362,14 @@ def test_family_partition_is_exact_deterministic_and_self_hashed() -> None:
                     ],
                 }
             }
-            for phase_bin in range(7):
-                cases.append(
-                    {
-                        "base_question_id": family_id,
-                        "example_id": response_id,
-                        "phase_bin": phase_bin,
-                    }
-                )
+            cases.extend(
+                {
+                    "base_question_id": family_id,
+                    "example_id": response_id,
+                    "phase_bin": phase_bin,
+                }
+                for phase_bin in range(7)
+            )
 
     first = build_family_partitions(cases, examples_by_response=examples)
     second = build_family_partitions(
@@ -420,31 +418,31 @@ def test_partition_weights_and_crosswalk_are_hierarchical() -> None:
             "candidate_polarity_crosswalk_json": '{"activation_+__attribution_-":1}',
         },
     ]
-    for family_index in range(1, 18):
-        rows.append(
+    rows.extend(
+        {
+            "case_id": f"g-{family_index}",
+            "family_partition": "generation",
+            "base_question_id": f"family-g-{family_index}",
+            "response_id": f"response-g-{family_index}",
+            "candidate_polarity_crosswalk_json": (
+                '{"activation_zero__attribution_+":1}'
+            ),
+        }
+        for family_index in range(1, 18)
+    )
+    for partition, count in (("selection_scoring", 8), ("audit", 8)):
+        rows.extend(
             {
-                "case_id": f"g-{family_index}",
-                "family_partition": "generation",
-                "base_question_id": f"family-g-{family_index}",
-                "response_id": f"response-g-{family_index}",
+                "case_id": f"{partition}-{family_index}",
+                "family_partition": partition,
+                "base_question_id": f"{partition}-family-{family_index}",
+                "response_id": f"{partition}-response-{family_index}",
                 "candidate_polarity_crosswalk_json": (
-                    '{"activation_zero__attribution_+":1}'
+                    '{"activation_-__attribution_-":1}'
                 ),
             }
+            for family_index in range(count)
         )
-    for partition, count in (("selection_scoring", 8), ("audit", 8)):
-        for family_index in range(count):
-            rows.append(
-                {
-                    "case_id": f"{partition}-{family_index}",
-                    "family_partition": partition,
-                    "base_question_id": f"{partition}-family-{family_index}",
-                    "response_id": f"{partition}-response-{family_index}",
-                    "candidate_polarity_crosswalk_json": (
-                        '{"activation_-__attribution_-":1}'
-                    ),
-                }
-            )
 
     weights, diagnostics = _partition_hierarchical_weights(rows)
     weighted_rows = [

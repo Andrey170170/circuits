@@ -75,10 +75,10 @@ class MultiNeuronSteeringHook:
                 if token_pos < seq_len:
                     x[:, token_pos, neuron_idx] *= self.multiplier
         else:
-            neuron_idxs = list(set(n for _, n in self.neurons))
+            neuron_idxs = list({n for _, n in self.neurons})
             for neuron_idx in neuron_idxs:
                 x[:, :, neuron_idx] *= self.multiplier
-        return (x,) + input[1:]
+        return (x, *input[1:])
 
     def register(self, model, layer: int):
         down_proj = model.model.layers[layer].mlp.down_proj
@@ -277,7 +277,9 @@ def main():
         )
 
         # Print responses
-        for i, (resp, outcome, coh) in enumerate(zip(responses, outcomes, coherence)):
+        for _i, (resp, outcome, coh) in enumerate(
+            zip(responses, outcomes, coherence, strict=False)
+        ):
             preview = resp[:150].replace("\n", " ")
             print(f"  [{outcome}|coh={coh}] {preview}")
 

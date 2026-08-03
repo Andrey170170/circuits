@@ -17,6 +17,13 @@ import time
 from pathlib import Path
 
 import torch
+from circuits.tracing.grad import (
+    remove_forward_hooks,
+    revert_stop_nonlinear_grad,
+    stop_nonlinear_grad,
+)
+from circuits.tracing.trace import get_chat_template
+from circuits.utils.constants import RESULTS_DIR
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -27,15 +34,6 @@ sys.stdout.reconfigure(line_buffering=True)
 def log(msg: str):
     t = time.strftime("%H:%M:%S")
     print(f"[{t}] {msg}")
-
-
-from circuits.tracing.grad import (
-    remove_forward_hooks,
-    revert_stop_nonlinear_grad,
-    stop_nonlinear_grad,
-)
-from circuits.tracing.trace import get_chat_template
-from circuits.utils.constants import RESULTS_DIR
 
 
 def prepare_sample(
@@ -194,7 +192,7 @@ def main():
 
         for li in range(num_layers):
 
-            def _hook(layer_index):
+            def _hook(layer_index, cache=cache):
                 def fn(_, input, output):
                     cache[layer_index] = input[0]
 
@@ -215,7 +213,7 @@ def main():
 
             # Build per-batch focus logits
             focus_logit_ids = []
-            for b, (_, ids, _, _) in enumerate(batch):
+            for _b, (_, ids, _, _) in enumerate(batch):
                 if tgt_pos + 1 < len(ids):
                     focus_logit_ids.append(ids[tgt_pos + 1])
                 else:
@@ -272,7 +270,8 @@ def main():
         # Cleanup hooks and free graph
         for i in range(num_layers):
             remove_forward_hooks(model.model.layers[i].mlp.mlp.down_proj)
-        del out, logits_all, embeds, cache, grad_targets
+        del out, logits_all, embeds, grad_targets
+        cache.clear()
         torch.cuda.empty_cache()
 
     revert_stop_nonlinear_grad(model)

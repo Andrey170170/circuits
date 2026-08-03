@@ -67,7 +67,6 @@ def _worker_fn(
         device_map = {"": f"cuda:{gpu_ids[0]}"}
         device = f"cuda:{gpu_ids[0]}"
     else:
-        max_memory = {gpu: "70GiB" for gpu in gpu_ids}
         device_map = "sequential"
         device = f"cuda:{gpu_ids[0]}"
 
@@ -75,7 +74,7 @@ def _worker_fn(
         model_id,
         torch_dtype=torch.bfloat16,
         device_map=device_map,
-        max_memory={gpu: "70GiB" for gpu in gpu_ids} if len(gpu_ids) > 1 else None,
+        max_memory=dict.fromkeys(gpu_ids, "70GiB") if len(gpu_ids) > 1 else None,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     if tokenizer.pad_token_id is None:

@@ -120,9 +120,7 @@ def select_c2_cases(
                     raise ValueError(f"C2 candidate evidence is invalid: {artifact_id}")
                 eligible.append((pool_case, rank))
             preferred = [
-                pair
-                for pair in eligible
-                if pair[1]["candidate_count"] == desired_width
+                pair for pair in eligible if pair[1]["candidate_count"] == desired_width
             ]
             candidates_to_rank = preferred or eligible
             pool_case, rank = min(
@@ -162,15 +160,11 @@ def select_c2_cases(
                     "base_question_id": pool_case["base_question_id"],
                     "corpus_role": role,
                     "phase_bin": phase_bin,
-                    "target_response_position": pool_case[
-                        "target_response_position"
-                    ],
+                    "target_response_position": pool_case["target_response_position"],
                     "screen_slot": pool_case["screen_slot"],
                     "desired_candidate_count": desired_width,
                     "candidate_count": len(token_ids),
-                    "observed_token_rank": candidate_selection[
-                        "observed_token_rank"
-                    ],
+                    "observed_token_rank": candidate_selection["observed_token_rank"],
                     "candidate_token_ids": token_ids,
                     "input_token_count": rank["input_token_count"],
                     "_source_item": source_item,
@@ -181,7 +175,9 @@ def select_c2_cases(
     return selected
 
 
-def _chunks(values: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _chunks(
+    values: Sequence[Mapping[str, Any]],
+) -> list[list[Mapping[str, Any]]]:
     return [
         list(values[index : index + C2_MAX_ITEMS_PER_WAVE])
         for index in range(0, len(values), C2_MAX_ITEMS_PER_WAVE)
@@ -218,9 +214,7 @@ def build_c2_manifests(
     }
     manifests: dict[str, dict[str, Any]] = {}
     for candidate_index in range(6):
-        eligible = [
-            case for case in cases if case["candidate_count"] > candidate_index
-        ]
+        eligible = [case for case in cases if case["candidate_count"] > candidate_index]
         waves: list[dict[str, Any]] = []
         for role in ("dense_discovery", "broad_discovery"):
             role_cases = sorted(
@@ -235,9 +229,9 @@ def build_c2_manifests(
                 items = []
                 for case in shard:
                     item = copy.deepcopy(case["_source_item"])
-                    item["specified_candidate_token_id"] = case[
-                        "candidate_token_ids"
-                    ][candidate_index]
+                    item["specified_candidate_token_id"] = case["candidate_token_ids"][
+                        candidate_index
+                    ]
                     items.append(item)
                 waves.append(
                     {
@@ -290,8 +284,7 @@ def main() -> None:
     if (
         source_manifest_sha256 != screen_pool.get("source_manifest_sha256")
         or source_manifest_sha256 != rank_screen.get("source_manifest_sha256")
-        or sha256_file(args.screen_pool)
-        != rank_screen.get("selection_pool_sha256")
+        or sha256_file(args.screen_pool) != rank_screen.get("selection_pool_sha256")
     ):
         raise ValueError("C2 source, pool, or rank-screen hash drift")
     source_manifest = _load_json(source_manifest_path)
@@ -315,11 +308,7 @@ def main() -> None:
                 sorted(Counter(case["corpus_role"] for case in cases).items())
             ),
             "candidate_count_counts": dict(
-                sorted(
-                    Counter(
-                        str(case["candidate_count"]) for case in cases
-                    ).items()
-                )
+                sorted(Counter(str(case["candidate_count"]) for case in cases).items())
             ),
         },
         "cases": public_cases,
@@ -336,7 +325,7 @@ def main() -> None:
         rank_screen_path=args.rank_screen,
         rank_screen_sha256=sha256_file(args.rank_screen),
     )
-    manifest_records = []
+    manifest_records: list[dict[str, Any]] = []
     for label, manifest in manifests.items():
         path = args.manifest_output_dir / (
             f"qwen3_4b_instruct_topk_c2_{label.replace('-', '_')}_v1.json"
@@ -369,7 +358,7 @@ def main() -> None:
         "rank_screen_sha256": sha256_file(args.rank_screen),
         "case_count": len(cases),
         "expected_trace_count": sum(
-            record["work_item_count"] for record in manifest_records
+            int(record["work_item_count"]) for record in manifest_records
         ),
         "balance": selection["balance"],
         "manifests": manifest_records,

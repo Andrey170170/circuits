@@ -31,12 +31,14 @@ def load_cluster_members(
         columns=["layer", "neuron_index", "polarity", "assigned", "cluster_id"],
     )
     members: dict[int, dict[tuple[int, int], list[int]]] = {}
-    for row in frame.itertuples(index=False):
-        if not bool(row.assigned):
+    for layer, neuron_index, polarity, assigned, cluster_id_value in frame.itertuples(
+        index=False, name=None
+    ):
+        if not bool(assigned):
             continue
-        cluster_id = int(row.cluster_id)
-        key = (int(row.layer), int(row.neuron_index))
-        sign = 1 if row.polarity == "+" else -1
+        cluster_id = int(cluster_id_value)
+        key = (int(layer), int(neuron_index))
+        sign = 1 if polarity == "+" else -1
         members.setdefault(cluster_id, {}).setdefault(key, []).append(sign)
     return members
 

@@ -4,11 +4,16 @@ from collections import namedtuple
 from functools import partial
 
 import torch as t
-from circuits.evals.base import BaseMethod, absolute_logit_metric_fn, logit_difference_metric_fn
-from circuits.utils.dictionary_loading_utils import load_saes_and_submodules
-from circuits.utils.modeling_utils import SparseAct, Submodule
 from dictionary_learning.dictionary import Dictionary, IdentityDict
 from tqdm import tqdm
+
+from circuits.evals.base import (
+    BaseMethod,
+    absolute_logit_metric_fn,
+    logit_difference_metric_fn,
+)
+from circuits.utils.dictionary_loading_utils import load_saes_and_submodules
+from circuits.utils.modeling_utils import SparseAct, Submodule
 
 EffectOut = namedtuple("EffectOut", ["effects", "deltas", "grads", "total_effect"])
 
@@ -21,9 +26,11 @@ def patching_effect_ig(
     dictionaries: dict[Submodule, Dictionary],
     metric_fn,
     steps=10,
-    metric_kwargs=dict(),
+    metric_kwargs=None,
     suffix_length=None,
 ):
+    if metric_kwargs is None:
+        metric_kwargs = {}
     hidden_states_clean = {}
     with t.no_grad(), model.trace(clean):
         for submodule in submodules:
@@ -79,7 +86,7 @@ def patching_effect_ig(
                 with tracer.invoke(clean):
                     submodule.set_activation(dictionary.decode(f.act) + f.res)
                     metrics.append(metric_fn(model, **metric_kwargs))
-            metric = sum([m for m in metrics])
+            metric = sum(metrics)
             metric.sum().backward()
 
         mean_grad = sum([f.act.grad for f in fs]) / steps
@@ -111,9 +118,11 @@ def patching_effect_eap_ig_inputs(
     dictionaries: dict[Submodule, Dictionary],
     metric_fn,
     steps=10,
-    metric_kwargs=dict(),
+    metric_kwargs=None,
     suffix_length=None,
 ):
+    if metric_kwargs is None:
+        metric_kwargs = {}
     embed_clean = None
     hidden_states_clean = {}
     with t.no_grad(), model.trace(clean):
@@ -198,7 +207,7 @@ def patching_effect_eap_ig_inputs(
                     # set activation in dictionary space
                     submodule.set_activation(dictionary.decode(act) + res)
                     metrics.append(metric_fn(model, **metric_kwargs))
-            metric = sum([m for m in metrics])
+            metric = sum(metrics)
             metric.sum().backward()
 
         mean_grad = sum([f.act.grad for f in fs]) / steps
@@ -230,7 +239,7 @@ def patching_effect_conductance_inputs(
     dictionaries: dict[Submodule, Dictionary],
     metric_fn,
     steps=10,
-    metric_kwargs=dict(),
+    metric_kwargs=None,
     suffix_length=None,
 ):
     pass
@@ -244,13 +253,15 @@ def patching_effect_random(
     dictionaries: dict[Submodule, Dictionary],
     metric_fn,
     steps=10,
-    metric_kwargs=dict(),
+    metric_kwargs=None,
     suffix_length=None,
 ):
     """
     Returns random effects with the same structure as patching_effect_ig.
     Effects are random, while grads and deltas are set to zero.
     """
+    if metric_kwargs is None:
+        metric_kwargs = {}
     # Get clean states to determine shapes
     hidden_states_clean = {}
     with t.no_grad(), model.trace(clean):
@@ -309,13 +320,15 @@ def patching_effect_delta_selection(
     dictionaries: dict[Submodule, Dictionary],
     metric_fn,
     steps=10,
-    metric_kwargs=dict(),
+    metric_kwargs=None,
     suffix_length=None,
 ):
     """
     Uses the delta (difference) between clean and patched activations.
     Effects are computed based on the magnitude of activation differences for all neurons.
     """
+    if metric_kwargs is None:
+        metric_kwargs = {}
     # Get clean states
     hidden_states_clean = {}
     with t.no_grad(), model.trace(clean):
@@ -415,18 +428,15 @@ def _apply_suffix_length_filter(effects, clean_inputs, model, suffix_length):
         filtered_effect = effect.clone()
 
         # Zero out positions before the suffix for both act and res/resc
-        if filtered_effect.act is not None:
-            # Assuming shape is (batch_size, seq_length, features)
-            if len(filtered_effect.act.shape) >= 2:
-                filtered_effect.act[:, :keep_start_pos] = 0
+        # Assuming shape is (batch_size, seq_length, features)
+        if filtered_effect.act is not None and len(filtered_effect.act.shape) >= 2:
+            filtered_effect.act[:, :keep_start_pos] = 0
 
-        if filtered_effect.res is not None:
-            if len(filtered_effect.res.shape) >= 2:
-                filtered_effect.res[:, :keep_start_pos] = 0
+        if filtered_effect.res is not None and len(filtered_effect.res.shape) >= 2:
+            filtered_effect.res[:, :keep_start_pos] = 0
 
-        if filtered_effect.resc is not None:
-            if len(filtered_effect.resc.shape) >= 2:
-                filtered_effect.resc[:, :keep_start_pos] = 0
+        if filtered_effect.resc is not None and len(filtered_effect.resc.shape) >= 2:
+            filtered_effect.resc[:, :keep_start_pos] = 0
 
         filtered_effects[submodule] = filtered_effect
 
@@ -476,11 +486,10 @@ class NAP(BaseMethod):
     def make_dataloader(self, examples, **kwargs):
         """This method does not need a dataloader."""
         n_batches = math.ceil(len(examples) / self.batch_size)
-        batches = [
+        return [
             examples[batch * self.batch_size : (batch + 1) * self.batch_size]
             for batch in range(n_batches)
         ]
-        return batches
 
     def train(self, examples, **kwargs):
         dataloader = self.make_dataloader(examples, **kwargs)
@@ -548,7 +557,7 @@ class NAP(BaseMethod):
                 self.dictionaries,
                 metric_fn,
                 steps=steps,
-                metric_kwargs=dict(),
+                metric_kwargs={},
                 suffix_length=self.suffix_length,
             )
 
@@ -575,10 +584,10 @@ class NAP(BaseMethod):
             # accumulate the nodes and edges
             if running_nodes is None:
                 running_nodes = {
-                    k: len(batch) * nodes[k].to("cpu") for k in nodes.keys() if k != "y"
+                    k: len(batch) * nodes[k].to("cpu") for k in nodes if k != "y"
                 }
             else:
-                for k in nodes.keys():
+                for k in nodes:
                     if k != "y":
                         running_nodes[k] += len(batch) * nodes[k].to("cpu")
 
@@ -607,4 +616,4 @@ class NAP(BaseMethod):
         }
 
         circuit = t.load(dump_dir, map_location=self.device)
-        self.nodes = circuit["nodes"] if "nodes" in circuit else None
+        self.nodes = circuit.get("nodes")

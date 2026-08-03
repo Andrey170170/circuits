@@ -70,9 +70,9 @@ def main() -> None:
     cluster_id_to_name = getattr(circuit, "_cluster_id_to_name", {})
 
     # Map (layer, neuron) -> cluster name
-    neuron_to_cluster: dict[tuple[int, int], str] = {}
-    for nid, cl in cluster_map.items():
-        neuron_to_cluster[(int(nid.layer), int(nid.neuron))] = cl
+    neuron_to_cluster = {
+        (int(nid.layer), int(nid.neuron)): cl for nid, cl in cluster_map.items()
+    }
 
     valid_cluster_names = set(cluster_id_to_name.values())
     active_clusters = sorted(
@@ -82,9 +82,7 @@ def main() -> None:
     logger.info("Found %d active clusters", len(active_clusters))
 
     # Build label -> index mapping
-    label_to_idx: dict[str, int] = {}
-    for i, lbl in enumerate(circuit.labels):
-        label_to_idx[lbl] = i
+    label_to_idx = {lbl: i for i, lbl in enumerate(circuit.labels)}
 
     n_examples = len(circuit.labels)
     n_clusters = len(active_clusters)
@@ -116,8 +114,10 @@ def main() -> None:
     rows = []
     ci_labels = [lbl.strip() for lbl in circuit.labels]
     for i, cl in enumerate(active_clusters):
-        for j in range(n_examples):
-            rows.append({"cluster": cl, "ci": ci_labels[j], "attr": attr_matrix[i, j]})
+        rows.extend(
+            {"cluster": cl, "ci": ci_labels[j], "attr": attr_matrix[i, j]}
+            for j in range(n_examples)
+        )
     df = pd.DataFrame(rows)
 
     # Preserve ordering via categorical

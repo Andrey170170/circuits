@@ -88,7 +88,9 @@ def collect_neuron_acts(
 
         # resid = layer output (may be a tuple or plain tensor depending on transformers version)
         def _resid_hook(module, input, output, _idx=layer_idx):
-            resids_cache[_idx] = (output[0] if isinstance(output, tuple) else output).detach()
+            resids_cache[_idx] = (
+                output[0] if isinstance(output, tuple) else output
+            ).detach()
 
         handles.append(layer_module.register_forward_hook(_resid_hook))
 
@@ -101,10 +103,14 @@ def collect_neuron_acts(
         h.remove()
 
     # Build TensorDicts
-    resids_LBTD = TensorDict({layer: resids_cache[layer].to(device) for layer in collect_layers})
-    neurons_LBTI = TensorDict({layer: neurons_cache[layer].to(device) for layer in collect_layers})
-
-    del neurons_cache, resids_cache
+    resids_LBTD = TensorDict(
+        {layer: resids_cache[layer].to(device) for layer in collect_layers}
+    )
+    neurons_LBTI = TensorDict(
+        {layer: neurons_cache[layer].to(device) for layer in collect_layers}
+    )
+    neurons_cache.clear()
+    resids_cache.clear()
 
     # Key constants
     L = model.config.num_hidden_layers

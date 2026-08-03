@@ -17,7 +17,7 @@ DEFAULT_UNK_TOKEN = "<unk>"
 def get_huggingface_tokenizer(hf_model_id: str) -> PreTrainedTokenizer | PreTrainedTokenizerFast:
     tokenizer = AutoTokenizer.from_pretrained(hf_model_id)  # type: ignore
 
-    special_tokens_dict: dict[str, str] = dict()
+    special_tokens_dict: dict[str, str] = {}
     if tokenizer.eos_token is None:  # type: ignore
         special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
     if tokenizer.bos_token is None:  # type: ignore

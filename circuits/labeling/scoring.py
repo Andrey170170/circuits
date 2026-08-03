@@ -9,7 +9,7 @@ import resource
 import socket
 import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from circuits.analysis.bonafide.canonical import file_sha256
 from circuits.descriptions.types import ActivationRecord
@@ -306,7 +306,7 @@ def score_run(
                         for request_id, _, parsed in candidate_outputs
                     }
                     for value in values:
-                        value["candidate"] = by_request[value["request_id"]]
+                        value["candidate"] = by_request[cast(str, value["request_id"])]
                 values.sort(key=correlation_sort_key, reverse=True)
                 atomic_write_json(
                     output,

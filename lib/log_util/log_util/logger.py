@@ -1,7 +1,7 @@
 import logging
 import sys
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Any, ClassVar, Literal
 
 
 @dataclass
@@ -33,7 +33,7 @@ class Colors:
 
 
 class ColoredFormatter(logging.Formatter):
-    COLORS: Dict[int, ColorCode] = {
+    COLORS: ClassVar[dict[int, ColorCode]] = {
         logging.DEBUG: Colors.BLUE,
         logging.INFO: Colors.GREEN,
         logging.WARNING: Colors.YELLOW,
@@ -42,14 +42,14 @@ class ColoredFormatter(logging.Formatter):
     }
 
     # Available highlight colors
-    HIGHLIGHT_COLORS: Dict[str, ColorCode] = {
+    HIGHLIGHT_COLORS: ClassVar[dict[str, ColorCode]] = {
         "magenta": ColorCode(Colors.BRIGHT_MAGENTA.fore, Colors.BOLD),
         "cyan": ColorCode(Colors.BRIGHT_CYAN.fore, Colors.BOLD),
         "yellow": ColorCode(Colors.YELLOW.fore, Colors.BOLD),
         "red": ColorCode(Colors.RED.fore, Colors.BOLD),
     }
 
-    def __init__(self, fmt: Optional[str] = None) -> None:
+    def __init__(self, fmt: str | None = None) -> None:
         super().__init__(
             fmt or "%(asctime)s [%(levelname)s] %(namespace)s: %(message)s", datefmt="%H:%M:%S"
         )
@@ -88,7 +88,7 @@ class LoggerAdapter(logging.LoggerAdapter):
     Logger adapter that allows highlighting specific log messages.
     """
 
-    def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    def process(self, msg: Any, kwargs: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         # Pass highlight flag through to the record
         return msg, kwargs
 

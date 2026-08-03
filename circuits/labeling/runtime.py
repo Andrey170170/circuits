@@ -12,9 +12,10 @@ import shutil
 import socket
 import subprocess
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.labeling.api import create_backend
@@ -140,10 +141,10 @@ def _profile_payload(profile: Any) -> dict[str, Any]:
 
 
 def allocate_cluster_limit(
-    states: list[str], total_limit: int | None
+    states: Sequence[str], total_limit: int | None
 ) -> dict[str, int | None]:
     if total_limit is None:
-        return {state: None for state in states}
+        return dict.fromkeys(states)
     if total_limit < 1:
         raise ValueError("cluster limit must be positive")
     base, remainder = divmod(total_limit, len(states))
@@ -334,7 +335,7 @@ def prepare_candidate_run(
         manifest: dict[str, Any] = {
             "schema_version": RUN_SCHEMA,
             "run_id": resolved_run_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "status": "planned",
             "recipe": recipe.model_dump(mode="json"),
             "recipe_path": str(recipe_path.resolve()),
@@ -884,7 +885,7 @@ def _archive_failed_output(
             "attempt_number": attempt_number,
             "run_id": request.run_id,
             "stage": request.stage,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "status": "original_archived",
             "code_revision": code_revision,
             "override": {
@@ -1063,7 +1064,7 @@ async def retry_failed_generation(
                 f"canonical retry telemetry hash mismatch: {request.request_id}"
             )
         retry_manifest["status"] = "committed"
-        retry_manifest["committed_at"] = datetime.now(timezone.utc).isoformat()
+        retry_manifest["committed_at"] = datetime.now(UTC).isoformat()
         _write_retry_manifest(
             retry_dir / "manifest.json",
             retry_manifest,

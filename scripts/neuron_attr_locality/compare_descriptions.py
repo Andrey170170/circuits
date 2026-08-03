@@ -47,9 +47,11 @@ def collect_explanations(data: dict, view: str) -> list[str]:
         else:
             return []
     for sign in ("pos", "neg"):
-        for e in data[expl_key].get(sign, []):
-            if isinstance(e, str) and e.strip():
-                expls.append(e.strip())
+        expls.extend(
+            e.strip()
+            for e in data[expl_key].get(sign, [])
+            if isinstance(e, str) and e.strip()
+        )
     return expls
 
 

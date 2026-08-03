@@ -145,7 +145,7 @@ def main() -> None:
             zmid=0,
             zmin=-1,
             zmax=1,
-            colorbar=dict(title="Cosine Similarity"),
+            colorbar={"title": "Cosine Similarity"},
         )
     )
 
@@ -153,24 +153,24 @@ def main() -> None:
     shapes = []
     for b in boundaries:
         shapes.append(
-            dict(
-                type="line",
-                x0=b - 0.5,
-                x1=b - 0.5,
-                y0=-0.5,
-                y1=len(order) - 0.5,
-                line=dict(color="black", width=1),
-            )
+            {
+                "type": "line",
+                "x0": b - 0.5,
+                "x1": b - 0.5,
+                "y0": -0.5,
+                "y1": len(order) - 0.5,
+                "line": {"color": "black", "width": 1},
+            }
         )
         shapes.append(
-            dict(
-                type="line",
-                x0=-0.5,
-                x1=len(order) - 0.5,
-                y0=b - 0.5,
-                y1=b - 0.5,
-                line=dict(color="black", width=1),
-            )
+            {
+                "type": "line",
+                "x0": -0.5,
+                "x1": len(order) - 0.5,
+                "y0": b - 0.5,
+                "y1": b - 0.5,
+                "line": {"color": "black", "width": 1},
+            }
         )
 
     fig.update_layout(
@@ -178,10 +178,12 @@ def main() -> None:
         width=max(1200, len(order) * 3),
         height=max(1200, len(order) * 3),
         shapes=shapes,
-        xaxis=dict(showticklabels=False, title="Neurons (ordered by cluster)"),
-        yaxis=dict(
-            showticklabels=False, title="Neurons (ordered by cluster)", autorange="reversed"
-        ),
+        xaxis={"showticklabels": False, "title": "Neurons (ordered by cluster)"},
+        yaxis={
+            "showticklabels": False,
+            "title": "Neurons (ordered by cluster)",
+            "autorange": "reversed",
+        },
     )
 
     output_path = Path(args.output)

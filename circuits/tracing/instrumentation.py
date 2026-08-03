@@ -10,11 +10,11 @@ from __future__ import annotations
 import json
 import math
 import time
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, nullcontext
-from typing import Any, Iterator, Mapping
+from typing import Any
 
 import torch
-
 
 SCHEMA_VERSION = "adag.trace-instrumentation.v1"
 
@@ -156,9 +156,7 @@ class TraceInstrumentation:
         return snapshot
 
 
-def instrumentation_stage(
-    instrumentation: TraceInstrumentation | None, name: str
-):
+def instrumentation_stage(instrumentation: TraceInstrumentation | None, name: str):
     """Return a timing context that becomes a no-op without a recorder."""
 
     if instrumentation is None:
@@ -186,9 +184,7 @@ def record_selection_predictors(
         int(layer): [pair for pair in pairs if int(pair[0]) in keep]
         for layer, pairs in neuron_cfg.items()
     }
-    selected_counts = {
-        layer: len(pairs) for layer, pairs in selected_by_layer.items()
-    }
+    selected_counts = {layer: len(pairs) for layer, pairs in selected_by_layer.items()}
     # Match _get_cl_ja_based_edges exactly: range(tgt - 1, start_layer,
     # -1) excludes start_layer itself as a source.
     pair_eligible_layers = sorted(
@@ -219,9 +215,7 @@ def record_selection_predictors(
     for tgt_index, tgt_layer in enumerate(pair_eligible_layers):
         tgt_count = selected_counts[tgt_layer]
         for src_layer in pair_eligible_layers[:tgt_index]:
-            eligible_pairs.append(
-                {"src_layer": src_layer, "tgt_layer": tgt_layer}
-            )
+            eligible_pairs.append({"src_layer": src_layer, "tgt_layer": tgt_layer})
             candidate_edges += selected_counts[src_layer] * tgt_count
             jacobian_target_chunks_per_pass += math.ceil(
                 tgt_count / selected_attribution_chunk_size

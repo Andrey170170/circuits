@@ -147,9 +147,11 @@ def steering_analysis(
 
             # print
             print(name)
-            for idx, row in cluster_to_output.iterrows():
+            for _idx, row in cluster_to_output.iterrows():
                 print(f"{row['multiplier']:>3}")
-                for token, prob in zip(row["top_tokens"][:3], row["top_tokens_probs"][:3]):
+                for token, prob in zip(
+                    row["top_tokens"][:3], row["top_tokens_probs"][:3], strict=False
+                ):
                     print(f"    {token:>15}: {prob:>7.2%}")
                 # for token, logit in zip(
                 #     row["top_logit_diffs"][:3], row["top_logit_diffs_logits"][:3]
@@ -275,8 +277,7 @@ def export_full_node_subset(
         ]
     circuit.df_edge = subset_df_edge
 
-    # prepare per-label hypotheses and cluster
-    hypotheses = {"state": [label for label in circuit.labels]}
+    # Prepare per-label hypotheses and cluster.
     # circuit.cluster(
     #     n_clusters=10,
     #     include_attr_contrib=False,

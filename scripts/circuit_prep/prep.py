@@ -125,8 +125,7 @@ def parse_args() -> argparse.Namespace:
                         action.default = value
                     break
 
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def _make_adag_config(args: argparse.Namespace, apply_blacklist: bool, device: str) -> ADAGConfig:
@@ -176,7 +175,7 @@ def _worker_fn(
         max_memory = None
         device = f"cuda:{gpu_ids[0]}"
     else:
-        max_memory = {gpu: "70GiB" for gpu in gpu_ids}
+        max_memory = dict.fromkeys(gpu_ids, "70GiB")
         device_map = "sequential"
         device = f"cuda:{gpu_ids[0]}"
 

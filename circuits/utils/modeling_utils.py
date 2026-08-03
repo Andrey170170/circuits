@@ -40,7 +40,7 @@ class SparseAct:
         self.incoming_edge_weights = incoming_edge_weights or {}
         self.outgoing_edge_weights = outgoing_edge_weights or {}
 
-    def _map(self, f, aux=None) -> "SparseAct":
+    def _map(self, f, aux=None) -> SparseAct:
         kwargs = {}
         if isinstance(aux, SparseAct):
             for attr in ["act", "res", "resc"]:
@@ -60,7 +60,8 @@ class SparseAct:
         return self.__mul__(other)
 
     def __matmul__(self, other: SparseAct) -> SparseAct:
-        assert self.res is not None and other.res is not None
+        assert self.res is not None
+        assert other.res is not None
         # dot product between two SparseActs, except only the residual is contracted
         return SparseAct(
             act=self.act * other.act, resc=(self.res * other.res).sum(dim=-1, keepdim=True)
@@ -115,10 +116,9 @@ class SparseAct:
             return f"SparseAct(act={self.act}, resc={self.resc})"
         if self.resc is None:
             return f"SparseAct(act={self.act}, res={self.res})"
-        else:
-            raise ValueError(
-                "SparseAct has both residual and contracted residual. This is an unsupported state."
-            )
+        raise ValueError(
+            "SparseAct has both residual and contracted residual. This is an unsupported state."
+        )
 
     def sum(self, dim=None):
         kwargs = {}
@@ -237,14 +237,10 @@ class Submodule:
     def get_activation(self):
         use_input = self._resolve_use_input()
 
-        if use_input:
-            out = self.submodule.input  # TODO make sure I didn't break for pythia
-        else:
-            out = self.submodule.output
+        out = self.submodule.input if use_input else self.submodule.output
         if self.is_tuple:
             return out[0]
-        else:
-            return out
+        return out
 
     def set_activation(self, x):
         use_input = self._resolve_use_input()

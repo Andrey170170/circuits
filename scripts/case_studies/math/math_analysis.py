@@ -129,7 +129,13 @@ def _attach_descriptions_to_scores(df_scores: pd.DataFrame, circuit: Circuit) ->
         verbose=False,
         neuron_label_cache=circuit.neuron_label_cache,
     )
-    desc_map = dict(zip(described_nodes["input_variable_key"], described_nodes["description"]))
+    desc_map = dict(
+        zip(
+            described_nodes["input_variable_key"],
+            described_nodes["description"],
+            strict=False,
+        )
+    )
     df_scores["description"] = df_scores["input_variable"].map(desc_map).fillna("")
     return df_scores
 
@@ -232,7 +238,9 @@ def export_score_matrix(
     result: list[dict[str, str | int | list[float]]] = []
     for neuron, description in tqdm(neurons_and_descriptions):
         mask = circuit.df_node_embedded.input_variable.apply(
-            lambda x: NeuronId(layer=x.layer, token=-1, neuron=x.neuron, polarity=x.polarity)
+            lambda x, neuron=neuron: NeuronId(
+                layer=x.layer, token=-1, neuron=x.neuron, polarity=x.polarity
+            )
             == neuron
         )
         subset = circuit.df_node_embedded[mask]

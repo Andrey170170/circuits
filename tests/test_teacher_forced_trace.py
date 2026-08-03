@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 import torch
-
 from circuits.tracing.artifact import (
     DATA_FILENAME,
     load_compact_trace,
@@ -26,9 +25,9 @@ from circuits.tracing.candidates import (
 from circuits.tracing.clja import ADAGConfig, FrozenGraphTopology
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.trace import (
-    CircuitData,
     TOPK_CONTRIBUTION_SCHEMA_ID,
     TOPK_TRACE_FAMILY_ID,
+    CircuitData,
     TopKPositionTrace,
     prepare_teacher_forced_input,
     trace_teacher_forced_candidates,
@@ -164,9 +163,12 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
     assert data.target_provenance[0]["prediction_token_position"] == 5
     assert data.benchmark_only is False
     snapshot = data.trace_metadata["instrumentation"]
-    assert set(
-        ("prepare_input", "target_scoring", "clja_total", "dataframe_conversion")
-    ) <= set(snapshot["stages"])
+    assert {
+        "prepare_input",
+        "target_scoring",
+        "clja_total",
+        "dataframe_conversion",
+    } <= set(snapshot["stages"])
     assert snapshot["counters"]["raw_node_count"] == 1
     assert snapshot["counters"]["raw_edge_count"] == 1
     assert snapshot["counters"]["final_dataframe_node_count"] == 1
@@ -679,7 +681,7 @@ def test_compact_trace_detects_payload_corruption(tmp_path):
     save_compact_trace(destination, _circuit_data())
     with (destination / DATA_FILENAME).open("ab") as handle:
         handle.write(b"corruption")
-    with pytest.raises(ValueError, match="(size|checksum) mismatch"):
+    with pytest.raises(ValueError, match=r"(size|checksum) mismatch"):
         load_compact_trace(destination)
 
 

@@ -20,12 +20,15 @@ import math
 import os
 import statistics
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, cast
 
 from circuits.tracing.probe_artifact import load_probe_artifact
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
 from scripts.bonafide.manifest import SCHEMA_VERSION as TRACE_MANIFEST_SCHEMA
 from scripts.bonafide.screening_manifest import (
     DEFAULT_SELECTION_PATH,
@@ -34,8 +37,6 @@ from scripts.bonafide.screening_manifest import (
     _validate_candidate_contract,
     _validate_tokenizer_provenance,
 )
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
-
 
 SCHEMA_VERSION = "bonafide-refinement-selection/v1"
 DEFAULT_DENSE_COUNT = 11
@@ -114,7 +115,9 @@ def _load_object(path: Path) -> dict[str, Any]:
 def _require_hash(path: Path, expected: str | None, label: str) -> str:
     actual = _file_sha256(path)
     if expected is not None and actual != expected:
-        raise ValueError(f"{label} SHA-256 changed: expected {expected}, found {actual}")
+        raise ValueError(
+            f"{label} SHA-256 changed: expected {expected}, found {actual}"
+        )
     return actual
 
 
@@ -183,7 +186,9 @@ def _read_summary(path: Path) -> list[dict[str, Any]]:
                     f"invalid screening summary JSON on line {line_number}"
                 ) from error
             if not isinstance(value, dict):
-                raise ValueError(f"screening summary line {line_number} is not an object")
+                raise ValueError(
+                    f"screening summary line {line_number} is not an object"
+                )
             records.append(value)
     return records
 
@@ -258,20 +263,28 @@ def aggregate_screening(
             raise ValueError("screening work item must be an object")
         source_id = item.get("artifact_id")
         if not isinstance(source_id, str) or source_id in expected:
-            raise ValueError(f"duplicate or invalid screening source artifact: {source_id!r}")
+            raise ValueError(
+                f"duplicate or invalid screening source artifact: {source_id!r}"
+            )
         expected[source_id] = item
 
     by_source: dict[str, Mapping[str, Any]] = {}
     for record in summary_records:
         source_id = record.get("source_artifact_id")
         if not isinstance(source_id, str) or source_id in by_source:
-            raise ValueError(f"duplicate or invalid summary source artifact: {source_id!r}")
+            raise ValueError(
+                f"duplicate or invalid summary source artifact: {source_id!r}"
+            )
         if source_id not in expected:
-            raise ValueError(f"summary contains an unknown source artifact: {source_id}")
+            raise ValueError(
+                f"summary contains an unknown source artifact: {source_id}"
+            )
         by_source[source_id] = record
     missing = sorted(set(expected) - set(by_source))
     if missing:
-        raise ValueError(f"screening summary is incomplete; missing {len(missing)} records")
+        raise ValueError(
+            f"screening summary is incomplete; missing {len(missing)} records"
+        )
 
     root = artifact_root.resolve()
     grouped: dict[str, list[ScreenedTarget]] = defaultdict(list)
@@ -289,7 +302,9 @@ def aggregate_screening(
             raise ValueError(f"summary record lacks artifact_path: {source_id}")
         artifact_path = Path(artifact_path_raw).resolve()
         if artifact_path != root and root not in artifact_path.parents:
-            raise ValueError(f"probe artifact is outside the declared root: {artifact_path}")
+            raise ValueError(
+                f"probe artifact is outside the declared root: {artifact_path}"
+            )
         loaded = load_probe_artifact(artifact_path)
         position = int(item["target_selection"]["response_token_positions"][0])
         example_id = str(item["example"]["example_id"])
@@ -308,22 +323,27 @@ def aggregate_screening(
             raise ValueError(f"artifact identity disagrees for {source_id}")
         if loaded.manifest.get("source_artifact_id") != source_id:
             raise ValueError(f"artifact source identity disagrees for {source_id}")
-        if loaded.manifest.get("bonafide_example", {}).get("example_id") != example_id:
+        artifact_example = cast(
+            Mapping[str, Any], loaded.manifest.get("bonafide_example", {})
+        )
+        if artifact_example.get("example_id") != example_id:
             raise ValueError(f"artifact example disagrees for {source_id}")
-        provenance = loaded.probe["target_provenance"]
+        provenance = cast(Mapping[str, Any], loaded.probe["target_provenance"])
         if provenance.get("response_token_position") != position:
             raise ValueError(f"probe target position disagrees for {source_id}")
         metrics = loaded.metrics
+        instrumentation = cast(Mapping[str, Any], metrics.get("instrumentation", {}))
+        counters = cast(Mapping[str, Any], instrumentation.get("counters", {}))
         for field in (
             "candidate_mlp_edge_count",
             "probe_selected_occurrence_count",
         ):
-            counter = metrics.get("instrumentation", {}).get("counters", {}).get(field)
+            counter = counters.get(field)
             if isinstance(counter, bool) or not isinstance(counter, int) or counter < 0:
                 raise ValueError(f"probe metric {field} is invalid for {source_id}")
+        feature_basis = cast(Mapping[str, Any], loaded.probe["feature_basis_signature"])
         feature_ids = frozenset(
-            (int(layer), int(neuron))
-            for layer, neuron in loaded.probe["feature_basis_signature"]["feature_ids"]
+            (int(layer), int(neuron)) for layer, neuron in feature_basis["feature_ids"]
         )
         grouped[example_id].append(
             ScreenedTarget(source_item=item, summary=record, feature_ids=feature_ids)
@@ -344,7 +364,9 @@ def aggregate_screening(
         screening_example = first["example"]
         example = candidate_by_id.get(example_id)
         if example is None:
-            raise ValueError(f"screened example is absent from candidate selection: {example_id}")
+            raise ValueError(
+                f"screened example is absent from candidate selection: {example_id}"
+            )
         for field, value in screening_example.items():
             if example.get(field) != value:
                 raise ValueError(
@@ -353,7 +375,9 @@ def aggregate_screening(
         inventory = first["target_selection"]["screening_selection"][
             "candidate_inventory"
         ]
-        if any(target.source_item["example"] != screening_example for target in targets):
+        if any(
+            target.source_item["example"] != screening_example for target in targets
+        ):
             raise ValueError(f"screening examples disagree within {example_id}")
         if any(
             target.source_item["target_selection"]["screening_selection"][
@@ -365,11 +389,19 @@ def aggregate_screening(
             raise ValueError(f"candidate inventory disagrees within {example_id}")
 
         edges = [
-            float(target.summary["instrumentation"]["counters"]["candidate_mlp_edge_count"])
+            float(
+                target.summary["instrumentation"]["counters"][
+                    "candidate_mlp_edge_count"
+                ]
+            )
             for target in targets
         ]
-        occurrences = [float(target.summary["selected_occurrence_count"]) for target in targets]
-        memory = [float(target.summary["cuda_peak_reserved_bytes"]) for target in targets]
+        occurrences = [
+            float(target.summary["selected_occurrence_count"]) for target in targets
+        ]
+        memory = [
+            float(target.summary["cuda_peak_reserved_bytes"]) for target in targets
+        ]
         wall = [float(target.summary["probe_wall_seconds"]) for target in targets]
         union = frozenset().union(*(target.feature_ids for target in targets))
         pairwise = [
@@ -400,7 +432,9 @@ def aggregate_screening(
                         "p90": _quantile(occurrences, 0.9),
                         "max": max(occurrences),
                         "mean": statistics.fmean(occurrences),
-                        "coefficient_of_variation": _coefficient_of_variation(occurrences),
+                        "coefficient_of_variation": _coefficient_of_variation(
+                            occurrences
+                        ),
                     },
                     "cuda_peak_reserved_bytes": {
                         "p50": _quantile(memory, 0.5),
@@ -424,11 +458,15 @@ def aggregate_screening(
     return _assign_workload_bins(aggregates)
 
 
-def _assign_workload_bins(aggregates: Sequence[PromptAggregate]) -> list[PromptAggregate]:
+def _assign_workload_bins(
+    aggregates: Sequence[PromptAggregate],
+) -> list[PromptAggregate]:
     result: list[PromptAggregate] = []
     for inventory in ("dense_inventory", "broad_eligible_inventory"):
         subset = [item for item in aggregates if item.inventory == inventory]
-        edges = [float(item.workload["candidate_mlp_edge_count"]["p90"]) for item in subset]
+        edges = [
+            float(item.workload["candidate_mlp_edge_count"]["p90"]) for item in subset
+        ]
         lower, upper = _quantile(edges, 1 / 3), _quantile(edges, 2 / 3)
         for item in subset:
             value = float(item.workload["candidate_mlp_edge_count"]["p90"])
@@ -481,7 +519,9 @@ def select_prompts(
 
     candidates = [item for item in aggregates if item.inventory == inventory]
     if not 1 <= count <= len(candidates):
-        raise ValueError(f"cannot select {count} prompts from {len(candidates)} {inventory}")
+        raise ValueError(
+            f"cannot select {count} prompts from {len(candidates)} {inventory}"
+        )
     selected: list[tuple[PromptAggregate, Mapping[str, Any]]] = []
     covered: set[str] = set()
     features: set[tuple[int, int]] = set()
@@ -490,11 +530,15 @@ def select_prompts(
     anchors = dict(anchor_reasons or {})
     unknown_anchors = sorted(set(anchors) - {item.example_id for item in candidates})
     if unknown_anchors:
-        raise ValueError(f"selection anchors are outside {inventory}: {unknown_anchors}")
+        raise ValueError(
+            f"selection anchors are outside {inventory}: {unknown_anchors}"
+        )
     if len(anchors) > count:
         raise ValueError("selection has more anchors than requested prompts")
     while len(selected) < count:
-        ranked: list[tuple[tuple[float, ...], str, PromptAggregate, dict[str, Any]]] = []
+        ranked: list[
+            tuple[tuple[float, ...], str, PromptAggregate, dict[str, Any]]
+        ] = []
         for candidate in candidates:
             if any(candidate.example_id == item.example_id for item, _ in selected):
                 continue
@@ -535,7 +579,9 @@ def select_prompts(
                         "selection_iteration": len(selected),
                         "anchor_reason": anchors.get(candidate.example_id),
                         "new_semantic_coverage": semantic_new,
-                        "new_workload_bin": candidate.workload_bin if workload_gain else None,
+                        "new_workload_bin": candidate.workload_bin
+                        if workload_gain
+                        else None,
                         "new_feature_count": len(feature_new),
                         "screened_feature_count": len(candidate.feature_ids),
                         "new_feature_fraction": feature_gain,
@@ -561,8 +607,14 @@ def select_prompts(
 
 def _single_value(example: Mapping[str, Any], field: str) -> str:
     values = example.get(field)
-    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str):
-        raise ValueError(f"broad constraint field {field} must contain exactly one value")
+    if (
+        not isinstance(values, list)
+        or len(values) != 1
+        or not isinstance(values[0], str)
+    ):
+        raise ValueError(
+            f"broad constraint field {field} must contain exactly one value"
+        )
     return values[0]
 
 
@@ -575,7 +627,9 @@ def validate_frozen_broad_prompts(
     """Validate and return the reviewed 8-holdout/24-discovery membership."""
 
     if len(holdout_ids) != 8 or len(discovery_ids) != 24:
-        raise ValueError("frozen broad selection requires 8 holdout and 24 discovery IDs")
+        raise ValueError(
+            "frozen broad selection requires 8 holdout and 24 discovery IDs"
+        )
     if len(set(holdout_ids) | set(discovery_ids)) != 32:
         raise ValueError("frozen broad prompt IDs must be unique and disjoint")
     broad = {
@@ -624,7 +678,9 @@ def validate_frozen_broad_prompts(
             },
         ),
         "response_length_bin": (
-            counts(discovery, lambda item: item.example["diversity"]["response_length_bin"]),
+            counts(
+                discovery, lambda item: item.example["diversity"]["response_length_bin"]
+            ),
             {"225-384": 8, "385-512": 8, "513-768": 8},
         ),
         "workload_bin": (
@@ -632,7 +688,9 @@ def validate_frozen_broad_prompts(
             {"high": 8, "low": 8, "middle": 8},
         ),
         "hint_dataset": (
-            counts(discovery, lambda item: _single_value(item.example, "hint_datasets")),
+            counts(
+                discovery, lambda item: _single_value(item.example, "hint_datasets")
+            ),
             {
                 "aai530-group6_ddxplus": 7,
                 "cais_hle": 5,
@@ -679,7 +737,10 @@ def _evenly_spaced(values: Sequence[int], count: int) -> list[int]:
         return ordered
     if count == 1:
         return [ordered[len(ordered) // 2]]
-    return [ordered[round(index * (len(ordered) - 1) / (count - 1))] for index in range(count)]
+    return [
+        ordered[round(index * (len(ordered) - 1) / (count - 1))]
+        for index in range(count)
+    ]
 
 
 def _broad_refinement_targets(
@@ -707,7 +768,9 @@ def _broad_refinement_targets(
     standalone_ids = [int(value) for value in encoded["input_ids"]]
     offsets = [(int(start), int(end)) for start, end in encoded["offset_mapping"]]
     if standalone_ids != list(response_ids) or len(offsets) != len(response_ids):
-        raise ValueError("standalone response offsets disagree with teacher-forced token IDs")
+        raise ValueError(
+            "standalone response offsets disagree with teacher-forced token IDs"
+        )
     reasons: dict[int, list[dict[str, Any]]] = defaultdict(list)
 
     def token_for_char(character: int) -> int:
@@ -727,7 +790,9 @@ def _broad_refinement_targets(
                 reasons[position].append(canonical)
 
     def add_window(center: int, reason: Mapping[str, Any]) -> None:
-        for position in range(center - micro_window_radius, center + micro_window_radius + 1):
+        for position in range(
+            center - micro_window_radius, center + micro_window_radius + 1
+        ):
             add(
                 position,
                 {
@@ -808,7 +873,10 @@ def _broad_refinement_targets(
             found = lower_response.find(needle, start)
             if found < 0:
                 break
-            for boundary, character in (("start", found), ("end", found + len(phrase) - 1)):
+            for boundary, character in (
+                ("start", found),
+                ("end", found + len(phrase) - 1),
+            ):
                 add_window(
                     token_for_char(character),
                     {
@@ -853,7 +921,9 @@ def _broad_refinement_targets(
     selected = set(ranked[:cap])
     # Phase controls are non-negotiable; replace the lowest-priority positions
     # if unusually many annotation/source windows consume the cap.
-    missing_phase = [position for position in phase_positions if position not in selected]
+    missing_phase = [
+        position for position in phase_positions if position not in selected
+    ]
     for position in missing_phase:
         removable = sorted(
             (candidate for candidate in selected if candidate not in phase_positions),
@@ -864,7 +934,9 @@ def _broad_refinement_targets(
             reverse=True,
         )
         if not removable:
-            raise ValueError("cannot preserve phase controls within broad refinement cap")
+            raise ValueError(
+                "cannot preserve phase controls within broad refinement cap"
+            )
         selected.remove(removable[0])
         selected.add(position)
     return [
@@ -962,10 +1034,9 @@ def build_refinement_probe_manifest(
         and item.example.get("selection_membership", {}).get("recommended_dense_core")
         is True
     }
-    dense_anchor_reasons = {
-        example_id: "pre-screening recommended dense core"
-        for example_id in sorted(recommended_dense_ids)
-    }
+    dense_anchor_reasons = dict.fromkeys(
+        sorted(recommended_dense_ids), "pre-screening recommended dense core"
+    )
     for example_id in dense_augmentation_ids:
         dense_anchor_reasons[example_id] = (
             "same-prompt phenotype validator contrast: commission versus both"
@@ -1096,11 +1167,13 @@ def build_refinement_probe_manifest(
             "broad_holdout_ids": list(broad_holdout_ids),
             "broad_discovery_ids": list(broad_discovery_ids),
             "broad_refinement_candidate_cap": broad_candidate_cap,
-            "semantic_axes": sorted({
-                token.split(":", 1)[0]
-                for aggregate in aggregates
-                for token in _coverage_tokens(aggregate.example)
-            }),
+            "semantic_axes": sorted(
+                {
+                    token.split(":", 1)[0]
+                    for aggregate in aggregates
+                    for token in _coverage_tokens(aggregate.example)
+                }
+            ),
             "workload_axis": "within-inventory tertiles of screened p90 candidate MLP edges",
             "feature_axis": (
                 "reviewed discovery membership used screened feature count only as "
@@ -1154,7 +1227,9 @@ def write_manifest(manifest: Mapping[str, Any], output_path: Path) -> None:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--candidate-selection", type=Path, default=DEFAULT_SELECTION_PATH)
+    parser.add_argument(
+        "--candidate-selection", type=Path, default=DEFAULT_SELECTION_PATH
+    )
     parser.add_argument("--expected-candidate-sha256")
     parser.add_argument("--screening-manifest", type=Path, required=True)
     parser.add_argument("--expected-screening-manifest-sha256")
@@ -1193,7 +1268,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         summary_records=summary,
         artifact_root=args.artifact_root,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.tokenizer_path, local_files_only=True
+    )
     refinement = build_refinement_probe_manifest(
         candidate_selection=candidate,
         candidate_path=args.candidate_selection,

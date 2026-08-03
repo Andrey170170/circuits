@@ -21,9 +21,9 @@ from circuits.descriptions.types import (
 from circuits.descriptions.vllm_backend import FinetunedSimulator, VLLMExplainer
 
 __all__ = [
+    "ActSign",
     "ActivationRecord",
     "ActivationRecordWithContrib",
-    "ActSign",
     "AnthropicAttrExplainer",
     "AnthropicAttrScorer",
     "AnthropicContribExplainer",

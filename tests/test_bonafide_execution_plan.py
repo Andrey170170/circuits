@@ -10,7 +10,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 import torch
-
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.trace import CircuitData
 from scripts.bonafide.execution_plan import (
@@ -63,7 +62,10 @@ def _source_item(index: int, probe_id: str, edges: int) -> dict:
                 "selection_reasons": [{"bucket": "phase_control"}],
             },
         },
-        "objective": {"benchmark_only_multi_target": False, "name": "single_selected_logit"},
+        "objective": {
+            "benchmark_only_multi_target": False,
+            "name": "single_selected_logit",
+        },
         "example": {
             "example_id": f"example-{index}",
             "annotation_row_ids": [f"row-{index}"],
@@ -75,7 +77,9 @@ def _source_item(index: int, probe_id: str, edges: int) -> dict:
     }
 
 
-def _fixture(tmp_path: Path, *, omit_probe: int | None = None) -> tuple[dict, dict, Path, Path]:
+def _fixture(
+    tmp_path: Path, *, omit_probe: int | None = None
+) -> tuple[dict, dict, Path, Path]:
     config = {
         "schema_version": RUN_CONFIG_SCHEMA,
         "batch_size": 1,
@@ -109,7 +113,14 @@ def _fixture(tmp_path: Path, *, omit_probe: int | None = None) -> tuple[dict, di
     ]
     historical_path = tmp_path / "historical.jsonl"
     _write_jsonl(historical_path, historical)
-    workloads = [(100, 7, 30), (200, 8, 40), (600_000, 12, 50), (700_000, 13, 55), (800_000, 14, 60), (20_000_000, 20, 70)]
+    workloads = [
+        (100, 7, 30),
+        (200, 8, 40),
+        (600_000, 12, 50),
+        (700_000, 13, 55),
+        (800_000, 14, 60),
+        (20_000_000, 20, 70),
+    ]
     probes = [
         {
             "status": "complete",
@@ -165,7 +176,9 @@ def _rehash(plan: dict) -> None:
 def _trace() -> CircuitData:
     return CircuitData(
         df_node=pd.DataFrame({"attribution": [0.1], "activation": [0.2], "layer": [0]}),
-        df_edge=pd.DataFrame({"attribution": [0.3], "weight": [0.4], "layer": ["0->1"]}),
+        df_edge=pd.DataFrame(
+            {"attribution": [0.3], "weight": [0.4], "layer": ["0->1"]}
+        ),
         cis=[[1, 2]],
         attention_masks=[[1, 1]],
         labels=["example"],
@@ -188,12 +201,19 @@ def test_plan_is_deterministic_balanced_and_separates_extremes(tmp_path: Path) -
     assert first["cost_model"]["training_record_count"] == 6
     assert first["sharding"]["routine_target_count"] == 2
     assert len(first["extremes"]["preflight"]) == 3
-    assert first["extremes"]["manual_pathological"][0]["workload"]["candidate_mlp_edge_count"] == 20_000_000
+    assert (
+        first["extremes"]["manual_pathological"][0]["workload"][
+            "candidate_mlp_edge_count"
+        ]
+        == 20_000_000
+    )
     assert [task["task_index"] for task in first["tasks"]] == list(range(5))
     assert first["tasks"][-1]["requires_explicit_manual_opt_in"] is True
 
 
-def test_plan_rejects_duplicate_assignments_and_source_hash_drift(tmp_path: Path) -> None:
+def test_plan_rejects_duplicate_assignments_and_source_hash_drift(
+    tmp_path: Path,
+) -> None:
     _, manifest, plan_path, _ = _fixture(tmp_path)
     plan = json.loads(plan_path.read_text())
     duplicate = copy.deepcopy(plan["sharding"]["shards"][0]["items"][0])
@@ -243,20 +263,28 @@ def test_compound_dry_run_does_not_load_model(tmp_path: Path, monkeypatch) -> No
     assert not (tmp_path / "summary.jsonl").exists()
 
 
-def test_compound_loads_once_and_preserves_wave_identity_and_path(tmp_path: Path, monkeypatch) -> None:
+def test_compound_loads_once_and_preserves_wave_identity_and_path(
+    tmp_path: Path, monkeypatch
+) -> None:
     import scripts.bonafide.runner as runner_module
 
     config, manifest, plan_path, _ = _fixture(tmp_path)
     plan = json.loads(plan_path.read_text())
     loads = []
-    monkeypatch.setattr(runner_module, "collect_code_revision", lambda _root: {"revision": "same"})
-    monkeypatch.setattr(runner_module, "collect_runtime_environment", lambda: {"runtime": "same"})
+    monkeypatch.setattr(
+        runner_module, "collect_code_revision", lambda _root: {"revision": "same"}
+    )
+    monkeypatch.setattr(
+        runner_module, "collect_runtime_environment", lambda: {"runtime": "same"}
+    )
     monkeypatch.setattr(
         runner_module,
         "_load_model_and_tokenizer",
         lambda _config: (loads.append(1) or object(), object()),
     )
-    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", lambda **_kwargs: _trace())
+    monkeypatch.setattr(
+        runner_module, "trace_teacher_forced_response", lambda **_kwargs: _trace()
+    )
     records = run_compound_shard(
         config=config,
         manifest=manifest,
@@ -268,7 +296,10 @@ def test_compound_loads_once_and_preserves_wave_identity_and_path(tmp_path: Path
     complete = [record for record in records if record.get("status") == "complete"]
     assert loads == [1]
     assert {record["wave_id"] for record in complete} == {"wave-0", "wave-1"}
-    assert all(Path(record["artifact_path"]).parent.name == record["wave_id"] for record in complete)
+    assert all(
+        Path(record["artifact_path"]).parent.name == record["wave_id"]
+        for record in complete
+    )
     assert records[-1]["status"] == "task_complete"
     assert records[-1]["completed_item_count"] == 2
 
@@ -308,8 +339,12 @@ def test_compound_generic_failure_records_terminal_task_event(
 
     config, manifest, plan_path, _ = _fixture(tmp_path)
     plan = json.loads(plan_path.read_text())
-    monkeypatch.setattr(runner_module, "collect_code_revision", lambda _root: {"revision": "same"})
-    monkeypatch.setattr(runner_module, "collect_runtime_environment", lambda: {"runtime": "same"})
+    monkeypatch.setattr(
+        runner_module, "collect_code_revision", lambda _root: {"revision": "same"}
+    )
+    monkeypatch.setattr(
+        runner_module, "collect_runtime_environment", lambda: {"runtime": "same"}
+    )
     monkeypatch.setattr(
         runner_module,
         "_load_model_and_tokenizer",
@@ -371,8 +406,12 @@ def test_compound_never_completes_with_permissive_failed_items(
         canonical_json(config)
     ).hexdigest()
     _rehash(plan)
-    monkeypatch.setattr(runner_module, "collect_code_revision", lambda _root: {"revision": "same"})
-    monkeypatch.setattr(runner_module, "collect_runtime_environment", lambda: {"runtime": "same"})
+    monkeypatch.setattr(
+        runner_module, "collect_code_revision", lambda _root: {"revision": "same"}
+    )
+    monkeypatch.setattr(
+        runner_module, "collect_runtime_environment", lambda: {"runtime": "same"}
+    )
     monkeypatch.setattr(
         runner_module,
         "_load_model_and_tokenizer",
@@ -403,7 +442,9 @@ def test_compound_never_completes_with_permissive_failed_items(
     assert records[-1]["stop_reason"] == "failed_item_without_stop_gate"
 
 
-def test_compound_gate_writes_task_stop_and_exits_nonzero(tmp_path: Path, monkeypatch) -> None:
+def test_compound_gate_writes_task_stop_and_exits_nonzero(
+    tmp_path: Path, monkeypatch
+) -> None:
     import scripts.bonafide.runner as runner_module
 
     config, manifest, plan_path, _ = _fixture(tmp_path)
@@ -416,12 +457,18 @@ def test_compound_gate_writes_task_stop_and_exits_nonzero(tmp_path: Path, monkey
         canonical_json(config)
     ).hexdigest()
     _rehash(plan)
-    monkeypatch.setattr(runner_module, "collect_code_revision", lambda _root: {"revision": "same"})
-    monkeypatch.setattr(runner_module, "collect_runtime_environment", lambda: {"runtime": "same"})
+    monkeypatch.setattr(
+        runner_module, "collect_code_revision", lambda _root: {"revision": "same"}
+    )
+    monkeypatch.setattr(
+        runner_module, "collect_runtime_environment", lambda: {"runtime": "same"}
+    )
     monkeypatch.setattr(
         runner_module, "_load_model_and_tokenizer", lambda _config: (object(), object())
     )
-    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", lambda **_kwargs: _trace())
+    monkeypatch.setattr(
+        runner_module, "trace_teacher_forced_response", lambda **_kwargs: _trace()
+    )
     summary = tmp_path / "summary.jsonl"
     with pytest.raises(RuntimeError, match="compound task 0 stopped"):
         run_compound_shard(

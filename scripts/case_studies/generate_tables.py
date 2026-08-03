@@ -55,8 +55,7 @@ def make_heatmap_df(attribution: list[float], normalize: bool = True) -> pd.Data
             arr = arr / max_abs
     rows = []
     for i in range(100):
-        for j in range(100):
-            rows.append({"x": j, "y": i, "value": arr[i, j]})
+        rows.extend({"x": j, "y": i, "value": arr[i, j]} for j in range(100))
     return pd.DataFrame(rows)
 
 
@@ -147,10 +146,9 @@ def score_to_color(score: float) -> str:
         # Blue tint for high scores
         intensity = int((score - 0.5) * 2 * 40)  # 0-40 range
         return f"highcolor!{intensity}!white"
-    else:
-        # Red tint for low scores
-        intensity = int((0.5 - score) * 2 * 40)
-        return f"lowcolor!{intensity}!white"
+    # Red tint for low scores
+    intensity = int((0.5 - score) * 2 * 40)
+    return f"lowcolor!{intensity}!white"
 
 
 def escape_latex(text: str) -> str:
@@ -219,9 +217,9 @@ def generate_latex_table_sva(
         grouped[token].append(node)
 
     # Sort each group by abs score (descending)
-    for token in grouped:
+    for token, token_nodes in grouped.items():
         grouped[token] = sorted(
-            grouped[token], key=lambda n: abs(n[5][0]) if n[5] else 0, reverse=True
+            token_nodes, key=lambda n: abs(n[5][0]) if n[5] else 0, reverse=True
         )
 
     lines = [

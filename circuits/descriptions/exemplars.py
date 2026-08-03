@@ -4,7 +4,12 @@ import random
 from typing import Any
 
 import numpy as np
-from circuits.descriptions.types import ActivationRecord, ActivationRecordWithContrib, ActSign
+
+from circuits.descriptions.types import (
+    ActivationRecord,
+    ActivationRecordWithContrib,
+    ActSign,
+)
 
 # Same quantile keys as observatory's exemplars_wrapper.QUANTILE_KEYS
 QUANTILE_KEYS = (
@@ -63,7 +68,7 @@ def format_tokens_with_highlights(
     """
     # Build (token, highlighted?) pairs
     elements: list[tuple[str, bool]] = []
-    for tok, act in zip(tokens, activations):
+    for tok, act in zip(tokens, activations, strict=True):
         elements.append((tok, act >= threshold and act > EPSILON_THRESHOLD))
 
     # Merge consecutive highlighted tokens
@@ -128,7 +133,7 @@ def compute_highlight_threshold_quantile(
         activating_tokens: set[str] = set()
         for rec in records:
             current_group = ""
-            for tok, act in zip(rec.tokens, rec.activations):
+            for tok, act in zip(rec.tokens, rec.activations, strict=True):
                 if act >= thresh and act > EPSILON_THRESHOLD:
                     current_group += tok
                 else:
@@ -188,10 +193,9 @@ def compute_highlight_threshold(
     """
     if mode == "topk":
         return compute_highlight_threshold_topk(records, min_highlights)
-    elif mode == "quantile":
+    if mode == "quantile":
         return compute_highlight_threshold_quantile(records, percentiles, min_highlights)
-    else:
-        raise ValueError(f"Unknown threshold mode: {mode!r}. Use 'topk' or 'quantile'.")
+    raise ValueError(f"Unknown threshold mode: {mode!r}. Use 'topk' or 'quantile'.")
 
 
 def _filter_by_sign(
@@ -367,9 +371,7 @@ def build_attr_exemplars(
         return [], []
 
     # Format all top records (for backward compat / single-prompt usage)
-    formatted: list[str] = []
-    for d in exemplar_dicts:
-        formatted.append(d["text"])
+    formatted = [d["text"] for d in exemplar_dicts]
 
     return formatted, exemplar_dicts
 
@@ -390,7 +392,7 @@ def build_contrib_minibatch(
         if rec.contrib_map is None or rec.output_logits is None:
             continue
         conts: list[dict[str, Any]] = []
-        for score, logit_id in zip(rec.contrib_map, rec.output_logits):
+        for score, logit_id in zip(rec.contrib_map, rec.output_logits, strict=True):
             token_str = tokenizer.decode([logit_id])
             conts.append({"token": token_str, "score": score})
         if conts:
@@ -408,7 +410,7 @@ def build_contrib_minibatch(
     result: list[dict[str, Any]] = []
     for data in grouped.values():
         for c in data["continuations"]:
-            c["normalized_score"] = int(round(c["score"] / max_abs * 10))
+            c["normalized_score"] = round(c["score"] / max_abs * 10)
         result.append(data)
 
     # Sort by max absolute contribution

@@ -11,9 +11,10 @@ from typing import Any, Literal, NamedTuple, cast
 
 import numpy as np
 import pandas as pd
-from circuits.analysis.cluster import NeuronId, df_sum_over_tokens, unit_norm
 from numpy.typing import NDArray
 from sklearn.cluster import SpectralClustering
+
+from circuits.analysis.cluster import NeuronId, df_sum_over_tokens, unit_norm
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ def compute_per_ci_similarities(
     grouped = {label: group for label, group in df.groupby("label") if len(group) >= 2}
 
     label_iter = tqdm(grouped.items(), desc="Computing similarities", disable=not verbose)
-    for label, df_label in label_iter:
+    for _label, df_label in label_iter:
         neuron_ids_in_label = df_label["input_variable"].tolist()
         idx_arr = np.array([neuron_to_idx[nid] for nid in neuron_ids_in_label])
 
@@ -301,7 +302,7 @@ def spectral_cluster(
         sim_normalized = sim_nn * np.outer(d_inv_sqrt, d_inv_sqrt)
         np.fill_diagonal(sim_normalized, 1.0)
         # Eigendecompose the normalized affinity (top-k eigenvectors = bottom-k of L_norm)
-        eigenvalues, eigenvectors = np.linalg.eigh(sim_normalized)
+        _eigenvalues, eigenvectors = np.linalg.eigh(sim_normalized)
         # Take the k largest eigenvectors of the normalized affinity
         embedding = eigenvectors[:, -n_clusters:]
         # Row-normalize the embedding
@@ -351,7 +352,9 @@ def leiden_cluster(
 
     # Build igraph from sparse adjacency
     sources, targets = adj_csr.nonzero()
-    edges = [(int(s), int(t)) for s, t in zip(sources, targets) if s < t]
+    edges = [
+        (int(s), int(t)) for s, t in zip(sources, targets, strict=True) if s < t
+    ]
     weights = [float(adj_csr[s, t]) for s, t in edges]
 
     g = igraph.Graph(n=n, edges=edges, directed=False)
@@ -541,7 +544,7 @@ def compute_contrib_sign_conflicts(
     n_any_conflict = 0
     n_all_conflict = 0
 
-    for cl, keys in cluster_to_keys.items():
+    for keys in cluster_to_keys.values():
         for i in range(len(keys)):
             for j in range(i + 1, len(keys)):
                 key_a, key_b = keys[i], keys[j]

@@ -3,7 +3,6 @@ import logging
 import os
 import warnings
 from pathlib import Path
-from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -61,7 +60,7 @@ p9.theme_set(
 )
 
 
-_NEURON_LABEL_CACHE: Dict[Tuple[int, int, int], str] = {}
+_NEURON_LABEL_CACHE: dict[tuple[int, int, int], str] = {}
 
 
 def analyse_subfolder(
@@ -103,7 +102,7 @@ def analyse_subfolder(
     neuron_list = list(map(int, neurons.tolist()))
     input_variables = [
         NeuronId(layer=layer, token=token, neuron=neuron, polarity="0")
-        for layer, token, neuron in zip(layer_list, token_list, neuron_list)
+        for layer, token, neuron in zip(layer_list, token_list, neuron_list, strict=False)
     ]
     abs_list = abs_values.tolist()
 
@@ -131,7 +130,9 @@ def analyse_subfolder(
 
     metric_keys = ["Attribution"]
     nodes = []
-    for layer, token, neuron, abs_val in zip(layer_list, token_list, neuron_list, abs_list):
+    for layer, token, neuron, abs_val in zip(
+        layer_list, token_list, neuron_list, abs_list, strict=False
+    ):
         value = tensor[layer, token, neuron].item()
         node_id = f"L{layer}_T{token}_N{neuron}"
         description = desc_map.get(
@@ -207,7 +208,9 @@ def plot_scores_for_methods(
         datasets_list = list(datasets)
 
     method_scores: list[tuple[str, str, np.ndarray, np.ndarray]] = []
-    for subfolder, label, dataset_name in zip(subfolders, labels, datasets_list):
+    for subfolder, label, dataset_name in zip(
+        subfolders, labels, datasets_list, strict=False
+    ):
         train_path = Path(subfolder) / "train.pt"
         if not train_path.exists():
             logger.warning("Missing model checkpoint at %s", train_path)
@@ -260,10 +263,7 @@ def plot_scores_for_methods(
         if label not in method_order:
             method_order.append(label)
 
-    if len(dataset_order) == 1:
-        figure_suffix = dataset_order[0]
-    else:
-        figure_suffix = "all_datasets"
+    figure_suffix = dataset_order[0] if len(dataset_order) == 1 else "all_datasets"
     figure_path_scores = (
         output_dir / f"{output_name}method_score_histograms_{figure_suffix}{PLOT_SUFFIX}"
     )

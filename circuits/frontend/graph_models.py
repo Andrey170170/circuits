@@ -123,4 +123,4 @@ class Model(BaseModel):
     metadata: Metadata
     qParams: QParams
     nodes: list[Node]
-    links: list[dict]
+    links: list[dict[str, object]]

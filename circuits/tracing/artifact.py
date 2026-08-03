@@ -10,10 +10,11 @@ import os
 import pickle
 import shutil
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -402,7 +403,7 @@ def save_compact_trace(
         canonical_manifest.update(
             {
                 "schema_version": SCHEMA_VERSION,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "data_file": DATA_FILENAME,
                 "data_sha256": data_sha256,
                 "data_size_bytes": data_size_bytes,
@@ -454,7 +455,7 @@ def save_topk_compact_trace(
         canonical_manifest.update(
             {
                 "schema_version": TOPK_SCHEMA_VERSION,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "data_file": DATA_FILENAME,
                 "data_sha256": data_sha256,
                 "data_size_bytes": data_size_bytes,

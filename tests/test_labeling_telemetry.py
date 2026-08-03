@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from circuits.analysis.bonafide.canonical import canonical_sha256
 from circuits.labeling.io import atomic_write_json
 from circuits.labeling.schema import (

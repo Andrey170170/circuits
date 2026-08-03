@@ -14,7 +14,6 @@ from typing import Any
 
 import numpy as np
 import torch
-
 from circuits.tracing.artifact import (
     save_topk_compact_trace,
     validate_topk_compact_trace_integrity,
@@ -22,6 +21,7 @@ from circuits.tracing.artifact import (
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.trace import trace_teacher_forced_candidates
+
 from scripts.bonafide.execution_plan import sha256_file
 from scripts.bonafide.runner import (
     _append_jsonl,
@@ -97,10 +97,7 @@ def _completed_artifact_matches(path: Path, identity: Mapping[str, Any]) -> bool
 
 def _model_config_sha256(model) -> str:
     to_dict = getattr(model.config, "to_dict", None)
-    if callable(to_dict):
-        value = to_dict()
-    else:
-        value = dict(vars(model.config))
+    value = to_dict() if callable(to_dict) else dict(vars(model.config))
     return _sha256(value)
 
 

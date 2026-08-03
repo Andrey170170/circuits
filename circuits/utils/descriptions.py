@@ -8,10 +8,16 @@ from typing import cast
 
 import numpy as np
 import pandas as pd
+from openai import AsyncOpenAI
 from tqdm import tqdm
 
 try:
-    from neurondb.filters import Neuron, NeuronPolarity, SQLANeuron, SQLANeuronDescription
+    from neurondb.filters import (
+        Neuron,
+        NeuronPolarity,
+        SQLANeuron,
+        SQLANeuronDescription,
+    )
     from neurondb.postgres import DBManager, sqla_and_
 except ImportError:
     DBManager = None  # type: ignore[assignment,misc]
@@ -38,7 +44,7 @@ _half_neurons_glob = os.path.join(_artifacts_dir, "half_neurons", "**", "*.json"
 for file in glob.glob(_half_neurons_glob):
     layer = file.split("/")[-2]
     neuron = file.split("/")[-1].split(".")[0]
-    with open(file, "r") as f:
+    with open(file) as f:
         data = json.load(f)
     neg = data["explanations"]["negative"]
     pos = data["explanations"]["positive"]
@@ -87,9 +93,11 @@ def get_descriptions(
     last_layer: int,
     get_desc: bool = True,
     verbose: bool = True,
-    neuron_label_cache: dict = {},
+    neuron_label_cache: dict | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Fetch neuron descriptions from the database and add them to the nodes DataFrame."""
+    if neuron_label_cache is None:
+        neuron_label_cache = {}
     if not get_desc or _get_db() is None:
         nodes["description"] = nodes.apply(lambda x: "", axis=1)
         return nodes, neuron_label_cache
@@ -111,7 +119,7 @@ def get_descriptions(
                 [neuron]
             )
             continue
-        elif isinstance(layer, str):
+        if isinstance(layer, str):
             continue
         if polarity == "+":
             key = (int(layer), int(neuron), NeuronPolarity.POS)
@@ -148,7 +156,7 @@ def get_descriptions(
     for i in iterator:
         neuron_batch = neuron_objects[i : i + _neuron_batch_size]
         descriptions = get_descriptions_for_neurons(neuron_batch, _get_db())
-        for neuron, description in zip(neuron_batch, descriptions):
+        for neuron, description in zip(neuron_batch, descriptions, strict=True):
             neuron_label_cache[
                 (
                     neuron.layer,
@@ -173,7 +181,7 @@ def get_descriptions(
             polarity = NeuronPolarity.POS
             description = neuron_label_cache.get((layer, neuron, polarity), "?")
             return "⁺" + description
-        elif polarity == "-":
+        if polarity == "-":
             polarity = NeuronPolarity.NEG
             description = neuron_label_cache.get((layer, neuron, polarity), "?")
             return "⁻" + description
@@ -209,5 +217,4 @@ async def get_openai_embeddings_async(
     response = await client.embeddings.create(model=model, input=texts)
 
     # Extract embeddings
-    embeddings = [np.array(e.embedding, dtype=np.float32) for e in response.data]
-    return embeddings
+    return [np.array(e.embedding, dtype=np.float32) for e in response.data]

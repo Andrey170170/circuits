@@ -11,13 +11,18 @@ import argparse
 import hashlib
 import json
 import os
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, cast
 
 from circuits.tracing.trace import get_chat_template, tokenize_teacher_forced_response
+from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerBase
+
 from scripts.bonafide.corpus_selection import (
     SCHEMA_VERSION as CANDIDATE_SCHEMA_VERSION,
+)
+from scripts.bonafide.corpus_selection import (
     _tokenizer_file_manifest,
 )
 from scripts.bonafide.manifest import (
@@ -25,8 +30,6 @@ from scripts.bonafide.manifest import (
     resolve_pretrained_source,
     select_stratified_random_positions,
 )
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
-
 
 DEFAULT_SELECTION_PATH = Path(
     "scripts/bonafide/selections/qwen3_4b_instruct_candidates.json"
@@ -78,7 +81,9 @@ def _require_exact_selection_source(
     if len(expected_selection_sha256) != 64 or any(
         character not in "0123456789abcdef" for character in expected_selection_sha256
     ):
-        raise ValueError("expected selection SHA-256 must be 64 lowercase hex characters")
+        raise ValueError(
+            "expected selection SHA-256 must be 64 lowercase hex characters"
+        )
     actual = _file_sha256(selection_path)
     if actual != expected_selection_sha256:
         raise ValueError(
@@ -102,12 +107,18 @@ def _validate_tokenizer_provenance(
     if provenance.get("model_id") != model_id:
         raise ValueError("selection tokenizer model_id does not match requested model")
     if provenance.get("revision") != model_revision:
-        raise ValueError("selection tokenizer revision does not match requested revision")
+        raise ValueError(
+            "selection tokenizer revision does not match requested revision"
+        )
     if provenance.get("class") != type(tokenizer).__name__:
         raise ValueError("runtime tokenizer class does not match candidate selection")
-    chat_template_hash = _sha256_bytes(get_chat_template(tokenizer).encode("utf-8"))
+    chat_template_hash = _sha256_bytes(
+        get_chat_template(cast(PreTrainedTokenizer, tokenizer)).encode("utf-8")
+    )
     if provenance.get("chat_template_sha256") != chat_template_hash:
-        raise ValueError("runtime tokenizer chat template does not match candidate selection")
+        raise ValueError(
+            "runtime tokenizer chat template does not match candidate selection"
+        )
     if provenance.get("file_manifest") != _tokenizer_file_manifest(tokenizer_path):
         raise ValueError("runtime tokenizer files do not match candidate selection")
 
@@ -129,7 +140,9 @@ def _validate_candidate_contract(selection: Mapping[str, Any]) -> None:
         "trace_work_items_created": False,
     }
     if any(contract.get(field) is not value for field, value in expected.items()):
-        raise ValueError("candidate contract no longer describes an unfrozen prompt inventory")
+        raise ValueError(
+            "candidate contract no longer describes an unfrozen prompt inventory"
+        )
 
 
 def _selected_examples(
@@ -161,7 +174,9 @@ def _selected_examples(
 
     by_id: dict[str, Mapping[str, Any]] = {}
     for example in examples:
-        if not isinstance(example, Mapping) or not isinstance(example.get("example_id"), str):
+        if not isinstance(example, Mapping) or not isinstance(
+            example.get("example_id"), str
+        ):
             raise ValueError("candidate examples require string example_id values")
         example_id = str(example["example_id"])
         if example_id in by_id:
@@ -192,7 +207,9 @@ def _selected_examples(
             counts = example.get("token_counts")
             membership = example.get("selection_membership")
             if not isinstance(counts, Mapping) or not isinstance(membership, Mapping):
-                raise ValueError(f"selected example lacks selection metadata: {example_id}")
+                raise ValueError(
+                    f"selected example lacks selection metadata: {example_id}"
+                )
             if membership.get(inventory) is not True:
                 raise ValueError(
                     f"selected example membership disagrees with {inventory}: {example_id}"
@@ -200,11 +217,16 @@ def _selected_examples(
             response_count = int(counts["response"])
             total_count = int(counts["maximum_teacher_forced_input"])
             if response_count > response_cap or total_count > total_cap:
-                raise ValueError(f"selected example exceeds {inventory} caps: {example_id}")
-            if inventory == "broad_eligible_inventory" and membership.get(
-                "dense_inventory"
-            ) is not False:
-                raise ValueError(f"broad example is not disjoint from dense: {example_id}")
+                raise ValueError(
+                    f"selected example exceeds {inventory} caps: {example_id}"
+                )
+            if (
+                inventory == "broad_eligible_inventory"
+                and membership.get("dense_inventory") is not False
+            ):
+                raise ValueError(
+                    f"broad example is not disjoint from dense: {example_id}"
+                )
             selected.append((inventory, example))
     return selected
 
@@ -215,8 +237,12 @@ def _runtime_response_ids(
     prompt = example.get("prompt")
     response = example.get("response")
     if not isinstance(prompt, str) or not isinstance(response, str):
-        raise ValueError("selected examples require complete prompt and response strings")
-    tokenized = tokenize_teacher_forced_response(tokenizer, prompt, response)
+        raise ValueError(
+            "selected examples require complete prompt and response strings"
+        )
+    tokenized = tokenize_teacher_forced_response(
+        cast(PreTrainedTokenizer, tokenizer), prompt, response
+    )
     expected = example.get("token_counts")
     if not isinstance(expected, Mapping):
         raise ValueError("selected example requires token_counts")
@@ -257,8 +283,7 @@ def _runner_example(example: Mapping[str, Any]) -> dict[str, Any]:
         "selection_membership",
         "token_counts",
     )
-    value = {field: deepcopy(example[field]) for field in fields}
-    return value
+    return {field: deepcopy(example[field]) for field in fields}
 
 
 def build_screening_manifest(
@@ -279,7 +304,9 @@ def build_screening_manifest(
         selection_path, expected_selection_sha256
     )
     if selection != load_selection(selection_path):
-        raise ValueError("in-memory selection does not match the hash-bound selection file")
+        raise ValueError(
+            "in-memory selection does not match the hash-bound selection file"
+        )
     _validate_candidate_contract(selection)
     _validate_tokenizer_provenance(
         selection=selection,
@@ -420,8 +447,7 @@ def build_screening_manifest(
                     "seed": seed,
                     "sampler": "sha256-rejection-v1",
                     "targets_per_example": DEFAULT_TARGETS_PER_EXAMPLE,
-                    "example_count": EXPECTED_DENSE_EXAMPLES
-                    + EXPECTED_BROAD_EXAMPLES,
+                    "example_count": EXPECTED_DENSE_EXAMPLES + EXPECTED_BROAD_EXAMPLES,
                     "final_trace_membership_frozen": False,
                 },
                 "items": items,
@@ -451,11 +477,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--selection", type=Path, default=DEFAULT_SELECTION_PATH)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
-    parser.add_argument("--revision", required=True, help="Exact model/tokenizer revision")
-    parser.add_argument("--tokenizer-path", type=Path, required=True)
     parser.add_argument(
-        "--expected-selection-sha256", default=DEFAULT_SELECTION_SHA256
+        "--revision", required=True, help="Exact model/tokenizer revision"
     )
+    parser.add_argument("--tokenizer-path", type=Path, required=True)
+    parser.add_argument("--expected-selection-sha256", default=DEFAULT_SELECTION_SHA256)
     parser.add_argument("--seed", default=DEFAULT_SCREENING_SEED)
     parser.add_argument(
         "--allow-download",
@@ -500,9 +526,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "wave_id": wave["wave_id"],
                 "example_count": wave["screening_design"]["example_count"],
                 "item_count": len(wave["items"]),
-                "targets_per_example": wave["screening_design"][
-                    "targets_per_example"
-                ],
+                "targets_per_example": wave["screening_design"]["targets_per_example"],
                 "final_trace_membership_frozen": False,
             },
             sort_keys=True,

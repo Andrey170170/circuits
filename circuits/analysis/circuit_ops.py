@@ -2,11 +2,14 @@ import asyncio
 import json
 import logging
 import random
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from sklearn.cluster import AgglomerativeClustering
+
 from circuits.analysis import label
 from circuits.analysis.cluster import (
     EDGE_COLUMNS,
@@ -18,11 +21,16 @@ from circuits.analysis.cluster import (
     df_sum_over_tokens,
     prepare_circuit_data,
 )
-from circuits.analysis.multiview_cluster import compute_per_ci_similarities, spectral_cluster
-from circuits.analysis.steer import export_cluster_data_to_json, get_cluster_steering_effects
+from circuits.analysis.multiview_cluster import (
+    compute_per_ci_similarities,
+    spectral_cluster,
+)
+from circuits.analysis.steer import (
+    export_cluster_data_to_json,
+    get_cluster_steering_effects,
+)
 from circuits.tracing.trace import CircuitData
 from circuits.utils.descriptions import get_descriptions
-from sklearn.cluster import AgglomerativeClustering
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +196,7 @@ class Circuit:
             if verbose:
                 n_assigned = len(
                     {v for v in self._cluster_map.values() if v != UNCLUSTERED_CLUSTER_ID}
-                    - {str(nid) for nid in self._cluster_map.keys()}
+                    - {str(nid) for nid in self._cluster_map}
                 )
                 logger.info("cluster: assigned manual clusters, %d unique", n_assigned)
             if get_desc:
@@ -219,7 +227,9 @@ class Circuit:
             sample = df_pivot[lbl].dropna().iloc[0]
             length = sample.shape[-1] if isinstance(sample, np.ndarray) else 1
             df_pivot[lbl] = df_pivot[lbl].apply(
-                lambda x: np.zeros(length, dtype=np.float32) if not isinstance(x, np.ndarray) else x
+                lambda x, length=length: (
+                    np.zeros(length, dtype=np.float32) if not isinstance(x, np.ndarray) else x
+                )
             )
 
         if do_average_over_examples:
@@ -328,7 +338,9 @@ class Circuit:
         max_layer = max(nid.layer for nid in neuron_ids)
         keep_mask = np.array([nid.layer not in (-1, max_layer) for nid in neuron_ids])
         sim_filtered = sim_matrix[np.ix_(keep_mask, keep_mask)]
-        neuron_ids_filtered = [nid for nid, k in zip(neuron_ids, keep_mask) if k]
+        neuron_ids_filtered = [
+            nid for nid, k in zip(neuron_ids, keep_mask, strict=True) if k
+        ]
 
         if verbose:
             logger.info(
@@ -348,7 +360,7 @@ class Circuit:
 
         # Build summed cluster map (NeuronId with token=-1 -> "C{n}")
         summed_cluster_map: dict[NeuronId, str] = {}
-        for nid, cl in zip(neuron_ids_filtered, cluster_labels):
+        for nid, cl in zip(neuron_ids_filtered, cluster_labels, strict=True):
             summed_cluster_map[nid] = f"C{cl}"
 
         # Expand to full cluster map
@@ -356,7 +368,7 @@ class Circuit:
 
         # Store reverse mapping for downstream
         unique_cluster_names = sorted(set(summed_cluster_map.values()))
-        self._cluster_id_to_name = {i: name for i, name in enumerate(unique_cluster_names)}
+        self._cluster_id_to_name = dict(enumerate(unique_cluster_names))
 
         # Store multiview results for downstream scripts (e.g. heatmap visualization)
         self._mv_sim_matrix = sim_filtered
@@ -816,14 +828,13 @@ class Circuit:
                 cluster_to_neurons,
                 neuron_data,
             )
-        else:
-            return (
-                attr_results,
-                contrib_results,
-                attr_exemplars,
-                contrib_exemplars,
-                cluster_to_neurons,
-            )
+        return (
+            attr_results,
+            contrib_results,
+            attr_exemplars,
+            contrib_exemplars,
+            cluster_to_neurons,
+        )
 
     def _store_cluster_descriptions(
         self,
@@ -899,9 +910,7 @@ class Circuit:
         num_layers = self.num_layers or int(self.df_node["layer"].max())
 
         # Build label -> ci_idx mapping
-        label_to_idx: dict[str, int] = {}
-        for i, lbl in enumerate(self.labels):
-            label_to_idx[lbl] = i
+        label_to_idx = {lbl: i for i, lbl in enumerate(self.labels)}
 
         # Accumulate attribution per (cluster, ci_idx)
         cluster_ci_attr: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
@@ -1082,8 +1091,8 @@ class Circuit:
                 result[cl].append((desc, score))
 
         # Sort each cluster by |attribution| descending
-        for cl in result:
-            result[cl].sort(key=lambda x: abs(x[1]), reverse=True)
+        for entries in result.values():
+            entries.sort(key=lambda x: abs(x[1]), reverse=True)
 
         return dict(result)
 
@@ -1301,10 +1310,13 @@ class Circuit:
                 and self.circuit_data.target_logit_probs is not None
                 and ci_idx < len(self.circuit_data.target_logit_probs)
             ):
-                for tok_id, prob in zip(
-                    self.target_logits[ci_idx], self.circuit_data.target_logit_probs[ci_idx]
-                ):
-                    logit_probs[tok_id] = prob
+                logit_probs = dict(
+                    zip(
+                        self.target_logits[ci_idx],
+                        self.circuit_data.target_logit_probs[ci_idx],
+                        strict=True,
+                    )
+                )
             # Strip left-padding using attention mask so prompt_tokens aligns with attr_map
             pad_offset = 0
             if self.attention_masks is not None and ci_idx < len(self.attention_masks):
@@ -1480,7 +1492,7 @@ class Circuit:
                         cl_label = f"Cluster {cl}"
                     else:
                         cl_label = cl
-                    supernodes.append([cl_label] + nids)
+                    supernodes.append([cl_label, *nids])
                     pinned_ids.extend(nids)
 
                 # Pin embedding/logit nodes that have edges to/from pinned nodes
@@ -1491,10 +1503,14 @@ class Circuit:
                     if src in pinned_set or tgt in pinned_set:
                         link_node_ids.add(src)
                         link_node_ids.add(tgt)
-                for node in nodes:
-                    if node.feature_type in ("embedding", "logit"):
-                        if node.node_id in link_node_ids:
-                            pinned_ids.append(node.node_id)
+                pinned_ids.extend(
+                    node.node_id
+                    for node in nodes
+                    if (
+                        node.feature_type in ("embedding", "logit")
+                        and node.node_id in link_node_ids
+                    )
+                )
 
             q_params = QParams(
                 pinnedIds=pinned_ids,

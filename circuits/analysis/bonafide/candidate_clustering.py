@@ -382,7 +382,7 @@ def _validate_targets_and_weights(
     if any(sorted(phases) != list(range(7)) for phases in phases_by_response.values()):
         raise ValueError("response does not own exactly one target per phase bin")
     if Counter(int(row["phase_bin"]) for row in target_rows) != Counter(
-        {phase: 35 for phase in range(7)}
+        dict.fromkeys(range(7), 35)
     ):
         raise ValueError("candidate-cluster phase-bin coverage drift")
     if Counter(int(row["candidate_count"]) for row in target_rows) != Counter(
@@ -1026,10 +1026,11 @@ def fit_resolution(
     mean_ari: float | None = None
     minimum_ari: float | None = None
     if valid:
-        labels_by_seed = {
-            seed: seed_fit.result.labels  # type: ignore[union-attr]
-            for seed, seed_fit in seed_fits.items()
-        }
+        labels_by_seed: dict[int, NDArray[np.int64]] = {}
+        for seed, seed_fit in seed_fits.items():
+            result = seed_fit.result
+            assert result is not None
+            labels_by_seed[seed] = result.labels
         medoid, pairwise = choose_medoid_seed(labels_by_seed)
         ari_values = list(pairwise.values())
         mean_ari = mean(ari_values)

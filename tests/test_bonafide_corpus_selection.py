@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from scripts.bonafide.corpus_selection import (
     DEFAULT_RECOMMENDED_DENSE_IDS,
     SCHEMA_VERSION,

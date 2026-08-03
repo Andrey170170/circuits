@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal, cast
 
 from circuits.analysis.bonafide.canonical import (
     canonical_sha256,
@@ -314,6 +315,7 @@ def summary_messages(
             raise ValueError(
                 "width_one_v2 summaries require generation and selection_scoring witnesses"
             )
+        assert highlighted_witnesses is not None
         system = (
             "Judge scored cluster descriptions against exact frozen witnesses. This is "
             "single-target, width-one attribution: contribution evidence is shallow and there "
@@ -373,7 +375,10 @@ def render_persisted_partition_witnesses(
             f"persisted {partition} profile identities differ from evidence"
         )
     rendered: list[str] = []
-    for index, profile in enumerate(profiles):
+    for index, raw_profile in enumerate(profiles):
+        if not isinstance(raw_profile, dict):
+            raise ValueError(f"persisted {partition} profile is not an object")
+        profile = cast(dict[str, Any], raw_profile)
         trace_unit_id = str(profile["trace_unit_id"])
         if profile.get("family_partition") != partition:
             raise ValueError(f"profile {trace_unit_id} is not in {partition}")

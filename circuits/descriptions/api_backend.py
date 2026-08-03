@@ -606,8 +606,7 @@ class AnthropicContribScorer:
 
         true_scores: list[float] = []
         for data in minibatch_data:
-            for c in data["continuations"]:
-                true_scores.append(float(c["normalized_score"]))
+            true_scores.extend(float(c["normalized_score"]) for c in data["continuations"])
 
         scored_results: list[ScoredExplanation] = []
         for expl_idx, explanation in enumerate(explanations):

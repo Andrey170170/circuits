@@ -95,7 +95,7 @@ def main() -> None:
         top_toks = row["top_tokens"][: args.top_k]
         top_probs = row["top_tokens_probs"][: args.top_k]
         print(f"\n{cl_name} (C{cl}) — {label}:")
-        for tok, prob in zip(top_toks, top_probs):
+        for tok, prob in zip(top_toks, top_probs, strict=False):
             print(f"  {tok:>15}  {prob:.2%}")
 
 

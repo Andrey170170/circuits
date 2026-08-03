@@ -6,10 +6,16 @@ Supports multiple model architectures (Llama, Qwen3) with a shared interface.
 """
 
 import torch
-from circuits.tracing.grad.llama import LlamaAttention, LlamaMLP, LlamaRMSNorm, repeat_kv
-from circuits.tracing.grad.qwen3 import Qwen3Attention, Qwen3MLP, Qwen3RMSNorm
 from torch import nn
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+from circuits.tracing.grad.llama import (
+    LlamaAttention,
+    LlamaMLP,
+    LlamaRMSNorm,
+    repeat_kv,
+)
+from circuits.tracing.grad.qwen3 import Qwen3Attention, Qwen3MLP, Qwen3RMSNorm
 
 # Map from HF module types to their "kind" for dispatching
 _NORM_TYPES: tuple[type[nn.Module], ...] = (LlamaRMSNorm, Qwen3RMSNorm)
@@ -103,10 +109,14 @@ def noqk_attention_forward(
         attn_scores = attn_scores + causal_mask
 
     attn_weights = (
-        nn.functional.softmax(attn_scores, dim=-1, dtype=torch.float32).to(query.dtype).detach()
+        nn.functional.softmax(attn_scores, dim=-1, dtype=torch.float32)
+        .to(query.dtype)
+        .detach()
     )
 
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    attn_weights = nn.functional.dropout(
+        attn_weights, p=dropout, training=module.training
+    )
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
@@ -414,9 +424,7 @@ def layerwise_stop_nonlinear_grad(
 ):
     scope = _layerwise_scope(model, start_layer, end_layer)
     _begin_stop_gradient_state(model, operation="layerwise", scope=scope)
-    boundary_layers = {
-        layer for layer in (start_layer, end_layer) if layer in scope
-    }
+    boundary_layers = {layer for layer in (start_layer, end_layer) if layer in scope}
     interior_layers = [layer for layer in scope if layer not in boundary_layers]
     try:
         model.model.norm = StraightThroughRMSNorm(model.model.norm)
@@ -451,9 +459,7 @@ def layerwise_stop_nonlinear_grad(
             model.model.layers[layer].self_attn = NoQKGradAttention(
                 model.model.layers[layer].self_attn
             )
-            model.model.layers[layer].mlp = StopGradMLP(
-                model.model.layers[layer].mlp
-            )
+            model.model.layers[layer].mlp = StopGradMLP(model.model.layers[layer].mlp)
     except BaseException:
         _restore_stop_gradient_state(
             model, expected_operation="layerwise", expected_scope=scope

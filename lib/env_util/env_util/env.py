@@ -1,8 +1,7 @@
+import logging
 import os
 from pathlib import Path
 from typing import Literal
-
-import logging
 
 from dotenv import load_dotenv
 from pydantic import BaseModel

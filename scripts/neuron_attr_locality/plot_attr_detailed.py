@@ -43,7 +43,7 @@ def plot_neuron(
     if n == 1:
         axes = [axes]
 
-    for i, (ax, r) in enumerate(zip(axes, entries)):
+    for _i, (ax, r) in enumerate(zip(axes, entries, strict=False)):
         av = np.array(r["attr_vec"])
         abs_total = np.abs(av).sum()
         av_norm = av / abs_total if abs_total > 0 else av

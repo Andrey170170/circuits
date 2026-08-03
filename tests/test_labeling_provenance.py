@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from circuits.labeling.config import LabelingRecipe
 from circuits.labeling.provenance import (
     validate_local_score_artifact,

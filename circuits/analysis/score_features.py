@@ -7,14 +7,16 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Mapping, Sequence, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, cast
 from zipfile import Path
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
+
 from circuits.analysis.cluster import NeuronId, prepare_circuit_data  # type: ignore
 from circuits.utils.descriptions import get_descriptions  # type: ignore
-from tqdm import tqdm
 
 if TYPE_CHECKING:
     from circuits.analysis.circuit_ops import Circuit
@@ -28,7 +30,7 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 
-def get_df_node_summed(circuit: "Circuit", verbose: bool = False) -> pd.DataFrame:
+def get_df_node_summed(circuit: Circuit, verbose: bool = False) -> pd.DataFrame:
     """
     Aggregate node-level attributions by input variable and label, caching the result for reuse.
     """
@@ -107,7 +109,7 @@ def compute_auc(
 
     cumulative_neg = 0
     rank_sum = 0.0
-    for pos_count, neg_count in zip(pos_counts, neg_counts):
+    for pos_count, neg_count in zip(pos_counts, neg_counts, strict=True):
         if pos_count:
             rank_sum += pos_count * (cumulative_neg + 0.5 * neg_count)
         cumulative_neg += neg_count
@@ -275,8 +277,7 @@ def score_features_multiclass(
             ]
         )
 
-    combined = pd.concat(per_class_scores, ignore_index=True)
-    return combined
+    return pd.concat(per_class_scores, ignore_index=True)
 
 
 async def cluster_with_hypotheses(
@@ -544,8 +545,8 @@ def export_hypothesis_score_jsons(
 
 __all__ = [
     "cluster_with_hypotheses",
+    "export_hypothesis_score_jsons",
     "get_df_node_summed",
     "score_features",
     "score_features_multiclass",
-    "export_hypothesis_score_jsons",
 ]

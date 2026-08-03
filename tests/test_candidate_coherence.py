@@ -4,7 +4,6 @@ import hashlib
 
 import numpy as np
 import pytest
-
 from circuits.analysis.bonafide.candidate_coherence import (
     candidate_coherence_bootstrap,
     cluster_support_readiness,
@@ -169,7 +168,7 @@ def test_candidate_coherence_reports_missing_family_instead_of_pooling_coverage(
     report = evaluate_candidate_coherence(
         records,
         assignments,
-        {state: centroids["C"] for state in assignments},  # type: ignore[arg-type]
+        dict.fromkeys(assignments, centroids["C"]),  # type: ignore[arg-type]
         partition="audit",
         expected_family_ids={f"f{index}" for index in range(1, 9)},
     )
@@ -278,7 +277,7 @@ def test_missing_aware_cosine_restricts_to_shared_coordinates() -> None:
     assert missing_aware_cosine([1.0], [False], [1.0], [True]) is None
 
 
-@pytest.mark.parametrize("invalid", ([1, 0], [True, 1], [np.nan, 0.0]))
+@pytest.mark.parametrize("invalid", [[1, 0], [True, 1], [np.nan, 0.0]])
 def test_missing_aware_cosine_rejects_non_boolean_masks(invalid: list[object]) -> None:
     with pytest.raises(TypeError, match="actual boolean"):
         missing_aware_cosine([1.0, 2.0], invalid, [1.0, 2.0], [True, True])
@@ -549,7 +548,7 @@ def test_partition_and_bound_family_identity_firewalls() -> None:
             expected_family_ids=wrong_ids,
         )
 
-    effects = {family: 1.0 for family in family_ids}
+    effects = dict.fromkeys(family_ids, 1.0)
     with pytest.raises(ValueError, match="do not match"):
         candidate_coherence_bootstrap(
             effects,
@@ -576,7 +575,7 @@ def test_candidate_coherence_rejects_assignment_centroid_state_mismatch() -> Non
         evaluate_candidate_coherence(
             records,
             assignments,
-            {state: centroids["C"] for state in assignments},  # type: ignore[arg-type]
+            dict.fromkeys(assignments, centroids["C"]),  # type: ignore[arg-type]
             partition="audit",
             expected_family_ids={f"f{index}" for index in range(8)},
         )

@@ -4,10 +4,11 @@ from contextlib import nullcontext
 from functools import partial
 from typing import cast
 
-from env_util import ENV
 from together import AsyncTogether
 from together.types import ChatCompletionResponse
 from tqdm.asyncio import tqdm_asyncio
+
+from env_util import ENV
 from util.types import ChatMessage
 
 

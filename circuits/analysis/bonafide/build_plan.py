@@ -7,8 +7,9 @@ import importlib.metadata
 import platform
 import subprocess
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence, cast
+from typing import Any, Literal, cast
 
 from circuits.analysis.bonafide.canonical import (
     canonical_sha256,

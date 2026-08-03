@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from circuits.labeling.config import LabelingRecipe, load_recipe
 from circuits.labeling.pricing import estimate_cost, load_price_snapshot
 from circuits.labeling.schema import Usage

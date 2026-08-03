@@ -12,6 +12,7 @@ Run from the repository root as a module, for example
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -24,12 +25,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from circuits.tracing.artifact import load_compact_trace
 from circuits.tracing.candidate_union import load_candidate_union_artifact
+from numpy.typing import NDArray
+
 from scripts.bonafide.candidate_union_runner import validate_candidate_union_plan
 from scripts.bonafide.runner import collect_code_revision, collect_runtime_environment
-
 
 REPORT_SCHEMA_VERSION = "bonafide-candidate-union-c2-analysis/v1"
 SELECTION_SCHEMA_VERSION = "bonafide-topk-c2-cohort-selection/v1"
@@ -55,8 +56,8 @@ class TargetProfile:
     response_id: str
     phase_bin: int
     width1: Mapping[Basis, float]
-    candidate: Mapping[Basis, np.ndarray]
-    raw_candidate: Mapping[Basis, np.ndarray]
+    candidate: Mapping[Basis, NDArray[np.float64]]
+    raw_candidate: Mapping[Basis, NDArray[np.float64]]
     effective_rank: float
     bidirectional_raw_fraction: float
     boundary_width1_occurrences: int = 0
@@ -137,7 +138,7 @@ def rank_aligned_contrasts(
     full_distribution_ranks: Sequence[int],
     observed_index: int,
     contribution_values: Sequence[float],
-) -> np.ndarray:
+) -> NDArray[np.float64]:
     """Return rank-1..5 contribution-minus-observed contrasts."""
 
     if len(full_distribution_ranks) != len(contribution_values):
@@ -159,7 +160,7 @@ def rank_aligned_contrasts(
     return result
 
 
-def effective_rank(matrix: np.ndarray) -> float:
+def effective_rank(matrix: NDArray[Any]) -> float:
     """Entropy effective rank using normalized singular values."""
 
     value = np.asarray(matrix, dtype=np.float64)
@@ -176,8 +177,8 @@ def effective_rank(matrix: np.ndarray) -> float:
 
 
 def directional_similarity(
-    left: Mapping[Basis, float | np.ndarray],
-    right: Mapping[Basis, float | np.ndarray],
+    left: Mapping[Basis, float | NDArray[Any]],
+    right: Mapping[Basis, float | NDArray[Any]],
     *,
     min_common_bases: int = MIN_COMMON_BASES,
 ) -> tuple[float, int] | None:
@@ -247,7 +248,11 @@ def _extract_candidate_profile(
     *,
     model_id: str,
     model_revision: str,
-) -> tuple[dict[Basis, np.ndarray], dict[Basis, np.ndarray], int]:
+) -> tuple[
+    dict[Basis, NDArray[np.float64]],
+    dict[Basis, NDArray[np.float64]],
+    int,
+]:
     trace = artifact.trace
     candidates = tuple(trace.candidate_selection.candidates)
     observed_indices = [
@@ -260,8 +265,8 @@ def _extract_candidate_profile(
     ranks = [int(candidate.full_distribution_rank) for candidate in candidates]
     frame = trace.df_node
     final_layer = int(frame["layer"].max())
-    contrasts: dict[Basis, np.ndarray] = {}
-    raw: dict[Basis, np.ndarray] = {}
+    contrasts: dict[Basis, NDArray[np.float64]] = {}
+    raw: dict[Basis, NDArray[np.float64]] = {}
     boundary = 0
     for _, row in frame.iterrows():
         layer = int(row["layer"])
@@ -292,7 +297,7 @@ def _extract_candidate_profile(
             boundary += 1
             continue
         basis = (model_id, model_revision, layer, int(row["neuron"]), polarity)
-        contrast = rank_aligned_contrasts(ranks, 0, contributions)
+        contrast = rank_aligned_contrasts(ranks, 0, contributions.tolist())
         if basis in contrasts:
             contrasts[basis] = contrasts[basis] + contrast
             raw[basis] = raw[basis] + contributions
@@ -305,8 +310,8 @@ def _extract_candidate_profile(
 
 
 def _target_nondegeneracy(
-    candidate: Mapping[Basis, np.ndarray],
-    raw_candidate: Mapping[Basis, np.ndarray],
+    candidate: Mapping[Basis, NDArray[np.float64]],
+    raw_candidate: Mapping[Basis, NDArray[np.float64]],
 ) -> tuple[float, float]:
     matrix = np.stack([candidate[key] for key in sorted(candidate)])
     rank = effective_rank(matrix)
@@ -434,11 +439,10 @@ def _hierarchical_mean(records: Sequence[RetrievalRecord], field: str) -> float:
         )
     if not by_family:
         raise ValueError("hierarchical estimate has no scored records")
-    family_values = []
-    for responses in by_family.values():
-        family_values.append(
-            float(np.mean([np.mean(values) for values in responses.values()]))
-        )
+    family_values = [
+        (float(np.mean([np.mean(values) for values in responses.values()])))
+        for responses in by_family.values()
+    ]
     return float(np.mean(family_values))
 
 
@@ -1149,10 +1153,8 @@ def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
             os.fsync(handle.fileno())
         os.replace(temporary_name, path)
     except BaseException:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
         raise
 
 

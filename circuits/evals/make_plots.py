@@ -3,7 +3,7 @@ import plotnine as p9
 
 
 def auc(results, save_path):
-    thresholds = [k for k in results.keys() if isinstance(k, float)]
+    thresholds = [k for k in results if isinstance(k, float)]
 
     data = []
     for threshold in thresholds:

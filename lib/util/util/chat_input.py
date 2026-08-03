@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Generator
 from html import escape
-from typing import TYPE_CHECKING, Any, Generator, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import BaseModel, field_validator
+
 from util.types import ChatMessage, GenerateOutput
 
 # Prevents circular import (which I think is unavoidable / annoying to resolve)
@@ -47,24 +49,24 @@ class ModelInput(BaseModel):
     use_chat_format: bool
 
     @abstractmethod
-    def tokenize(self, subject: "Subject", *_: Any, **__: Any) -> list[int]:
+    def tokenize(self, subject: Subject, *_: Any, **__: Any) -> list[int]:
         pass
 
-    def token_strs(self, subject: "Subject") -> list[str]:
+    def token_strs(self, subject: Subject) -> list[str]:
         return [subject.decode(x) for x in self.tokenize(subject)]
 
-    def is_empty(self, subject: "Subject") -> bool:
+    def is_empty(self, subject: Subject) -> bool:
         return len(self.tokenize(subject)) == 0
 
     ###########
     # Display #
     ###########
 
-    def to_str(self, subject: "Subject") -> str:
+    def to_str(self, subject: Subject) -> str:
         return subject.decode(self.tokenize(subject))  # type: ignore
 
     def pretty_print_tokens(
-        self, subject: "Subject", token_highlights: list[tuple[int, float, str]] | None = None
+        self, subject: Subject, token_highlights: list[tuple[int, float, str]] | None = None
     ):
         toks = self.tokenize(subject)
 
@@ -142,10 +144,9 @@ class ModelInput(BaseModel):
             return None
 
         # Otherwise, return original plain text formatting
-        else:
-            return "\n".join(
-                [f"{i:>3}: {repr(subject.decode(x)).strip('\'')}" for i, x in enumerate(toks)]
-            )
+        return "\n".join(
+            [f"{i:>3}: {repr(subject.decode(x)).strip('\'')}" for i, x in enumerate(toks)]
+        )
 
 
 class IdsInput(ModelInput):
@@ -231,9 +232,12 @@ class ChatInput(ModelInput):
             assert (
                 len(self.conversation) == 1
             ), f"If `subject.is_chat_model` is False, we tokenize only the first conversation message. Got too many conversation messages: {self.conversation}"
-            assert (
-                self.system_prompt is None and self.seed_response is None
-            ), "If `subject.is_chat_model` is False, system_prompt and seed_response must be None."
+            assert self.system_prompt is None, (
+                "If `subject.is_chat_model` is False, system_prompt must be None."
+            )
+            assert self.seed_response is None, (
+                "If `subject.is_chat_model` is False, seed_response must be None."
+            )
 
             toks: list[int] = subject.tokenizer(self.conversation[0]["content"])["input_ids"]  # type: ignore
 
@@ -331,7 +335,7 @@ class ChatInput(ModelInput):
 
     def slice(
         self, system_prompt_slice: slice | None = None, conversation_slice: slice | None = None
-    ) -> "ChatInput":
+    ) -> ChatInput:
         """
         Returns a new ChatInput instance with system_prompt and conversation sliced according to the given slices.
 
@@ -374,7 +378,7 @@ class ChatConversation(ChatInput):
 
     def send_message(
         self,
-        subject: "Subject",
+        subject: Subject,
         message: str | None,
         seed_response: str | None = None,
         neuron_interventions: dict[tuple[int, int, int], float] | None = None,
@@ -386,7 +390,7 @@ class ChatConversation(ChatInput):
         if subject.is_chat_model:
             # If message is None, we'll be regenerating based on the last user message
             if message is None:
-                assert seed_response is None, f"Cannot provide seed_response when message is None"
+                assert seed_response is None, "Cannot provide seed_response when message is None"
 
                 # Remove messages until the last one is a user message
                 while len(self.conversation) > 0 and self.conversation[-1]["role"] != "user":
@@ -397,8 +401,8 @@ class ChatConversation(ChatInput):
         else:
             assert (
                 seed_response is None
-            ), f"Cannot provide seed_response when subject is not a chat model"
-            assert message is not None, f"Must provide message when subject is not a chat model"
+            ), "Cannot provide seed_response when subject is not a chat model"
+            assert message is not None, "Must provide message when subject is not a chat model"
 
             # Add a message if the conversation is empty
             if len(self.conversation) == 0:
@@ -454,13 +458,12 @@ class ChatConversation(ChatInput):
                     yield response
 
             return _generator()
-        else:
-            assert isinstance(
-                response, GenerateOutput
-            ), "Non-streamed generation must return a GenerateOutput"
+        assert isinstance(
+            response, GenerateOutput
+        ), "Non-streamed generation must return a GenerateOutput"
 
-            _postprocess(response)
-            return response
+        _postprocess(response)
+        return response
 
 
 def make_chat_conversation(system_prompt: str | None = None):

@@ -4,7 +4,6 @@ import hashlib
 from collections import Counter
 
 import pytest
-
 from circuits.analysis.bonafide.candidate_nulls import (
     CandidateDirectionTarget,
     direction_null_seed,

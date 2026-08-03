@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -105,7 +105,7 @@ def submit_native_batch(run_root: Path, stage: str) -> dict[str, Any]:
             "run_id": manifest["run_id"],
             "stage": stage,
             "prepared_manifest_sha256": expected,
-            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "submitted_at": datetime.now(UTC).isoformat(),
         }
     )
     submission["manifest_sha256"] = canonical_sha256(submission)
@@ -130,7 +130,7 @@ def native_batch_status(run_root: Path, stage: str) -> dict[str, Any]:
         {
             "run_id": manifest["run_id"],
             "stage": stage,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
             "submission_manifest_sha256": expected,
         }
     )
@@ -153,9 +153,7 @@ def collect_native_batch(run_root: Path, stage: str) -> dict[str, int]:
         raise ValueError("provider-batch submission manifest hash mismatch")
     role = _role(recipe, stage)
     key_env = role.api_key_env or (
-        "OPENAI_API_KEY"
-        if submission["provider"] == "openai"
-        else "ANTHROPIC_API_KEY"
+        "OPENAI_API_KEY" if submission["provider"] == "openai" else "ANTHROPIC_API_KEY"
     )
     if submission["provider"] == "openai":
         results, raw_files = collect_openai_batch(
@@ -250,7 +248,7 @@ def _archive_openai_batch_files(
         "batch_id": batch_id,
         "submission_manifest_sha256": submission_manifest_sha256,
         "files": archived,
-        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "collected_at": datetime.now(UTC).isoformat(),
     }
     value["manifest_sha256"] = canonical_sha256(value)
     atomic_write_json(collection_path, value)
@@ -275,8 +273,7 @@ def _validate_openai_batch_archive(
     value["manifest_sha256"] = expected
     if (
         value.get("batch_id") != batch_id
-        or value.get("submission_manifest_sha256")
-        != submission_manifest_sha256
+        or value.get("submission_manifest_sha256") != submission_manifest_sha256
     ):
         raise ValueError("OpenAI batch collection identity mismatch")
     archived = value.get("files")

@@ -7,10 +7,11 @@ import json
 import os
 import shutil
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from circuits.tracing.trace import (
     TeacherForcedProbeResult,
@@ -45,6 +46,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _selected_occurrence_count(probe: Mapping[str, object]) -> int:
+    selected_occurrences = probe.get("selected_occurrences")
+    if not isinstance(selected_occurrences, list):
+        raise ValueError("probe selected_occurrences must be a list")
+    return len(selected_occurrences)
+
+
 def save_probe_artifact(
     path: str | os.PathLike[str],
     probe: TeacherForcedProbeResult | Mapping[str, object],
@@ -70,7 +78,7 @@ def save_probe_artifact(
         canonical_manifest.update(
             {
                 "schema_version": SCHEMA_VERSION,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "probe_file": PROBE_FILENAME,
                 "probe_schema_version": canonical_probe["schema_version"],
                 "probe_sha256": _sha256_file(probe_path),
@@ -80,11 +88,9 @@ def save_probe_artifact(
                 "metrics_size_bytes": metrics_path.stat().st_size,
                 "target_provenance": canonical_probe["target_provenance"],
                 "occurrence_signature": canonical_probe["occurrence_signature"],
-                "feature_basis_signature": canonical_probe[
-                    "feature_basis_signature"
-                ],
-                "selected_occurrence_count": len(
-                    canonical_probe["selected_occurrences"]
+                "feature_basis_signature": canonical_probe["feature_basis_signature"],
+                "selected_occurrence_count": _selected_occurrence_count(
+                    canonical_probe
                 ),
             }
         )
@@ -115,7 +121,9 @@ def validate_probe_artifact_integrity(
         with probe_path.open(encoding="utf-8") as handle:
             probe = json.load(handle)
     except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"probe artifact is missing or unreadable: {artifact_path}") from error
+        raise ValueError(
+            f"probe artifact is missing or unreadable: {artifact_path}"
+        ) from error
     if not isinstance(manifest, dict) or not isinstance(metrics, dict):
         raise ValueError("probe artifact manifest and metrics must be JSON objects")
     if manifest.get("schema_version") != SCHEMA_VERSION:
@@ -137,9 +145,8 @@ def validate_probe_artifact_integrity(
     if manifest.get("metrics_file") != METRICS_FILENAME:
         raise ValueError(f"probe artifact metrics_file must be {METRICS_FILENAME!r}")
     expected_metrics_size = manifest.get("metrics_size_bytes")
-    if (
-        isinstance(expected_metrics_size, bool)
-        or not isinstance(expected_metrics_size, int)
+    if isinstance(expected_metrics_size, bool) or not isinstance(
+        expected_metrics_size, int
     ):
         raise ValueError("probe artifact metrics_size_bytes is invalid")
     if metrics_path.stat().st_size != expected_metrics_size:
@@ -150,18 +157,17 @@ def validate_probe_artifact_integrity(
     if _sha256_file(metrics_path) != expected_metrics_hash:
         raise ValueError("probe artifact metrics checksum mismatch")
     canonical_probe = validate_teacher_forced_probe_result(probe)
-    if manifest.get("occurrence_signature") != canonical_probe[
-        "occurrence_signature"
-    ]:
+    if manifest.get("occurrence_signature") != canonical_probe["occurrence_signature"]:
         raise ValueError("probe artifact occurrence signature disagrees with payload")
-    if manifest.get("feature_basis_signature") != canonical_probe[
-        "feature_basis_signature"
-    ]:
+    if (
+        manifest.get("feature_basis_signature")
+        != canonical_probe["feature_basis_signature"]
+    ):
         raise ValueError("probe artifact feature basis disagrees with payload")
     if manifest.get("target_provenance") != canonical_probe["target_provenance"]:
         raise ValueError("probe artifact target provenance disagrees with payload")
-    if manifest.get("selected_occurrence_count") != len(
-        canonical_probe["selected_occurrences"]
+    if manifest.get("selected_occurrence_count") != _selected_occurrence_count(
+        canonical_probe
     ):
         raise ValueError("probe artifact selected occurrence count mismatch")
     return manifest

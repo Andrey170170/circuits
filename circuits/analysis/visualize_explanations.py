@@ -99,22 +99,22 @@ def get_top_explanations(data: dict, n: int = 10) -> list[dict]:
         for neuron_id, sign_data in data.get(category, {}).items():
             layer, token, neuron, polarity = parse_cluster_id(neuron_id)
             for sign in ["pos", "neg", "combined"]:
-                for expl in sign_data.get(sign, []):
-                    if expl.get("score") is not None:
-                        all_explanations.append(
-                            {
-                                "neuron_id": neuron_id,
-                                "layer": layer,
-                                "token": token,
-                                "neuron": neuron,
-                                "polarity": polarity,
-                                "category": category,
-                                "sign": sign,
-                                "explanation": expl["explanation"],
-                                "score": expl["score"],
-                                "rsquared": expl.get("rsquared"),
-                            }
-                        )
+                all_explanations.extend(
+                    {
+                        "neuron_id": neuron_id,
+                        "layer": layer,
+                        "token": token,
+                        "neuron": neuron,
+                        "polarity": polarity,
+                        "category": category,
+                        "sign": sign,
+                        "explanation": expl["explanation"],
+                        "score": expl["score"],
+                        "rsquared": expl.get("rsquared"),
+                    }
+                    for expl in sign_data.get(sign, [])
+                    if expl.get("score") is not None
+                )
 
     # Sort by score descending
     all_explanations.sort(key=lambda x: x["score"], reverse=True)
@@ -683,7 +683,7 @@ def generate_html(data: dict, output_path: Path) -> None:
             ratio = val / max_val
             if ratio > 0.5:
                 return high_color
-            elif ratio > 0.1:
+            if ratio > 0.1:
                 return low_color
             return "transparent"
 
@@ -713,7 +713,7 @@ def generate_html(data: dict, output_path: Path) -> None:
             # Build side-by-side token display: true | predicted
             true_spans = []
             pred_spans = []
-            for tok, true_act, pred_act in zip(tokens, true_acts, pred_acts):
+            for tok, true_act, pred_act in zip(tokens, true_acts, pred_acts, strict=True):
                 escaped_tok = html_escape(tok)
                 # True activation coloring (green, based on true range)
                 true_bg = get_color(true_act, true_max, "#c8e6c9", "#e8f5e9")
@@ -944,7 +944,7 @@ def generate_html(data: dict, output_path: Path) -> None:
             ratio = val / max_val
             if ratio > 0.5:
                 return high_color
-            elif ratio > 0.1:
+            if ratio > 0.1:
                 return low_color
             return "transparent"
 
@@ -972,7 +972,9 @@ def generate_html(data: dict, output_path: Path) -> None:
             true_spans = []
             pos_spans = []
             neg_spans = []
-            for tok, true_act, pos_pred, neg_pred in zip(tokens, true_acts, pos_preds, neg_preds):
+            for tok, true_act, pos_pred, neg_pred in zip(
+                tokens, true_acts, pos_preds, neg_preds, strict=True
+            ):
                 escaped_tok = html_escape(tok)
                 # True activation coloring (green for positive, red for negative)
                 if true_act >= 0:
@@ -1175,7 +1177,13 @@ def generate_html(data: dict, output_path: Path) -> None:
         mean_pred = sum(pred_acts) / n
 
         # Correlation
-        cov = sum((t - mean_true) * (p - mean_pred) for t, p in zip(true_acts, pred_acts)) / n
+        cov = (
+            sum(
+                (t - mean_true) * (p - mean_pred)
+                for t, p in zip(true_acts, pred_acts, strict=True)
+            )
+            / n
+        )
         var_true = sum((t - mean_true) ** 2 for t in true_acts) / n
         var_pred = sum((p - mean_pred) ** 2 for p in pred_acts) / n
         if var_true > 0 and var_pred > 0:
@@ -1184,7 +1192,7 @@ def generate_html(data: dict, output_path: Path) -> None:
             corr = 0.0
 
         # R² (coefficient of determination)
-        ss_res = sum((t - p) ** 2 for t, p in zip(true_acts, pred_acts))
+        ss_res = sum((t - p) ** 2 for t, p in zip(true_acts, pred_acts, strict=True))
         ss_tot = sum((t - mean_true) ** 2 for t in true_acts)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
@@ -1212,7 +1220,7 @@ def generate_html(data: dict, output_path: Path) -> None:
 
         # Build points
         points = []
-        for i, (t, p) in enumerate(zip(true_acts, pred_acts)):
+        for i, (t, p) in enumerate(zip(true_acts, pred_acts, strict=True)):
             x = margin + ((t - x_min) / x_range) * plot_width
             y = margin + plot_height - ((p - y_min) / y_range) * plot_height  # Flip y
             tok_str = ""
@@ -1291,7 +1299,7 @@ def generate_html(data: dict, output_path: Path) -> None:
                 true_vals = pred.get("true", [])
                 pred_vals = pred.get("predicted", [])
                 prompt_preview = "".join(tokens) if tokens else "?"
-                for i, (t, p) in enumerate(zip(true_vals, pred_vals)):
+                for i, (t, p) in enumerate(zip(true_vals, pred_vals, strict=True)):
                     true_acts.append(t)
                     pred_acts.append(p)
                     tok = tokens[i] if i < len(tokens) else "?"
@@ -1397,9 +1405,18 @@ def generate_html(data: dict, output_path: Path) -> None:
                 is_best=(contrib_best_sign == "neg"),
             )
             # Group by category: attr first, then contrib
-            for s in [attr_paired, attr_pos, attr_neg, contrib_paired, contrib_pos, contrib_neg]:
-                if s:
-                    collapsed_summaries.append(s)
+            collapsed_summaries.extend(
+                summary
+                for summary in [
+                    attr_paired,
+                    attr_pos,
+                    attr_neg,
+                    contrib_paired,
+                    contrib_pos,
+                    contrib_neg,
+                ]
+                if summary
+            )
         else:
             # Standard pos/neg view
             for type_key in [
@@ -1624,6 +1641,23 @@ def generate_html(data: dict, output_path: Path) -> None:
                 </tr>
 """
 
+    def get_best_description(cluster: dict, category: str) -> dict | None:
+        """Return the highest-scoring description for a cluster category."""
+        best = max(
+            (
+                explanation
+                for explanation in cluster["explanations"].get(
+                    f"{category}_{cluster['category_best'][category][1]}", []
+                )
+                if explanation.get("score") is not None
+            ),
+            key=lambda explanation: explanation["score"],
+            default=None,
+        )
+        if best is None:
+            return None
+        return {"explanation": best["explanation"], "score": best["score"]}
+
     # Export cluster data for JS
     cluster_data_for_js = [
         {
@@ -1632,21 +1666,7 @@ def generate_html(data: dict, output_path: Path) -> None:
             "type_max_scores": c["type_max_scores"],
             "cluster_id": c["cluster_id"],
             "best_descs": {
-                cat: (
-                    lambda e: {"explanation": e["explanation"], "score": e["score"]} if e else None
-                )(
-                    max(
-                        (
-                            e
-                            for e in c["explanations"].get(
-                                f"{cat}_{c['category_best'][cat][1]}", []
-                            )
-                            if e.get("score") is not None
-                        ),
-                        key=lambda e: e["score"],
-                        default=None,
-                    )
-                )
+                cat: get_best_description(c, cat)
                 for cat in ["attr", "contrib"]
                 if cat in c.get("category_best", {})
             },

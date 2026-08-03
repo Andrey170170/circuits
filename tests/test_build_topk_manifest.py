@@ -4,7 +4,6 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-
 from scripts.bonafide.build_topk_manifest import build_topk_manifest, save_manifest
 from tests.test_bonafide_benchmark import _single_item_manifest
 

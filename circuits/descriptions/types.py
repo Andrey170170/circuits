@@ -2,8 +2,9 @@
 
 from typing import Any, Literal
 
-from circuits.analysis.cluster import NeuronId
 from pydantic import BaseModel
+
+from circuits.analysis.cluster import NeuronId
 
 
 class ActivationRecord(BaseModel):

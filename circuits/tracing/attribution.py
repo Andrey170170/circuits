@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from typing import Literal
 
 import torch
+from tqdm import tqdm
+
 from circuits.tracing.grad import (
     layerwise_revert_stop_nonlinear_grad,
     layerwise_stop_nonlinear_grad,
@@ -14,7 +16,6 @@ from circuits.tracing.grad import (
     revert_stop_nonlinear_grad,
 )
 from circuits.tracing.utils import NeuronIdx
-from tqdm import tqdm
 
 
 def _get_grad_attributions_from_logits(
@@ -78,26 +79,30 @@ def _get_grad_attributions_from_logits(
                 _hook(layer_index)
             )
         else:
-            model.model.layers[layer_index].mlp.down_proj.register_forward_hook(_hook(layer_index))
+            model.model.layers[layer_index].mlp.down_proj.register_forward_hook(
+                _hook(layer_index)
+            )
 
     # forward pass
     out = model(inputs_embeds=embeds, attention_mask=attention_masks)
     if focus_last_residual:
-        goal = cache[len(model.model.layers) - 1][:, -1].sum()  # last residual stream vector
+        goal = cache[len(model.model.layers) - 1][
+            :, -1
+        ].sum()  # last residual stream vector
         goal_value = (
             cache[len(model.model.layers) - 1][:, -1].detach().sum(dim=-1)
         )  # shape: (batch,)
     else:
         logits = out.logits[:, focus_positions]  # shape: (batch, positions, vocab)
-        foc_log = torch.tensor(focus_logits, device=logits.device)  # shape: (batch, positions)
+        foc_log = torch.tensor(
+            focus_logits, device=logits.device
+        )  # shape: (batch, positions)
         # Add an extra dimension so shapes line up
         selected_logits = torch.gather(
             logits,  # (B, P, V)
             dim=2,  # select along vocab axis
             index=foc_log.unsqueeze(-1),  # (B, P, 1)
-        ).squeeze(
-            -1
-        )  # (B, P)
+        ).squeeze(-1)  # (B, P)
         # optionally subtract the mean of all logits
         if center_logits:
             selected_logits -= logits.mean(dim=-1)
@@ -110,7 +115,9 @@ def _get_grad_attributions_from_logits(
             selected_logits = selected_logits * weights
         if verbose:
             print("selected_logits", selected_logits)
-        goal = selected_logits.sum()  # only grab the associated logits for each batch item
+        goal = (
+            selected_logits.sum()
+        )  # only grab the associated logits for each batch item
         goal_value = selected_logits.detach().sum(dim=-1)  # shape: (batch,)
 
     # collect grad attributions — single backward pass for all layers + embeds
@@ -146,7 +153,9 @@ def _get_grad_attributions_from_logits(
     if alpha is not None:
         embed_grad_attr = embed_attributions.detach()
     elif ablation_mode == "mean":
-        embed_attributions = embed_attributions * (embeds - embeds.mean(dim=0, keepdim=True))
+        embed_attributions = embed_attributions * (
+            embeds - embeds.mean(dim=0, keepdim=True)
+        )
         embed_grad_attr = embed_attributions.sum(dim=-1).detach()
     elif ablation_mode == "zero":
         embed_attributions = embed_attributions * embeds
@@ -193,7 +202,7 @@ def _get_ig_attributions_from_logits(
     mlp_final_acts = []
     embed_final_acts = []
     goal_value = []
-    for step in range(0, ig_steps + 1):
+    for step in range(ig_steps + 1):
         alpha = step / ig_steps
         (
             mlp_step_attributions,
@@ -224,7 +233,12 @@ def _get_ig_attributions_from_logits(
         goal_value.append(goal_value_step.detach())
 
         # Clean up GPU tensors and computation graph
-        del mlp_step_attributions, embed_step_attributions, mlp_step_acts, embed_step_acts
+        del (
+            mlp_step_attributions,
+            embed_step_attributions,
+            mlp_step_acts,
+            embed_step_acts,
+        )
         torch.cuda.empty_cache()
 
         # Force garbage collection every few steps
@@ -240,8 +254,12 @@ def _get_ig_attributions_from_logits(
     if ig_mode == "ig-inputs":
         # WE WILL IGNORE STEP 0
         # reimann sum in IG (move back to device for computation)
-        mlp_final_attributions = torch.stack(mlp_final_attributions[1:]).mean(dim=0).to(device)
-        embed_final_attributions = torch.stack(embed_final_attributions[1:]).mean(dim=0).to(device)
+        mlp_final_attributions = (
+            torch.stack(mlp_final_attributions[1:]).mean(dim=0).to(device)
+        )
+        embed_final_attributions = (
+            torch.stack(embed_final_attributions[1:]).mean(dim=0).to(device)
+        )
 
         # multiply by act diff
         mlp_activation_diff = (mlp_final_acts[-1] - mlp_final_acts[0]).to(device)
@@ -263,9 +281,14 @@ def _get_ig_attributions_from_logits(
         embed_activation_diffs = torch.diff(embed_final_acts, dim=0)
 
         # multiply gradients by diffs
-        mlp_final_attributions = (mlp_final_attributions * mlp_activation_diffs).sum(dim=0)
+        mlp_final_attributions = (mlp_final_attributions * mlp_activation_diffs).sum(
+            dim=0
+        )
         embed_final_attributions = (
-            (embed_final_attributions * embed_activation_diffs).sum(dim=0).sum(dim=-1).detach()
+            (embed_final_attributions * embed_activation_diffs)
+            .sum(dim=0)
+            .sum(dim=-1)
+            .detach()
         )
     else:
         raise ValueError(f"Invalid IG mode: {ig_mode}")
@@ -311,7 +334,9 @@ def _get_global_important_neurons_mask(
     if batch_aggregation == "mean":
         mlp_final_attributions = torch.mean(mlp_final_attributions, dim=1, keepdim=True)
     elif batch_aggregation == "max":
-        mlp_final_attributions = torch.max(mlp_final_attributions, dim=1, keepdim=True).values
+        mlp_final_attributions = torch.max(
+            mlp_final_attributions, dim=1, keepdim=True
+        ).values
     elif batch_aggregation == "max_abs":
         mlp_final_attributions = torch.max(
             torch.abs(mlp_final_attributions), dim=1, keepdim=True
@@ -328,7 +353,9 @@ def _get_global_important_neurons_mask(
     abs_attributions = mlp_final_attributions.abs().permute(1, 0, 2, 3)
 
     # if it is not in the keep tokens, set them to zeros
-    token_mask = ~torch.isin(torch.arange(abs_attributions.shape[2]), torch.tensor(keep_tokens))
+    token_mask = ~torch.isin(
+        torch.arange(abs_attributions.shape[2]), torch.tensor(keep_tokens)
+    )
     abs_attributions[:, :, token_mask, :] = 0
 
     # if layer indices fall outside start_layer and end_layer, set them to zeros
@@ -353,7 +380,9 @@ def _get_global_important_neurons_mask(
     # option 1: threshold
     if node_attribution_threshold is not None:
         # Sort without stable=True to save memory
-        sorted_values = torch.sort(flat_abs_attributions, descending=True, dim=-1).values
+        sorted_values = torch.sort(
+            flat_abs_attributions, descending=True, dim=-1
+        ).values
         if verbose:
             print("sorted_values", sorted_values.shape)
 
@@ -370,7 +399,9 @@ def _get_global_important_neurons_mask(
         ).unsqueeze(-1)
         cutoff_idx = torch.searchsorted(cumulative_ratio, thr) + 1
         cutoff_idx = cutoff_idx.squeeze(-1)
-        threshold_value = sorted_values[torch.arange(sorted_values.shape[0]), cutoff_idx - 1]
+        threshold_value = sorted_values[
+            torch.arange(sorted_values.shape[0]), cutoff_idx - 1
+        ]
 
         # Create mask and get coordinates directly
         mask = abs_attributions >= threshold_value[:, None, None, None]
@@ -382,7 +413,9 @@ def _get_global_important_neurons_mask(
     elif topk_neurons is not None:
         # Use topk directly instead of full sort to save memory
         topk_values = torch.topk(
-            flat_abs_attributions, k=min(topk_neurons, flat_abs_attributions.shape[-1]), dim=-1
+            flat_abs_attributions,
+            k=min(topk_neurons, flat_abs_attributions.shape[-1]),
+            dim=-1,
         ).values
         threshold_value = topk_values[:, -1]  # Last value in topk is the threshold
         if verbose:
@@ -461,16 +494,20 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
 
         cache = {}
 
-        def _hook(lid):
+        def _hook(lid, layer_cache):
             def fn(_, input, output):
-                cache[lid] = input[0]
+                layer_cache[lid] = input[0]
 
             return fn
 
         if hasattr(model.model.layers[lid].mlp, "mlp"):
-            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(_hook(lid))
+            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(
+                _hook(lid, cache)
+            )
         else:
-            model.model.layers[lid].mlp.down_proj.register_forward_hook(_hook(lid))
+            model.model.layers[lid].mlp.down_proj.register_forward_hook(
+                _hook(lid, cache)
+            )
 
         # differentiable embeds
         # shape: (batch, seq, d)
@@ -522,14 +559,23 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             # shape: (n_chunk * batch, batch, seq, d)
             # convert back to (n_chunk, batch, batch, seq, d)
             layer_grad_attr = layer_grad_attr.reshape(
-                n_chunk, batch, batch, layer_grad_attr.shape[-2], layer_grad_attr.shape[-1]
+                n_chunk,
+                batch,
+                batch,
+                layer_grad_attr.shape[-2],
+                layer_grad_attr.shape[-1],
             )
             # get only identity along batch, batch
-            layer_grad_attr = layer_grad_attr.diagonal(dim1=1, dim2=2).permute(0, 3, 1, 2)
+            layer_grad_attr = layer_grad_attr.diagonal(dim1=1, dim2=2).permute(
+                0, 3, 1, 2
+            )
             # now (n_chunk, batch, seq, d)
 
             layer_attr = (
-                (layer_grad_attr.to(torch.float32) * embeds[None, ...].to(torch.float32))
+                (
+                    layer_grad_attr.to(torch.float32)
+                    * embeds[None, ...].to(torch.float32)
+                )
                 .sum(-1)
                 .to(embeds.dtype)
             )  # (n_chunk, batch, seq)
@@ -608,7 +654,11 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
     # shape (t * batch, batch, seq, d)
     # convert back to (t, batch, batch, seq, d)
     embed_grad_contrib = embed_grad_contrib_full.reshape(
-        t, batch, batch, embed_grad_contrib_full.shape[-2], embed_grad_contrib_full.shape[-1]
+        t,
+        batch,
+        batch,
+        embed_grad_contrib_full.shape[-2],
+        embed_grad_contrib_full.shape[-1],
     )
     del embed_grad_contrib_full  # Free immediately
 
@@ -645,16 +695,20 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
 
         cache = {}
 
-        def _hook(lid):
+        def _hook(lid, layer_cache):
             def fn(_, input, output):
-                cache[lid] = input[0]
+                layer_cache[lid] = input[0]
 
             return fn
 
         if hasattr(model.model.layers[lid].mlp, "mlp"):
-            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(_hook(lid))
+            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(
+                _hook(lid, cache)
+            )
         else:
-            model.model.layers[lid].mlp.down_proj.register_forward_hook(_hook(lid))
+            model.model.layers[lid].mlp.down_proj.register_forward_hook(
+                _hook(lid, cache)
+            )
 
         # differentiable embeds
         # shape: (batch, seq, d)
@@ -688,7 +742,9 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             t, batch, batch, layer_grad_contrib.shape[-2], layer_grad_contrib.shape[-1]
         )
         # get only identity along batch, batch
-        layer_grad_contrib = layer_grad_contrib.diagonal(dim1=1, dim2=2).permute(0, 3, 1, 2)
+        layer_grad_contrib = layer_grad_contrib.diagonal(dim1=1, dim2=2).permute(
+            0, 3, 1, 2
+        )
         # now (t, batch, seq, d)
         for pos, nid in pairs:
             grad_contrib.append(layer_grad_contrib[:, :, pos, nid])
@@ -744,7 +800,14 @@ def _get_neuron_attr_and_contrib(
     verbose: bool = False,
 ) -> (
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx]]
-    | tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx], torch.Tensor, torch.Tensor]
+    | tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        list[NeuronIdx],
+        torch.Tensor,
+        torch.Tensor,
+    ]
 ):
     """
     Compute neuron attributions from source tokens and contributions to target tokens.
@@ -863,18 +926,28 @@ def _get_neuron_attr_and_contrib(
             # shape: (n_chunk * batch, batch, seq, d)
             # convert back to (n_chunk, batch, batch, seq, d)
             layer_grad_attr = layer_grad_attr.reshape(
-                n_chunk, batch, batch, layer_grad_attr.shape[-2], layer_grad_attr.shape[-1]
+                n_chunk,
+                batch,
+                batch,
+                layer_grad_attr.shape[-2],
+                layer_grad_attr.shape[-1],
             )
             # get only identity along batch, batch
-            layer_grad_attr = layer_grad_attr.diagonal(dim1=1, dim2=2).permute(0, 3, 1, 2)
+            layer_grad_attr = layer_grad_attr.diagonal(dim1=1, dim2=2).permute(
+                0, 3, 1, 2
+            )
             # now (n_chunk, batch, seq, d)
 
             if alpha is not None:
                 # For IG: return gradient only, multiply by activation later
-                layer_attr = layer_grad_attr[:, :, src_tokens, :]  # (n_chunk, batch, src, d)
+                layer_attr = layer_grad_attr[
+                    :, :, src_tokens, :
+                ]  # (n_chunk, batch, src, d)
             else:
                 # For regular attribution: gradient * activation
-                layer_attr = (layer_grad_attr * embeds[None, ...]).sum(-1)  # (n_chunk, batch, seq)
+                layer_attr = (layer_grad_attr * embeds[None, ...]).sum(
+                    -1
+                )  # (n_chunk, batch, seq)
                 layer_attr = layer_attr[:, :, src_tokens]  # (n_chunk, batch, src)
 
             layer_attr_chunks.append(layer_attr)
@@ -919,7 +992,11 @@ def _get_neuron_attr_and_contrib(
     # shape (t * batch, batch, seq, d)
     # convert back to (t, batch, batch, seq, d)
     embed_grad_contrib = embed_grad_contrib_full.reshape(
-        t, batch, batch, embed_grad_contrib_full.shape[-2], embed_grad_contrib_full.shape[-1]
+        t,
+        batch,
+        batch,
+        embed_grad_contrib_full.shape[-2],
+        embed_grad_contrib_full.shape[-1],
     )
     del embed_grad_contrib_full  # Free memory immediately
 
@@ -929,13 +1006,17 @@ def _get_neuron_attr_and_contrib(
 
     if alpha is not None:
         # For IG: return gradient only, multiply by activation later
-        embed_grad_contrib = embed_grad_contrib[:, :, src_tokens, :]  # (t, batch, src, d)
+        embed_grad_contrib = embed_grad_contrib[
+            :, :, src_tokens, :
+        ]  # (t, batch, src, d)
     else:
         # For regular contribution: gradient * activation
         embed_grad_contrib = (
             embed_grad_contrib[:, :, src_tokens, :] * embeds[None, :, src_tokens, :]
         )  # (t, batch, src, d)
-        embed_grad_contrib = embed_grad_contrib.sum(-1).permute(2, 1, 0)  # (src, batch, t)
+        embed_grad_contrib = embed_grad_contrib.sum(-1).permute(
+            2, 1, 0
+        )  # (src, batch, t)
 
     torch.cuda.empty_cache()
 
@@ -944,7 +1025,6 @@ def _get_neuron_attr_and_contrib(
     for lid, pairs in tqdm(
         neuron_cfg.items(), desc="Computing neuron contributions", disable=not verbose
     ):
-
         layer_acts = cache[lid]  # (batch, seq, d)
         layer_acts.grad = None
         layer_grad_contrib = torch.autograd.grad(
@@ -960,7 +1040,9 @@ def _get_neuron_attr_and_contrib(
             t, batch, batch, layer_grad_contrib.shape[-2], layer_grad_contrib.shape[-1]
         )
         # get only identity along batch, batch
-        layer_grad_contrib = layer_grad_contrib.diagonal(dim1=1, dim2=2).permute(0, 3, 1, 2)
+        layer_grad_contrib = layer_grad_contrib.diagonal(dim1=1, dim2=2).permute(
+            0, 3, 1, 2
+        )
         # now (t, batch, seq, d)
         for pos, nid in pairs:
             grad_contrib.append(layer_grad_contrib[:, :, pos, nid])
@@ -976,7 +1058,9 @@ def _get_neuron_attr_and_contrib(
         contrib = grad_contrib
     else:
         # For regular contribution: gradient * activation
-        contrib = grad_contrib * neuron_acts.detach()[:, :, None]  # (neurons, batch, tgt)
+        contrib = (
+            grad_contrib * neuron_acts.detach()[:, :, None]
+        )  # (neurons, batch, tgt)
 
     # Clean up after contribution computation
     del grad_contrib, tgt_vec, grad_outputs
@@ -1055,24 +1139,26 @@ def _get_neuron_attr_and_contrib_ig(
     embeds_steps = []
     neuron_tags = None
 
-    for step in range(0, ig_steps + 1):
+    for step in range(ig_steps + 1):
         alpha = step / ig_steps
 
-        attr, contrib, embed_grad_contrib, tags, neuron_acts, embeds = _get_neuron_attr_and_contrib(
-            model=model,
-            neuron_cfg=neuron_cfg,
-            input_ids=input_ids,
-            src_tokens=src_tokens,
-            tgt_tokens=tgt_tokens,
-            focus_positions=focus_positions,
-            focus_logits=focus_logits,
-            attention_masks=attention_masks,
-            use_relp_grad=use_relp_grad,
-            disable_stop_grad=disable_stop_grad,
-            center_logits=center_logits,
-            alpha=alpha,
-            neuron_chunk_size=neuron_chunk_size,
-            verbose=verbose,
+        attr, contrib, embed_grad_contrib, tags, neuron_acts, embeds = (
+            _get_neuron_attr_and_contrib(
+                model=model,
+                neuron_cfg=neuron_cfg,
+                input_ids=input_ids,
+                src_tokens=src_tokens,
+                tgt_tokens=tgt_tokens,
+                focus_positions=focus_positions,
+                focus_logits=focus_logits,
+                attention_masks=attention_masks,
+                use_relp_grad=use_relp_grad,
+                disable_stop_grad=disable_stop_grad,
+                center_logits=center_logits,
+                alpha=alpha,
+                neuron_chunk_size=neuron_chunk_size,
+                verbose=verbose,
+            )
         )
 
         if neuron_tags is None:
@@ -1130,28 +1216,42 @@ def _get_neuron_attr_and_contrib_ig(
 
         # For embed_grad_contrib: gradient is w.r.t. embeds
         # Shape: (t, batch, src, d) * (batch, src, d) -> sum over d -> (t, batch, src) -> permute -> (src, batch, t)
-        embed_grad_contrib_final = (embed_grad_avg * embeds_diff_src[None, :, :, :]).sum(dim=-1)
-        embed_grad_contrib_final = embed_grad_contrib_final.permute(2, 1, 0)  # (src, batch, t)
+        embed_grad_contrib_final = (
+            embed_grad_avg * embeds_diff_src[None, :, :, :]
+        ).sum(dim=-1)
+        embed_grad_contrib_final = embed_grad_contrib_final.permute(
+            2, 1, 0
+        )  # (src, batch, t)
 
     elif ig_mode == "conductance":
         # Stack all steps (excluding step 0) and move to device
-        attr_grads = torch.stack(attr_steps[1:]).to(device)  # (steps, neurons, batch, src, d)
-        contrib_grads = torch.stack(contrib_steps[1:]).to(device)  # (steps, neurons, batch, tgt)
+        attr_grads = torch.stack(attr_steps[1:]).to(
+            device
+        )  # (steps, neurons, batch, src, d)
+        contrib_grads = torch.stack(contrib_steps[1:]).to(
+            device
+        )  # (steps, neurons, batch, tgt)
         embed_grads = torch.stack(embed_grad_contrib_steps[1:]).to(
             device
         )  # (steps, t, batch, src, d)
 
         # Compute step-wise differences in activations
-        neuron_acts_all = torch.stack(neuron_acts_steps).to(device)  # (steps+1, neurons, batch)
+        neuron_acts_all = torch.stack(neuron_acts_steps).to(
+            device
+        )  # (steps+1, neurons, batch)
         embeds_all = torch.stack(embeds_steps).to(device)  # (steps+1, batch, seq, d)
 
-        neuron_acts_diffs = torch.diff(neuron_acts_all, dim=0)  # (steps, neurons, batch)
+        neuron_acts_diffs = torch.diff(
+            neuron_acts_all, dim=0
+        )  # (steps, neurons, batch)
         embeds_diffs = torch.diff(embeds_all, dim=0)  # (steps, batch, seq, d)
         embeds_diffs_src = embeds_diffs[:, :, src_tokens, :]  # (steps, batch, src, d)
 
         # Apply conductance: sum over steps of (gradient * activation_diff)
         # For attr: (steps, neurons, batch, src, d) * (steps, batch, src, d) -> sum over d and steps
-        attr_final = (attr_grads * embeds_diffs_src[:, None, :, :, :]).sum(dim=-1).sum(dim=0)
+        attr_final = (
+            (attr_grads * embeds_diffs_src[:, None, :, :, :]).sum(dim=-1).sum(dim=0)
+        )
 
         # For contrib: (steps, neurons, batch, tgt) * (steps, neurons, batch, 1)
         contrib_final = (contrib_grads * neuron_acts_diffs[:, :, :, None]).sum(dim=0)
@@ -1160,7 +1260,9 @@ def _get_neuron_attr_and_contrib_ig(
         embed_grad_contrib_final = (
             (embed_grads * embeds_diffs_src[:, None, :, :, :]).sum(dim=-1).sum(dim=0)
         )
-        embed_grad_contrib_final = embed_grad_contrib_final.permute(2, 1, 0)  # (src, batch, t)
+        embed_grad_contrib_final = embed_grad_contrib_final.permute(
+            2, 1, 0
+        )  # (src, batch, t)
     else:
         raise ValueError(f"Invalid IG mode: {ig_mode}")
 

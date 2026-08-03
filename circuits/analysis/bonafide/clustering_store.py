@@ -8,9 +8,11 @@ import math
 import os
 import shutil
 import uuid
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
-from typing import Any, Iterator, Mapping, cast
+from typing import Any, cast
 
 import numpy as np
 import pyarrow as pa
@@ -216,16 +218,14 @@ class FeatureStoreReader:
             )
             trace_ids = table["trace_unit_id"].to_pylist()
             group_starts = [0]
-            for row_index in range(1, len(trace_ids)):
-                if trace_ids[row_index] != trace_ids[row_index - 1]:
-                    group_starts.append(row_index)
+            group_starts.extend(
+                row_index
+                for row_index in range(1, len(trace_ids))
+                if trace_ids[row_index] != trace_ids[row_index - 1]
+            )
             group_starts.append(len(trace_ids))
             shard_trace_ids: set[str] = set()
-            for start, stop in zip(
-                group_starts[:-1],
-                group_starts[1:],
-                strict=True,
-            ):
+            for start, stop in pairwise(group_starts):
                 trace_unit_id = str(trace_ids[start])
                 if trace_unit_id in shard_trace_ids:
                     raise ValueError(
@@ -263,7 +263,7 @@ class FeatureStoreReader:
                     ) from error
                 response_ids = set(group["response_id"].to_pylist())
                 family_ids = set(group["base_question_id"].to_pylist())
-                weights = set(float(value) for value in group["fit_weight"].to_pylist())
+                weights = {float(value) for value in group["fit_weight"].to_pylist()}
                 if response_ids != {target["response_id"]}:
                     raise ValueError("target response identity drift in feature rows")
                 if family_ids != {target["base_question_id"]}:
@@ -514,20 +514,20 @@ def load_pair_evidence(output_root: Path) -> tuple[PairEvidence, BasisSupport]:
     matrix_records = manifest.get("matrix_records")
     if not isinstance(matrix_records, Mapping):
         raise ValueError("pair-evidence matrix inventory is invalid")
-    for field, filename in PAIR_MATRIX_FILES.items():
+    for field_name, filename in PAIR_MATRIX_FILES.items():
         matrix = load_npz(output_root / filename).tocsr()
-        record = matrix_records.get(field)
+        record = matrix_records.get(field_name)
         if not isinstance(record, Mapping):
-            raise ValueError(f"pair-evidence matrix record is missing: {field}")
+            raise ValueError(f"pair-evidence matrix record is missing: {field_name}")
         if list(matrix.shape) != record.get("shape"):
-            raise ValueError(f"pair-evidence matrix shape drift: {field}")
+            raise ValueError(f"pair-evidence matrix shape drift: {field_name}")
         if int(matrix.nnz) != int(record["nnz"]):
-            raise ValueError(f"pair-evidence matrix nnz drift: {field}")
+            raise ValueError(f"pair-evidence matrix nnz drift: {field_name}")
         if matrix.dtype.str != record.get("dtype"):
-            raise ValueError(f"pair-evidence matrix dtype drift: {field}")
+            raise ValueError(f"pair-evidence matrix dtype drift: {field_name}")
         if csr_content_sha256(matrix) != record.get("content_sha256"):
-            raise ValueError(f"pair-evidence matrix content drift: {field}")
-        matrices[field] = matrix
+            raise ValueError(f"pair-evidence matrix content drift: {field_name}")
+        matrices[field_name] = matrix
     evidence = PairEvidence(
         weighted_similarity_sum=matrices["weighted_similarity_sum"],
         support_weight_sum=matrices["support_weight_sum"],
