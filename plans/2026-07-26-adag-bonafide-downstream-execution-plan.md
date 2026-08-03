@@ -2659,17 +2659,30 @@ evidence against the identical clusters/witnesses with candidate evidence added.
 `227cde5658f1381963b94df192b8e86e1188ca13e28c334003a5a100d3496b55`. It contains all 601
 generation witness rows, 530 prompt-ineligible held-out scorer rows, and 24 paired arm handoffs.
 
-Execution order from this checkpoint is:
+The renderer freeze remains historical and immutable.  The integrated top-five/labeling branch
+continues from it in the following order:
 
-1. freeze a bounded renderer that selects one identical, W-only-determined generation witness set
-   per anchor for both arms and renders candidate numbers to six significant digits;
-2. prepare the full token/cost estimate and exact Opus-generation, Opus-rewrite, and Terra-control
-   batch parameters for approval;
-3. run the fixed Transluce simulator only on `input_localization_hypothesis`, first on selection
-   and then on audit without changing the label or selected generic control;
-4. freeze blinded review IDs/forms before review and unblind only after the required decisions;
-5. decide the evidence-only pilot by the prospectively frozen retained-label, abstention, and loss
-   thresholds. Candidate text remains exploratory even if the evidence-only pilot passes.
+1. publish a provenance-bound assessment crosswalk joining the C2 target/basis measurements,
+   `C2-W64` assignments, and dense response-time multiplex identities without rewriting any source
+   artifact;
+2. measure explicit dense-multiplex coverage, candidate-direction consistency, within- versus
+   between-`C2-W64` separation, phase/rank concentration, and within-cluster heterogeneity;
+3. project the matched target/basis measurements onto dense multiplex occurrences as annotations
+   and foreign-key references only.  Candidate profiles are target/basis signed sums, not new
+   per-token attribution values;
+4. fit candidate-conditioned or within-`C2-W64` occurrence subclusters only when the label-free
+   diagnostics justify them, and preserve unchanged `C2-W64` as the primary state otherwise;
+5. freeze one primary and, only if it passes the same gates, one alternative state before labels;
+6. prepare the matched labeling execution cohort with OpenAI as the iteration provider: Luna for
+   high-volume semantic generation and Terra for rewriting/summarization and the conservative
+   control.  Native batch, telemetry, and a hard cost guard remain required;
+7. after fake-backend tests and a small OpenAI validation show the runtime is free of simple
+   request, parsing, resume, and firewall bugs, run the fixed Transluce simulator on
+   `input_localization_hypothesis`, first on selection and then on audit;
+8. freeze blinded review IDs/forms before review and unblind only after the required decisions;
+9. run the matched Anthropic recipe only as the full provider comparison after the OpenAI path is
+   operational, then decide the evidence-only pilot by the prospectively frozen retained-label,
+   abstention, and loss thresholds.  Candidate text remains exploratory even if the pilot passes.
 
 No model call is authorized directly by the evidence bundle: its manifest deliberately records
 `renderer_frozen=false` and requires the renderer/request cohort to be committed first.
@@ -2681,6 +2694,8 @@ width-only-selected generation witnesses per anchor, the identical witness order
 24 typed prompts, six-significant-digit candidate rendering, and explicit generation-stage
 firewalls. Its unresolved zero-call plan contains 120 Opus semantic requests, 24 Opus rewrites,
 and 24 Terra conservative controls. The frozen Qwen tokenizer counts 383,583 proxy input tokens
-across the 24 serialized prompt payloads. The next gate is therefore item 2 above: resolve exact
-provider IDs, output ceilings, request batching, and the maximum/expected cost for approval. Paid
-API calls and the fixed Transluce scorer remain unlaunched.
+across the 24 serialized prompt payloads.  Those provider-named stage IDs describe the frozen
+historical plan; the additive runtime adapter uses provider-neutral stage IDs and binds the same
+prompt hashes.  The current iteration default is the cheaper OpenAI Luna/Terra recipe.  Anthropic
+remains a deferred matched comparison rather than the debugging path.  Paid API calls and the
+fixed Transluce scorer remain separately approval-gated and unlaunched.

@@ -131,9 +131,10 @@ The identical 96 witness occurrences and order feed both arms. Arm 1 contains no
 signature; arm 2 adds exactly five rank slots and the unclipped rank-aligned signature rendered to
 six significant digits.
 
-The renderer contains 24 logical prompts and a provider/model-unresolved stage plan for 120 Opus
-semantic samples, 24 Opus rewrites, and 24 Terra conservative controls. Rewriters may see only the
-original generation prompt and its five generation-only Opus samples; controls see only the
+The renderer contains 24 logical prompts and a provider/model-unresolved historical stage plan for
+120 semantic samples, 24 rewrites, and 24 conservative controls. Its frozen provider-role labels
+are Opus, Opus, and Terra respectively and are not being rewritten. Rewriters may see only the
+original generation prompt and its five generation-only semantic samples; controls see only the
 original generation prompt. Selection/audit evidence, automatic scores, and held-out measurements
 are forbidden inputs to every generation stage. The manifest records `calls_made=false`.
 
@@ -146,13 +147,25 @@ does not depend on the older scratch worktree remaining present.
 
 The 24 serialized prompt payloads contain 1,170,746 characters. The frozen Qwen tokenizer gives a
 provider-independent proxy of 383,583 input tokens total (12,780--18,944 per logical prompt).
-Provider/model IDs, output-token ceilings, request files, and endpoints remain unresolved pending
-the explicit cost and launch review; no paid API or Transluce call was made at this checkpoint.
+The additive execution adapter uses generic stage identities. OpenAI is the iteration default
+because its current Luna/Terra path is materially cheaper: Luna supplies the high-volume semantic
+samples, while Terra performs rewriting/summarization and the independent conservative control.
+Anthropic remains a matched full-evaluation comparison after fake-backend and small OpenAI
+validation rule out simple request, parsing, resume, and firewall defects. Provider/model IDs,
+output ceilings, request files, and cost bindings live in versioned execution recipes; endpoint
+resolution and every paid submission remain explicit later gates. No paid API or Transluce call
+was made at this checkpoint.
 
 ## Remaining reporting boundary
 
+The next code artifact is a provenance-bound C2/dense-multiplex assessment. It retains all 245 C2
+targets and marks the exact 77-target dense overlap rather than silently inner-joining. Its primary
+measurement grain is target plus signed basis because the candidate profile is a signed sum over
+raw node occurrences; a dense occurrence projection may carry the cluster identity and a foreign
+key to that measurement, but not invent per-token candidate values. It also distinguishes the C2
+`W64` state used by the matched labeling anchors from the separate dense primary 64-cluster state.
+
 The persisted evaluator covers numerical validity, structural metrics, held-out candidate
 coherence, width-one preservation, and conservative labeling readiness. Per-state/per-resolution
-recurrence and phase-concentration tables requested by the protocol are not yet persisted. They
-are non-blocking for the two unchanged-`W` evidence arms, but must be added before describing the
-entire label-free reporting section as complete.
+recurrence, phase/rank concentration, projection coverage, and within-cluster heterogeneity remain
+to be persisted before describing the entire label-free reporting section as complete.
