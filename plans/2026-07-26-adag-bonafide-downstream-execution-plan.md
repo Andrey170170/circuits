@@ -2767,3 +2767,24 @@ launch Transluce selection/audit scoring as if it could repair this decision; an
 is diagnostic only and must retain the same frozen inputs. Do not scale this OpenAI recipe to more
 clusters. Treat an Anthropic or local-Qwen run as a separately motivated model-sensitivity study,
 not as completion of a passing candidate-evidence result.
+
+### 19.4 Candidate identity and recurrence assembly
+
+The next iteration does not add more candidate ranks or relabel the existing five coordinates.
+The completed C2 profiles already store contribution-minus-observed contrasts, and a target-local
+rank-to-token permutation leaves within-target cosine unchanged. The new exploratory test instead
+aligns evidence across targets by exact competitor token, exact observed-to-competitor pair,
+deterministic surface relation, and exact same-basis/same-competitor adjacent-phase recurrence.
+
+Freeze and execute `docs/CANDIDATE_IDENTITY_ALIGNMENT_PROTOCOL.md` before computing any transformed
+value-aware selection metric. `plans/candidate-identity-feasibility-v1.json` records that selection
+target/candidate-set identities and phase-recurrence counts were structurally exposed but
+value-unscored during feasibility; audit
+target metadata was mechanically loaded but not parsed or summarized, and audit candidate values
+and metrics remain closed. Generation alone fits dictionaries and W64 centroids; selection is a
+one-shot decision partition. Prior labels motivated the protocol but are never executable inputs.
+Every variant must beat its support-only control and both joint direction-null comparisons as well
+as the rank-aligned baseline. Run a new matched single-target OpenAI labeling cohort only when
+`T`, `P`, or `SR` passes, using the highest-ranked passer under the frozen rule. An `M` pass
+authorizes only a separately frozen non-billable longitudinal renderer-design step. If no local
+variant passes, make no single-target labeling API calls.
