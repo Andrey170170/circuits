@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -9,11 +11,14 @@ import pytest
 import circuits.analysis.bonafide.candidate_labeling_openai_run as run_module
 from circuits.analysis.bonafide.candidate_labeling_openai_run import (
     build_candidate_openai_cost_plan,
+    check_candidate_openai_batch,
     collect_candidate_openai_batch,
     construct_candidate_openai_rewrites,
     initialize_candidate_openai_run,
     load_candidate_openai_run,
     prepare_candidate_openai_batch,
+    recover_candidate_openai_submission,
+    submit_candidate_openai_batch,
 )
 from circuits.analysis.bonafide.candidate_labeling_renderer import (
     STATUS_ENUM,
@@ -223,18 +228,82 @@ def _initialized(
     return cohort, root
 
 
-def _collect_stage(root: Path, stage: str, provider_path: Path) -> None:
+def _provider_payload(
+    root: Path, stage: str, *, status: str, output_file_id: str | None
+) -> dict[str, object]:
+    run_id = json.loads((root / "run-manifest.json").read_text())["run_manifest_sha256"]
+    return {
+        "schema_version": "adag.labeling.provider-batch.v1",
+        "provider": "openai",
+        "batch_id": f"batch-{stage}",
+        "input_file_id": f"input-{stage}",
+        "endpoint": "/v1/responses",
+        "completion_window": "24h",
+        "metadata": {"run_id": run_id, "stage": stage},
+        "status": status,
+        "output_file_id": output_file_id,
+        "error_file_id": None,
+        "request_counts": None,
+    }
+
+
+def _provider_ready(
+    root: Path,
+    stage: str,
+    provider_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not (root / "cost-plan.json").exists():
+        build_candidate_openai_cost_plan(run_root=root, max_cumulative_cost_usd=10.0)
+    prepare_candidate_openai_batch(run_root=root, stage_id=stage)
+    monkeypatch.setattr(
+        run_module,
+        "submit_openai_batch",
+        lambda *args, **kwargs: _provider_payload(
+            root, stage, status="validating", output_file_id=None
+        ),
+    )
+    submit_candidate_openai_batch(run_root=root, stage_id=stage)
+    monkeypatch.setattr(
+        run_module,
+        "retrieve_batch",
+        lambda *args, **kwargs: _provider_payload(
+            root, stage, status="completed", output_file_id=f"output-{stage}"
+        ),
+    )
+    check_candidate_openai_batch(run_root=root, stage_id=stage)
+    monkeypatch.setattr(
+        run_module,
+        "download_openai_batch_files",
+        lambda *args, **kwargs: (
+            _provider_payload(
+                root, stage, status="completed", output_file_id=f"output-{stage}"
+            ),
+            {
+                "output": {
+                    "file_id": f"output-{stage}",
+                    "content": provider_path.read_bytes(),
+                }
+            },
+        ),
+    )
+
+
+def _collect_stage(
+    root: Path,
+    stage: str,
+    provider_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     run = load_candidate_openai_run(root)
     requests = (
         run.rewrite_requests
         if stage == "semantic_rewrite"
         else tuple(item for item in run.initial_requests if item.stage_id == stage)
     )
-    prepare_candidate_openai_batch(run_root=root, stage_id=stage)
     _write_rows(provider_path, [_provider_row(item) for item in reversed(requests)])
-    collect_candidate_openai_batch(
-        run_root=root, stage_id=stage, provider_files=[provider_path]
-    )
+    _provider_ready(root, stage, provider_path, monkeypatch)
+    collect_candidate_openai_batch(run_root=root, stage_id=stage)
 
 
 def test_paired_smoke_full_synthetic_lifecycle_is_resumable(
@@ -252,12 +321,16 @@ def test_paired_smoke_full_synthetic_lifecycle_is_resumable(
     plan = build_candidate_openai_cost_plan(run_root=root, max_cumulative_cost_usd=1.0)
     assert plan["request_count"] == 14
 
-    _collect_stage(root, "semantic_generation", tmp_path / "semantic.jsonl")
-    _collect_stage(root, "conservative_control", tmp_path / "control.jsonl")
+    _collect_stage(
+        root, "semantic_generation", tmp_path / "semantic.jsonl", monkeypatch
+    )
+    _collect_stage(
+        root, "conservative_control", tmp_path / "control.jsonl", monkeypatch
+    )
     rewrites = construct_candidate_openai_rewrites(run_root=root)
     assert len(rewrites) == 2
     assert all(len(item.required_semantic_request_ids) == 5 for item in rewrites)
-    _collect_stage(root, "semantic_rewrite", tmp_path / "rewrite.jsonl")
+    _collect_stage(root, "semantic_rewrite", tmp_path / "rewrite.jsonl", monkeypatch)
 
     completed = load_candidate_openai_run(root)
     resumed = initialize_candidate_openai_run(
@@ -280,6 +353,151 @@ def test_paired_smoke_full_synthetic_lifecycle_is_resumable(
         ] in {2, 10}
 
 
+def test_submit_requires_cost_plan_and_refuses_duplicate_before_provider_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, root = _initialized(tmp_path, monkeypatch)
+    called = 0
+
+    def submit(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal called
+        called += 1
+        return _provider_payload(
+            root,
+            "conservative_control",
+            status="validating",
+            output_file_id=None,
+        )
+
+    monkeypatch.setattr(run_module, "submit_openai_batch", submit)
+    with pytest.raises(ValueError, match="persisted cost plan"):
+        submit_candidate_openai_batch(run_root=root, stage_id="conservative_control")
+    assert called == 0
+
+    build_candidate_openai_cost_plan(run_root=root, max_cumulative_cost_usd=10.0)
+    submit_candidate_openai_batch(run_root=root, stage_id="conservative_control")
+    assert called == 1
+    with pytest.raises(FileExistsError, match="already been submitted"):
+        submit_candidate_openai_batch(run_root=root, stage_id="conservative_control")
+    assert called == 1
+
+
+def test_same_stage_submission_claim_allows_only_one_provider_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, root = _initialized(tmp_path, monkeypatch)
+    build_candidate_openai_cost_plan(run_root=root, max_cumulative_cost_usd=10.0)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def submit(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        assert release.wait(timeout=10)
+        return _provider_payload(
+            root,
+            "conservative_control",
+            status="validating",
+            output_file_id=None,
+        )
+
+    monkeypatch.setattr(run_module, "submit_openai_batch", submit)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winner = executor.submit(
+            submit_candidate_openai_batch,
+            run_root=root,
+            stage_id="conservative_control",
+        )
+        assert entered.wait(timeout=10)
+        loser = executor.submit(
+            submit_candidate_openai_batch,
+            run_root=root,
+            stage_id="conservative_control",
+        )
+        with pytest.raises(FileExistsError, match="already been submitted"):
+            loser.result(timeout=10)
+        release.set()
+        assert winner.result(timeout=10)["receipt_mode"] == "direct"
+    assert calls == 1
+
+
+def test_intent_only_submission_recovers_only_verified_provider_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, root = _initialized(tmp_path, monkeypatch)
+    build_candidate_openai_cost_plan(run_root=root, max_cumulative_cost_usd=10.0)
+
+    def interrupted(*args: object, **kwargs: object) -> dict[str, object]:
+        raise RuntimeError("lost provider response")
+
+    monkeypatch.setattr(run_module, "submit_openai_batch", interrupted)
+    with pytest.raises(RuntimeError, match="lost provider response"):
+        submit_candidate_openai_batch(run_root=root, stage_id="conservative_control")
+    with pytest.raises(FileExistsError, match="indeterminate submission intent"):
+        submit_candidate_openai_batch(run_root=root, stage_id="conservative_control")
+
+    wrong = _provider_payload(
+        root,
+        "semantic_generation",
+        status="validating",
+        output_file_id=None,
+    )
+    wrong["batch_id"] = "batch-conservative_control"
+    wrong["input_file_id"] = "input-conservative_control"
+    monkeypatch.setattr(run_module, "retrieve_batch", lambda *args, **kwargs: wrong)
+    with pytest.raises(ValueError, match="metadata, endpoint, or window drift"):
+        recover_candidate_openai_submission(
+            run_root=root,
+            stage_id="conservative_control",
+            batch_id="batch-conservative_control",
+        )
+
+    provider = _provider_payload(
+        root,
+        "conservative_control",
+        status="validating",
+        output_file_id=None,
+    )
+    monkeypatch.setattr(run_module, "retrieve_batch", lambda *args, **kwargs: provider)
+    input_bytes = (root / "batches/conservative_control/input.jsonl").read_bytes()
+    monkeypatch.setattr(
+        run_module,
+        "download_openai_file_bytes",
+        lambda *args, **kwargs: input_bytes,
+    )
+    receipt = recover_candidate_openai_submission(
+        run_root=root,
+        stage_id="conservative_control",
+        batch_id="batch-conservative_control",
+    )
+    assert receipt["receipt_mode"] == "recovered"
+    assert receipt["provider_response"]["metadata"]["stage"] == ("conservative_control")
+
+
+def test_rehashed_cross_receipt_tamper_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, root = _initialized(tmp_path, monkeypatch)
+    run = load_candidate_openai_run(root)
+    requests = tuple(
+        item for item in run.initial_requests if item.stage_id == "conservative_control"
+    )
+    provider = tmp_path / "control.jsonl"
+    _write_rows(provider, [_provider_row(item) for item in requests])
+    _provider_ready(root, "conservative_control", provider, monkeypatch)
+    path = root / "provider/conservative_control/status/receipt-0000.json"
+    receipt = json.loads(path.read_text())
+    receipt["submission_sha256"] = "0" * 64
+    receipt.pop("status_sha256")
+    receipt["status_sha256"] = canonical_sha256(receipt)
+    path.write_text(json.dumps(receipt) + "\n")
+
+    with pytest.raises(ValueError, match="status receipt binding drift"):
+        load_candidate_openai_run(root)
+
+
 @pytest.mark.parametrize("failure", ["missing", "duplicate"])
 def test_collect_rejects_missing_or_duplicate_custom_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
@@ -295,18 +513,17 @@ def test_collect_rejects_missing_or_duplicate_custom_ids(
     provider = tmp_path / f"{failure}.jsonl"
     _write_rows(provider, rows)
     with pytest.raises(ValueError, match="identity mismatch|duplicate provider"):
-        collect_candidate_openai_batch(
-            run_root=root,
-            stage_id="conservative_control",
-            provider_files=[provider],
-        )
+        _provider_ready(root, "conservative_control", provider, monkeypatch)
+        collect_candidate_openai_batch(run_root=root, stage_id="conservative_control")
 
 
 def test_partial_events_and_rehashed_cost_telemetry_are_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, root = _initialized(tmp_path, monkeypatch)
-    _collect_stage(root, "conservative_control", tmp_path / "control.jsonl")
+    _collect_stage(
+        root, "conservative_control", tmp_path / "control.jsonl", monkeypatch
+    )
     events_path = root / "collections/conservative_control/events.jsonl"
     original = events_path.read_text()
     rows = [json.loads(line) for line in original.splitlines()]
@@ -360,10 +577,9 @@ def test_provider_error_is_preserved_with_incomplete_cost_telemetry(
         provider,
         [_provider_error_row(requests[0]), _provider_row(requests[1])],
     )
+    _provider_ready(root, "conservative_control", provider, monkeypatch)
     events = collect_candidate_openai_batch(
-        run_root=root,
-        stage_id="conservative_control",
-        provider_files=[provider],
+        run_root=root, stage_id="conservative_control"
     )
     assert events[0].result.validation_status == "provider_error"
     assert events[0].cost.complete is False
@@ -404,6 +620,7 @@ def test_interrupted_stage_writes_do_not_publish_partial_state(
     )
     provider = tmp_path / "interrupted-collection.jsonl"
     _write_rows(provider, [_provider_row(item) for item in requests])
+    _provider_ready(root, "conservative_control", provider, monkeypatch)
 
     def interrupted_manifest(*args: object, **kwargs: object) -> None:
         raise RuntimeError("fixture collection interruption")
@@ -413,7 +630,6 @@ def test_interrupted_stage_writes_do_not_publish_partial_state(
         collect_candidate_openai_batch(
             run_root=root,
             stage_id="conservative_control",
-            provider_files=[provider],
         )
     assert not (root / "collections/conservative_control").exists()
     assert load_candidate_openai_run(root).events == ()
@@ -432,9 +648,8 @@ def test_malformed_semantic_output_blocks_rewrite_construction(
     rows[0] = _provider_row(requests[0], text="not-json")
     provider = tmp_path / "malformed.jsonl"
     _write_rows(provider, rows)
-    collect_candidate_openai_batch(
-        run_root=root, stage_id="semantic_generation", provider_files=[provider]
-    )
+    _provider_ready(root, "semantic_generation", provider, monkeypatch)
+    collect_candidate_openai_batch(run_root=root, stage_id="semantic_generation")
     with pytest.raises(ValueError, match="five successful outputs"):
         construct_candidate_openai_rewrites(run_root=root)
 
@@ -443,7 +658,9 @@ def test_loader_reconstructs_rewrite_hash_and_raw_result_bindings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, root = _initialized(tmp_path, monkeypatch)
-    _collect_stage(root, "semantic_generation", tmp_path / "semantic.jsonl")
+    _collect_stage(
+        root, "semantic_generation", tmp_path / "semantic.jsonl", monkeypatch
+    )
     construct_candidate_openai_rewrites(run_root=root)
     rewrite_path = root / "rewrite-requests.jsonl"
     rows = [json.loads(line) for line in rewrite_path.read_text().splitlines()]

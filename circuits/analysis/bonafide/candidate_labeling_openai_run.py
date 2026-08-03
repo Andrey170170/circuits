@@ -1,4 +1,4 @@
-"""Resumable, non-submitting OpenAI Batch lifecycle for candidate labeling."""
+"""Resumable, receipt-bound OpenAI Batch lifecycle for candidate labeling."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,6 +37,12 @@ from circuits.analysis.bonafide.canonical import (
     file_sha256,
     load_json_object,
 )
+from circuits.labeling.batch import (
+    download_openai_batch_files,
+    download_openai_file_bytes,
+    retrieve_batch,
+    submit_openai_batch,
+)
 from circuits.labeling.io import (
     atomic_write_bytes,
     atomic_write_json,
@@ -50,6 +57,12 @@ COST_PLAN_SCHEMA = "adag.bonafide.candidate-labeling-openai-cost-plan.v1"
 COLLECTION_SCHEMA = "adag.bonafide.candidate-labeling-openai-collection.v1"
 EVENT_SCHEMA = "adag.bonafide.candidate-labeling-openai-event.v1"
 SELECTION_SCHEMA = "adag.bonafide.candidate-labeling-openai-selection.v1"
+SUBMISSION_INTENT_SCHEMA = (
+    "adag.bonafide.candidate-labeling-openai-submission-intent.v1"
+)
+SUBMISSION_SCHEMA = "adag.bonafide.candidate-labeling-openai-submission.v1"
+STATUS_SCHEMA = "adag.bonafide.candidate-labeling-openai-status.v1"
+DOWNLOAD_SCHEMA = "adag.bonafide.candidate-labeling-openai-download.v1"
 
 RUN_MANIFEST_FILE = "run-manifest.json"
 COST_PLAN_FILE = "cost-plan.json"
@@ -73,6 +86,7 @@ _SOURCE_BINDINGS = {
     ),
     "bonafide_canonical": "circuits/analysis/bonafide/canonical.py",
     "labeling_api": "circuits/labeling/api.py",
+    "labeling_batch": "circuits/labeling/batch.py",
     "labeling_io": "circuits/labeling/io.py",
     "labeling_pricing": "circuits/labeling/pricing.py",
     "labeling_schema": "circuits/labeling/schema.py",
@@ -308,7 +322,7 @@ def initialize_candidate_openai_run(
     expected = _self_hashed(
         {
             "schema_version": RUN_SCHEMA,
-            "purpose": "non_submitting_resumable_openai_native_batch_evaluation",
+            "purpose": "receipt_bound_resumable_openai_native_batch_evaluation",
             "source_cohort_root": str(cohort.root),
             "source_cohort_manifest_sha256": cohort.manifest["manifest_sha256"],
             "source_cohort_manifest_file_sha256": file_sha256(
@@ -322,9 +336,10 @@ def initialize_candidate_openai_run(
             "total_request_count_planned": len(requests) + len(dependencies),
             "generation_only": True,
             "selection_audit_visible": False,
-            "provider_submission_implemented": False,
-            "provider_calls_performed_by_runtime": False,
+            "provider_submission_implemented": True,
+            "provider_calls_supported_by_runtime": True,
             "provider_output_collection_supported": True,
+            "provider_receipt_required_for_collection": True,
         },
         "run_manifest_sha256",
     )
@@ -534,6 +549,580 @@ def build_candidate_openai_cost_plan(
     return expected
 
 
+def _required_cost_plan(run: LoadedCandidateOpenAIRun) -> Mapping[str, Any]:
+    path = run.root / COST_PLAN_FILE
+    if not path.is_file():
+        raise ValueError("provider submission requires a persisted cost plan")
+    _validate_cost_plan(run)
+    return load_json_object(path)
+
+
+def _role_for_stage(run: LoadedCandidateOpenAIRun, stage_id: str) -> Any:
+    role_name = {
+        "semantic_generation": "semantic_generator",
+        "conservative_control": "conservative_control",
+        "semantic_rewrite": "semantic_rewriter",
+    }.get(stage_id)
+    if role_name is None:
+        raise ValueError(f"unsupported stage: {stage_id}")
+    return getattr(run.cohort.config, role_name)
+
+
+def _provider_stage_root(root: Path, stage_id: str) -> Path:
+    return root / "provider" / stage_id
+
+
+def _submission_intent_payload(
+    run: LoadedCandidateOpenAIRun,
+    stage_id: str,
+    requests: Sequence[CandidateBatchRequest],
+    cost_plan: Mapping[str, Any],
+    *,
+    created_at: str,
+) -> dict[str, Any]:
+    input_path, input_manifest_path = _batch_paths(run.root, stage_id)
+    input_manifest = load_json_object(input_manifest_path)
+    return {
+        "schema_version": SUBMISSION_INTENT_SCHEMA,
+        "run_manifest_sha256": run.manifest["run_manifest_sha256"],
+        "cost_plan_sha256": cost_plan["cost_plan_sha256"],
+        "stage_id": stage_id,
+        "provider": "openai",
+        "endpoint": "/v1/responses",
+        "completion_window": "24h",
+        "model": requests[0].model,
+        "request_count": len(requests),
+        "request_bindings_in_order": [
+            {"request_id": item.request_id, "request_sha256": item.request_sha256}
+            for item in requests
+        ],
+        "batch_input_file": input_path.relative_to(run.root).as_posix(),
+        "batch_input_file_sha256": file_sha256(input_path),
+        "batch_input_manifest_file_sha256": file_sha256(input_manifest_path),
+        "batch_input_manifest_sha256": input_manifest["manifest_sha256"],
+        "created_at": created_at,
+    }
+
+
+def _load_submission_intent(
+    run: LoadedCandidateOpenAIRun, stage_id: str
+) -> Mapping[str, Any] | None:
+    path = _provider_stage_root(run.root, stage_id) / "submission-intent.json"
+    if not path.exists():
+        return None
+    value = load_json_object(path)
+    _verify_self_hash(value, "intent_sha256", f"submission intent {stage_id}")
+    created_at = value.get("created_at")
+    if not isinstance(created_at, str) or not created_at:
+        raise ValueError(f"submission intent timestamp is malformed: {stage_id}")
+    requests = _stage_requests(run, stage_id)
+    if not requests:
+        raise ValueError(f"submission intent exists without requests: {stage_id}")
+    cost_plan = _required_cost_plan(run)
+    expected = _self_hashed(
+        _submission_intent_payload(
+            run, stage_id, requests, cost_plan, created_at=created_at
+        ),
+        "intent_sha256",
+    )
+    if value != expected:
+        raise ValueError(f"submission intent binding drift: {stage_id}")
+    return value
+
+
+def _validate_provider_batch_payload(value: Any, *, batch_id: str | None) -> None:
+    if (
+        not isinstance(value, Mapping)
+        or value.get("schema_version") != "adag.labeling.provider-batch.v1"
+        or value.get("provider") != "openai"
+        or not isinstance(value.get("batch_id"), str)
+        or not value["batch_id"]
+        or (batch_id is not None and value["batch_id"] != batch_id)
+        or not isinstance(value.get("status"), str)
+        or not value["status"]
+    ):
+        raise ValueError("OpenAI provider batch payload is malformed")
+    for field in ("input_file_id", "output_file_id", "error_file_id"):
+        item = value.get(field)
+        if item is not None and (not isinstance(item, str) or not item):
+            raise ValueError(f"OpenAI provider batch {field} is malformed")
+    if value.get("endpoint") not in (None, "/v1/responses"):
+        raise ValueError("OpenAI provider batch endpoint drift")
+    if value.get("completion_window") not in (None, "24h"):
+        raise ValueError("OpenAI provider batch completion window drift")
+    if not isinstance(value.get("metadata"), Mapping):
+        raise TypeError("OpenAI provider batch metadata is malformed")
+
+
+def _expected_provider_metadata(
+    run: LoadedCandidateOpenAIRun, stage_id: str
+) -> dict[str, str]:
+    return {
+        "run_id": str(run.manifest["run_manifest_sha256"]),
+        "stage": stage_id,
+    }
+
+
+def _load_submission(
+    run: LoadedCandidateOpenAIRun, stage_id: str
+) -> Mapping[str, Any] | None:
+    stage_root = _provider_stage_root(run.root, stage_id)
+    path = stage_root / "submission.json"
+    intent = _load_submission_intent(run, stage_id)
+    if not path.exists():
+        return None
+    if intent is None:
+        raise ValueError(f"submission exists without intent: {stage_id}")
+    value = load_json_object(path)
+    _verify_self_hash(value, "submission_sha256", f"submission {stage_id}")
+    provider = value.get("provider_response")
+    _validate_provider_batch_payload(provider, batch_id=None)
+    input_path, input_manifest_path = _batch_paths(run.root, stage_id)
+    if (
+        value.get("schema_version") != SUBMISSION_SCHEMA
+        or value.get("run_manifest_sha256") != run.manifest["run_manifest_sha256"]
+        or value.get("cost_plan_sha256") != intent["cost_plan_sha256"]
+        or value.get("intent_sha256") != intent["intent_sha256"]
+        or value.get("stage_id") != stage_id
+        or value.get("provider") != "openai"
+        or value.get("endpoint") != "/v1/responses"
+        or value.get("completion_window") != "24h"
+        or value.get("model") != intent["model"]
+        or value.get("batch_input_file_sha256") != file_sha256(input_path)
+        or value.get("batch_input_manifest_file_sha256")
+        != file_sha256(input_manifest_path)
+        or value.get("batch_id") != provider["batch_id"]
+        or value.get("input_file_id") != provider["input_file_id"]
+        or value.get("status_at_submission") != provider["status"]
+        or provider.get("endpoint") != "/v1/responses"
+        or provider.get("completion_window") != "24h"
+        or provider.get("metadata") != _expected_provider_metadata(run, stage_id)
+        or value.get("receipt_mode") not in ("direct", "recovered")
+        or not isinstance(value.get("receipt_created_at"), str)
+    ):
+        raise ValueError(f"submission receipt binding drift: {stage_id}")
+    if not isinstance(value.get("input_file_id"), str) or not value["input_file_id"]:
+        raise ValueError(f"submission input file id is missing: {stage_id}")
+    return value
+
+
+def _persist_submission_receipt(
+    run: LoadedCandidateOpenAIRun,
+    stage_id: str,
+    intent: Mapping[str, Any],
+    provider: Mapping[str, Any],
+    *,
+    receipt_mode: Literal["direct", "recovered"],
+) -> Mapping[str, Any]:
+    _validate_provider_batch_payload(provider, batch_id=None)
+    if (
+        not isinstance(provider.get("input_file_id"), str)
+        or not provider["input_file_id"]
+    ):
+        raise ValueError("OpenAI submission did not return an input file id")
+    if (
+        provider.get("endpoint") != "/v1/responses"
+        or provider.get("completion_window") != "24h"
+        or provider.get("metadata") != _expected_provider_metadata(run, stage_id)
+    ):
+        raise ValueError("OpenAI submission metadata, endpoint, or window drift")
+    requests = _stage_requests(run, stage_id)
+    input_path, input_manifest_path = _batch_paths(run.root, stage_id)
+    submission = _self_hashed(
+        {
+            "schema_version": SUBMISSION_SCHEMA,
+            "run_manifest_sha256": run.manifest["run_manifest_sha256"],
+            "cost_plan_sha256": intent["cost_plan_sha256"],
+            "intent_sha256": intent["intent_sha256"],
+            "stage_id": stage_id,
+            "provider": "openai",
+            "endpoint": "/v1/responses",
+            "completion_window": "24h",
+            "model": requests[0].model,
+            "batch_input_file_sha256": file_sha256(input_path),
+            "batch_input_manifest_file_sha256": file_sha256(input_manifest_path),
+            "batch_id": provider["batch_id"],
+            "input_file_id": provider["input_file_id"],
+            "status_at_submission": provider["status"],
+            "provider_response": dict(provider),
+            "receipt_mode": receipt_mode,
+            "receipt_created_at": datetime.now(UTC).isoformat(),
+        },
+        "submission_sha256",
+    )
+    atomic_write_json(
+        _provider_stage_root(run.root, stage_id) / "submission.json", submission
+    )
+    return submission
+
+
+def submit_candidate_openai_batch(
+    *, run_root: Path, stage_id: str, verify_sources: bool = True
+) -> Mapping[str, Any]:
+    """Submit one prepared stage exactly once, after persisting an intent guard."""
+
+    run = load_candidate_openai_run(run_root, verify_sources=verify_sources)
+    requests = _stage_requests(run, stage_id)
+    if not requests:
+        raise ValueError(f"run has no constructed requests for {stage_id}")
+    cost_plan = _required_cost_plan(run)
+    prepare_candidate_openai_batch(
+        run_root=run.root, stage_id=stage_id, verify_sources=verify_sources
+    )
+    stage_root = _provider_stage_root(run.root, stage_id)
+    stage_root.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        # mkdir is the cross-process exclusive claim. No provider call may occur
+        # before this contender owns the stage directory and persists its intent.
+        stage_root.mkdir()
+    except FileExistsError as error:
+        raise FileExistsError(
+            f"provider stage has already been submitted or has an indeterminate "
+            f"submission intent: {stage_id}"
+        ) from error
+    intent_path = stage_root / "submission-intent.json"
+    created_at = datetime.now(UTC).isoformat()
+    intent = _self_hashed(
+        _submission_intent_payload(
+            run, stage_id, requests, cost_plan, created_at=created_at
+        ),
+        "intent_sha256",
+    )
+    # The durable intent is deliberately written before the external call. If the
+    # process dies, a retry fails closed instead of creating a duplicate batch.
+    atomic_write_json(intent_path, intent)
+    role = _role_for_stage(run, stage_id)
+    key_env = role.api_key_env or "OPENAI_API_KEY"
+    input_path, _ = _batch_paths(run.root, stage_id)
+    provider = submit_openai_batch(
+        input_path,
+        run_id=str(run.manifest["run_manifest_sha256"]),
+        stage=stage_id,
+        key_env=key_env,
+    )
+    return _persist_submission_receipt(
+        run, stage_id, intent, provider, receipt_mode="direct"
+    )
+
+
+def recover_candidate_openai_submission(
+    *,
+    run_root: Path,
+    stage_id: str,
+    batch_id: str,
+    verify_sources: bool = True,
+) -> Mapping[str, Any]:
+    """Recover an intent-only stage by proving the supplied provider batch identity."""
+
+    if not batch_id:
+        raise ValueError("recovery requires a non-empty OpenAI batch id")
+    run = load_candidate_openai_run(run_root, verify_sources=verify_sources)
+    intent = _load_submission_intent(run, stage_id)
+    if intent is None:
+        raise ValueError(f"recovery requires a persisted submission intent: {stage_id}")
+    if _load_submission(run, stage_id) is not None:
+        raise FileExistsError(f"submission receipt already exists: {stage_id}")
+    role = _role_for_stage(run, stage_id)
+    provider = retrieve_batch("openai", batch_id, role)
+    _validate_provider_batch_payload(provider, batch_id=batch_id)
+    input_file_id = provider.get("input_file_id")
+    if not isinstance(input_file_id, str) or not input_file_id:
+        raise ValueError("recovery batch lacks an input file id")
+    if (
+        provider.get("endpoint") != "/v1/responses"
+        or provider.get("completion_window") != "24h"
+        or provider.get("metadata") != _expected_provider_metadata(run, stage_id)
+    ):
+        raise ValueError("recovery batch metadata, endpoint, or window drift")
+    key_env = role.api_key_env or "OPENAI_API_KEY"
+    provider_input = download_openai_file_bytes(input_file_id, key_env=key_env)
+    input_path, _ = _batch_paths(run.root, stage_id)
+    if provider_input != input_path.read_bytes():
+        raise ValueError("recovery batch input file content does not match local input")
+    return _persist_submission_receipt(
+        run, stage_id, intent, provider, receipt_mode="recovered"
+    )
+
+
+def _load_status_receipts(
+    run: LoadedCandidateOpenAIRun, stage_id: str
+) -> tuple[Mapping[str, Any], ...]:
+    status_root = _provider_stage_root(run.root, stage_id) / "status"
+    if not status_root.exists():
+        return ()
+    submission = _load_submission(run, stage_id)
+    if submission is None:
+        raise ValueError(f"status exists without submission: {stage_id}")
+    paths = sorted(status_root.glob("receipt-*.json"))
+    if {path.name for path in paths} != {path.name for path in status_root.iterdir()}:
+        raise ValueError(f"status receipt inventory drift: {stage_id}")
+    values = []
+    previous_sha256: str | None = None
+    for sequence, path in enumerate(paths):
+        if path.name != f"receipt-{sequence:04d}.json":
+            raise ValueError(f"status receipt sequence drift: {stage_id}")
+        value = load_json_object(path)
+        _verify_self_hash(value, "status_sha256", f"status receipt {stage_id}")
+        provider = value.get("provider_response")
+        _validate_provider_batch_payload(provider, batch_id=submission["batch_id"])
+        if (
+            value.get("schema_version") != STATUS_SCHEMA
+            or value.get("run_manifest_sha256") != run.manifest["run_manifest_sha256"]
+            or value.get("stage_id") != stage_id
+            or value.get("submission_sha256") != submission["submission_sha256"]
+            or value.get("sequence") != sequence
+            or value.get("previous_status_sha256") != previous_sha256
+            or value.get("batch_id") != submission["batch_id"]
+            or value.get("input_file_id") != submission["input_file_id"]
+            or value.get("provider_status") != provider["status"]
+            or value.get("output_file_id") != provider.get("output_file_id")
+            or value.get("error_file_id") != provider.get("error_file_id")
+            or provider.get("endpoint") != "/v1/responses"
+            or provider.get("completion_window") != "24h"
+            or provider.get("metadata") != _expected_provider_metadata(run, stage_id)
+            or not isinstance(value.get("checked_at"), str)
+        ):
+            raise ValueError(f"status receipt binding drift: {stage_id}")
+        provider_input = provider.get("input_file_id")
+        if provider_input is not None and provider_input != submission["input_file_id"]:
+            raise ValueError(f"status input file binding drift: {stage_id}")
+        values.append(value)
+        previous_sha256 = value["status_sha256"]
+    return tuple(values)
+
+
+def check_candidate_openai_batch(
+    *, run_root: Path, stage_id: str, verify_sources: bool = True
+) -> Mapping[str, Any]:
+    """Retrieve and persist a hash-chained provider status receipt."""
+
+    run = load_candidate_openai_run(run_root, verify_sources=verify_sources)
+    submission = _load_submission(run, stage_id)
+    if submission is None:
+        raise ValueError(f"provider stage has not been submitted: {stage_id}")
+    previous = _load_status_receipts(run, stage_id)
+    role = _role_for_stage(run, stage_id)
+    provider = retrieve_batch("openai", submission["batch_id"], role)
+    _validate_provider_batch_payload(provider, batch_id=submission["batch_id"])
+    if (
+        provider.get("endpoint") != "/v1/responses"
+        or provider.get("completion_window") != "24h"
+        or provider.get("metadata") != _expected_provider_metadata(run, stage_id)
+    ):
+        raise ValueError("OpenAI status endpoint or completion window drift")
+    provider_input = provider.get("input_file_id")
+    if provider_input is not None and provider_input != submission["input_file_id"]:
+        raise ValueError("OpenAI status returned a different input file id")
+    sequence = len(previous)
+    receipt = _self_hashed(
+        {
+            "schema_version": STATUS_SCHEMA,
+            "run_manifest_sha256": run.manifest["run_manifest_sha256"],
+            "stage_id": stage_id,
+            "submission_sha256": submission["submission_sha256"],
+            "sequence": sequence,
+            "previous_status_sha256": (
+                previous[-1]["status_sha256"] if previous else None
+            ),
+            "batch_id": submission["batch_id"],
+            "input_file_id": submission["input_file_id"],
+            "provider_status": provider["status"],
+            "output_file_id": provider.get("output_file_id"),
+            "error_file_id": provider.get("error_file_id"),
+            "provider_response": dict(provider),
+            "checked_at": datetime.now(UTC).isoformat(),
+        },
+        "status_sha256",
+    )
+    atomic_write_json(
+        _provider_stage_root(run.root, stage_id)
+        / "status"
+        / f"receipt-{sequence:04d}.json",
+        receipt,
+    )
+    return receipt
+
+
+def _load_download_receipt(
+    run: LoadedCandidateOpenAIRun, stage_id: str
+) -> Mapping[str, Any] | None:
+    download_root = _provider_stage_root(run.root, stage_id) / "download"
+    if not download_root.exists():
+        return None
+    receipt_path = download_root / "receipt.json"
+    if not receipt_path.is_file():
+        raise ValueError(f"partial provider download: {stage_id}")
+    submission = _load_submission(run, stage_id)
+    statuses = _load_status_receipts(run, stage_id)
+    if submission is None:
+        raise ValueError(f"download exists without submission: {stage_id}")
+    value = load_json_object(receipt_path)
+    _verify_self_hash(value, "download_sha256", f"provider download {stage_id}")
+    provider = value.get("provider_response")
+    _validate_provider_batch_payload(provider, batch_id=submission["batch_id"])
+    status_by_sha = {item["status_sha256"]: item for item in statuses}
+    status = status_by_sha.get(value.get("status_sha256"))
+    if status is None or status["provider_status"] != "completed":
+        raise ValueError(f"download lacks a completed status receipt: {stage_id}")
+    if (
+        value.get("schema_version") != DOWNLOAD_SCHEMA
+        or value.get("run_manifest_sha256") != run.manifest["run_manifest_sha256"]
+        or value.get("stage_id") != stage_id
+        or value.get("submission_sha256") != submission["submission_sha256"]
+        or value.get("batch_id") != submission["batch_id"]
+        or value.get("input_file_id") != submission["input_file_id"]
+        or provider.get("status") != "completed"
+        or provider.get("endpoint") != "/v1/responses"
+        or provider.get("completion_window") != "24h"
+        or provider.get("metadata") != _expected_provider_metadata(run, stage_id)
+        or provider.get("output_file_id") != status["output_file_id"]
+        or provider.get("error_file_id") != status["error_file_id"]
+        or provider.get("input_file_id") not in (None, submission["input_file_id"])
+        or not isinstance(value.get("downloaded_at"), str)
+    ):
+        raise ValueError(f"provider download receipt binding drift: {stage_id}")
+    files = value.get("files")
+    if not isinstance(files, Mapping) or not files:
+        raise ValueError(f"provider download file receipt is malformed: {stage_id}")
+    expected_kinds = {
+        kind
+        for kind, file_id in (
+            ("output", status["output_file_id"]),
+            ("error", status["error_file_id"]),
+        )
+        if file_id is not None
+    }
+    if set(files) != expected_kinds:
+        raise ValueError(f"provider download file set drift: {stage_id}")
+    expected_paths = {receipt_path.resolve()}
+    for kind, record in files.items():
+        if not isinstance(record, Mapping):
+            raise TypeError(f"provider download file receipt is malformed: {stage_id}")
+        relative = f"provider/{stage_id}/download/{kind}.jsonl"
+        path = run.root / relative
+        if (
+            record.get("file_id") != status[f"{kind}_file_id"]
+            or record.get("path") != relative
+            or not path.is_file()
+            or record.get("sha256") != file_sha256(path)
+            or record.get("size_bytes") != path.stat().st_size
+        ):
+            raise ValueError(f"provider {kind} download file drift: {stage_id}")
+        expected_paths.add(path.resolve())
+    actual_paths = {path.resolve() for path in download_root.iterdir()}
+    if actual_paths != expected_paths:
+        raise ValueError(f"provider download inventory drift: {stage_id}")
+    return value
+
+
+def collect_candidate_openai_batch(
+    *, run_root: Path, stage_id: str, verify_sources: bool = True
+) -> tuple[CandidateOpenAIBatchEvent, ...]:
+    """Download, receipt, and scientifically collect one completed provider stage."""
+
+    run = load_candidate_openai_run(run_root, verify_sources=verify_sources)
+    submission = _load_submission(run, stage_id)
+    statuses = _load_status_receipts(run, stage_id)
+    if submission is None:
+        raise ValueError(f"provider stage has not been submitted: {stage_id}")
+    completed = [item for item in statuses if item["provider_status"] == "completed"]
+    if not completed:
+        raise ValueError(f"provider stage lacks a completed status receipt: {stage_id}")
+    status = completed[-1]
+    download = _load_download_receipt(run, stage_id)
+    if download is None:
+        role = _role_for_stage(run, stage_id)
+        key_env = role.api_key_env or "OPENAI_API_KEY"
+        provider, raw_files = download_openai_batch_files(
+            submission["batch_id"], key_env=key_env
+        )
+        _validate_provider_batch_payload(provider, batch_id=submission["batch_id"])
+        if (
+            provider.get("status") != "completed"
+            or provider.get("endpoint") != "/v1/responses"
+            or provider.get("completion_window") != "24h"
+            or provider.get("metadata") != _expected_provider_metadata(run, stage_id)
+            or provider.get("input_file_id") not in (None, submission["input_file_id"])
+            or provider.get("output_file_id") != status["output_file_id"]
+            or provider.get("error_file_id") != status["error_file_id"]
+        ):
+            raise ValueError(
+                "OpenAI download state does not match completed status receipt"
+            )
+        expected_kinds = {
+            kind
+            for kind, file_id in (
+                ("output", status["output_file_id"]),
+                ("error", status["error_file_id"]),
+            )
+            if file_id is not None
+        }
+        if set(raw_files) != expected_kinds:
+            raise ValueError("OpenAI download returned a different provider file set")
+        provider_stage_root = _provider_stage_root(run.root, stage_id)
+        provider_stage_root.mkdir(parents=True, exist_ok=True)
+        download_root = provider_stage_root / "download"
+        temporary = Path(tempfile.mkdtemp(prefix=".download.", dir=provider_stage_root))
+        try:
+            records = {}
+            for kind in ("output", "error"):
+                if kind not in raw_files:
+                    continue
+                item = raw_files[kind]
+                content = item.get("content")
+                if not isinstance(content, bytes):
+                    raise TypeError(f"OpenAI {kind} file content must be bytes")
+                if item.get("file_id") != status[f"{kind}_file_id"]:
+                    raise ValueError(f"OpenAI {kind} file id drift")
+                raw_path = temporary / f"{kind}.jsonl"
+                atomic_write_bytes(raw_path, content)
+                records[kind] = {
+                    "file_id": item["file_id"],
+                    "path": f"provider/{stage_id}/download/{kind}.jsonl",
+                    "sha256": file_sha256(raw_path),
+                    "size_bytes": len(content),
+                }
+            receipt = _self_hashed(
+                {
+                    "schema_version": DOWNLOAD_SCHEMA,
+                    "run_manifest_sha256": run.manifest["run_manifest_sha256"],
+                    "stage_id": stage_id,
+                    "submission_sha256": submission["submission_sha256"],
+                    "status_sha256": status["status_sha256"],
+                    "batch_id": submission["batch_id"],
+                    "input_file_id": submission["input_file_id"],
+                    "provider_response": dict(provider),
+                    "files": records,
+                    "downloaded_at": datetime.now(UTC).isoformat(),
+                },
+                "download_sha256",
+            )
+            atomic_write_json(temporary / "receipt.json", receipt)
+            if download_root.exists():
+                raise FileExistsError(
+                    f"provider download appeared concurrently: {stage_id}"
+                )
+            temporary.replace(download_root)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+        download = _load_download_receipt(run, stage_id)
+        if download is None:
+            raise AssertionError("provider download receipt was not persisted")
+    provider_files = [
+        run.root / download["files"][kind]["path"]
+        for kind in ("output", "error")
+        if kind in download["files"]
+    ]
+    return _collect_candidate_openai_batch_files(
+        run_root=run.root,
+        stage_id=stage_id,
+        provider_files=provider_files,
+        download_receipt=download,
+        verify_sources=verify_sources,
+    )
+
+
 def _read_provider_rows(paths: Sequence[Path]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in paths:
@@ -541,18 +1130,22 @@ def _read_provider_rows(paths: Sequence[Path]) -> list[dict[str, Any]]:
     return rows
 
 
-def collect_candidate_openai_batch(
+def _collect_candidate_openai_batch_files(
     *,
     run_root: Path,
     stage_id: str,
     provider_files: Sequence[Path],
+    download_receipt: Mapping[str, Any],
     verify_sources: bool = True,
 ) -> tuple[CandidateOpenAIBatchEvent, ...]:
-    """Collect exact local output/error JSONL for one fully complete stage."""
+    """Parse already archived provider files behind a validated receipt."""
 
     if not provider_files:
         raise ValueError("at least one provider output/error file is required")
     run = load_candidate_openai_run(run_root, verify_sources=verify_sources)
+    persisted_download = _load_download_receipt(run, stage_id)
+    if persisted_download is None or dict(download_receipt) != persisted_download:
+        raise ValueError(f"provider download receipt is required: {stage_id}")
     prepare_candidate_openai_batch(
         run_root=run.root, stage_id=stage_id, verify_sources=verify_sources
     )
@@ -623,8 +1216,22 @@ def collect_candidate_openai_batch(
     result_path = write_root / "events.jsonl"
     collection_path = write_root / "collection-manifest.json"
     raw_bindings = []
-    for index, source in enumerate(provider_files):
+    provider_file_records = download_receipt["files"]
+    provider_order = [
+        item for item in ("output", "error") if item in provider_file_records
+    ]
+    if len(provider_files) != len(provider_order):
+        raise ValueError(f"provider download file inventory drift: {stage_id}")
+    for index, (provider_kind, source) in enumerate(
+        zip(provider_order, provider_files, strict=True)
+    ):
         source = source.resolve()
+        provider_record = provider_file_records[provider_kind]
+        if (
+            source != (run.root / provider_record["path"]).resolve()
+            or file_sha256(source) != provider_record["sha256"]
+        ):
+            raise ValueError(f"provider download file binding drift: {stage_id}")
         raw_path = write_root / "raw" / f"provider-{index:02d}.jsonl"
         content = source.read_bytes()
         if raw_path.exists():
@@ -635,6 +1242,8 @@ def collect_candidate_openai_batch(
         raw_bindings.append(
             {
                 "source_path": str(source),
+                "provider_file_kind": provider_kind,
+                "provider_file_id": provider_record["file_id"],
                 "preserved_path": (
                     Path("collections")
                     / stage_id
@@ -667,6 +1276,9 @@ def collect_candidate_openai_batch(
             ],
             "batch_input_file_sha256": file_sha256(input_path),
             "batch_input_manifest_sha256": file_sha256(input_manifest_path),
+            "provider_submission_sha256": download_receipt["submission_sha256"],
+            "provider_status_sha256": download_receipt["status_sha256"],
+            "provider_download_sha256": download_receipt["download_sha256"],
             "raw_provider_files": raw_bindings,
             "events_file": (Path("collections") / stage_id / "events.jsonl").as_posix(),
             "events_file_sha256": file_sha256(result_path),
@@ -836,6 +1448,9 @@ def _validate_collection_stage(
 
     manifest = load_json_object(manifest_path)
     _verify_self_hash(manifest, "collection_sha256", f"collection {stage_id}")
+    download = _load_download_receipt(run, stage_id)
+    if download is None:
+        raise ValueError(f"collection lacks provider download receipt: {stage_id}")
     raw_bindings = manifest.get("raw_provider_files")
     if not isinstance(raw_bindings, list) or not raw_bindings:
         raise ValueError(f"collection raw provider binding is malformed: {stage_id}")
@@ -845,8 +1460,22 @@ def _validate_collection_stage(
         if not isinstance(binding, Mapping):
             raise TypeError(f"collection raw provider binding is malformed: {stage_id}")
         expected_relative = f"collections/{stage_id}/raw/provider-{index:02d}.jsonl"
+        provider_order = [
+            kind for kind in ("output", "error") if kind in download["files"]
+        ]
+        if index >= len(provider_order):
+            raise ValueError(f"collection provider file inventory drift: {stage_id}")
+        provider_kind = provider_order[index]
+        provider_record = download["files"][provider_kind]
         if binding.get("preserved_path") != expected_relative:
             raise ValueError(f"collection raw provider path drift: {stage_id}")
+        if (
+            binding.get("source_path")
+            != str((run.root / provider_record["path"]).resolve())
+            or binding.get("provider_file_kind") != provider_kind
+            or binding.get("provider_file_id") != provider_record["file_id"]
+        ):
+            raise ValueError(f"collection provider receipt binding drift: {stage_id}")
         raw_path = run.root / expected_relative
         if (
             not raw_path.is_file()
@@ -891,6 +1520,9 @@ def _validate_collection_stage(
             ],
             "batch_input_file_sha256": file_sha256(input_path),
             "batch_input_manifest_sha256": file_sha256(input_manifest_path),
+            "provider_submission_sha256": download["submission_sha256"],
+            "provider_status_sha256": download["status_sha256"],
+            "provider_download_sha256": download["download_sha256"],
             "raw_provider_files": [dict(item) for item in raw_bindings],
             "events_file": result_path.relative_to(run.root).as_posix(),
             "events_file_sha256": file_sha256(result_path),
@@ -935,9 +1567,10 @@ def load_candidate_openai_run(
         manifest.get("schema_version") != RUN_SCHEMA
         or manifest.get("generation_only") is not True
         or manifest.get("selection_audit_visible") is not False
-        or manifest.get("provider_submission_implemented") is not False
-        or manifest.get("provider_calls_performed_by_runtime") is not False
+        or manifest.get("provider_submission_implemented") is not True
+        or manifest.get("provider_calls_supported_by_runtime") is not True
         or manifest.get("provider_output_collection_supported") is not True
+        or manifest.get("provider_receipt_required_for_collection") is not True
     ):
         raise ValueError("OpenAI run contract drift")
     _validate_execution_revision(
@@ -1002,6 +1635,11 @@ def load_candidate_openai_run(
         rewrite_requests=rewrite_requests,
         events=(),
     )
+    for stage in STAGES:
+        _load_submission_intent(run, stage)
+        _load_submission(run, stage)
+        _load_status_receipts(run, stage)
+        _load_download_receipt(run, stage)
     collected: list[CandidateOpenAIBatchEvent] = []
     for stage in ("semantic_generation", "conservative_control"):
         stage_requests = _stage_requests(run, stage)

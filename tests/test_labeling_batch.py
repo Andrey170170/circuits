@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from circuits.analysis.bonafide.canonical import file_sha256
-from circuits.labeling.batch import collect_openai_batch
+from circuits.labeling.batch import collect_openai_batch, submit_openai_batch
 from circuits.labeling.batch_runtime import (
     _archive_openai_batch_files,
     _validate_or_absent_result_pair,
@@ -117,6 +117,55 @@ def _jsonl(*rows: dict[str, object]) -> bytes:
     return ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
 
 
+def test_openai_submit_uses_required_batch_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    input_path = tmp_path / "input.jsonl"
+    input_path.write_bytes(b'{"custom_id":"request-1"}\n')
+    observed: dict[str, object] = {}
+
+    class FakeFiles:
+        def create(self, *, file: object, purpose: str) -> SimpleNamespace:
+            observed["purpose"] = purpose
+            observed["content"] = file.read()  # type: ignore[attr-defined]
+            return SimpleNamespace(id="file-input")
+
+    class FakeBatches:
+        def create(self, **kwargs: object) -> SimpleNamespace:
+            observed["batch"] = kwargs
+            return SimpleNamespace(
+                id="batch-1",
+                status="validating",
+                output_file_id=None,
+                error_file_id=None,
+                metadata=kwargs["metadata"],
+            )
+
+    client = SimpleNamespace(files=FakeFiles(), batches=FakeBatches())
+    monkeypatch.setitem(
+        sys.modules, "openai", SimpleNamespace(OpenAI=lambda api_key: client)
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    receipt = submit_openai_batch(
+        input_path, run_id="run-1", stage="semantic_generation"
+    )
+
+    assert observed["purpose"] == "batch"
+    assert observed["content"] == input_path.read_bytes()
+    assert observed["batch"] == {
+        "input_file_id": "file-input",
+        "endpoint": "/v1/responses",
+        "completion_window": "24h",
+        "metadata": {"run_id": "run-1", "stage": "semantic_generation"},
+    }
+    assert receipt["input_file_id"] == "file-input"
+    assert receipt["metadata"] == {
+        "run_id": "run-1",
+        "stage": "semantic_generation",
+    }
+
+
 def test_openai_collection_unions_output_and_error_files(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -149,9 +198,7 @@ def test_openai_collection_preserves_incomplete_reason(
     body["incomplete_details"] = {"reason": "max_output_tokens"}  # type: ignore[index]
     _install_openai(monkeypatch, output=_jsonl(row), error=None)
 
-    results, _ = collect_openai_batch(
-        "batch-1", {"request-1": _request("request-1")}
-    )
+    results, _ = collect_openai_batch("batch-1", {"request-1": _request("request-1")})
 
     assert results["request-1"].stop_reason == "max_output_tokens"
 
@@ -175,8 +222,7 @@ def test_openai_collection_requires_unique_complete_union(
 ) -> None:
     _install_openai(monkeypatch, output=output, error=error)
     requests = {
-        request_id: _request(request_id)
-        for request_id in ("request-1", "request-2")
+        request_id: _request(request_id) for request_id in ("request-1", "request-2")
     }
 
     with pytest.raises(ValueError, match=message):
@@ -248,9 +294,7 @@ def test_openai_raw_archive_refuses_changed_provider_bytes(tmp_path: Path) -> No
 def test_submit_refuses_existing_manifest_before_provider_call(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    submission_path = (
-        tmp_path / "provider_batches/candidate_generation/submission.json"
-    )
+    submission_path = tmp_path / "provider_batches/candidate_generation/submission.json"
     atomic_write_json(submission_path, {"batch_id": "already-submitted"})
     monkeypatch.setattr(
         "circuits.labeling.batch_runtime.load_run_manifest",
@@ -288,9 +332,7 @@ def test_existing_batch_result_pair_is_validated(tmp_path: Path) -> None:
         host="test-host",
     )
     atomic_write_json(tmp_path / result_relative, result.model_dump(mode="json"))
-    atomic_write_json(
-        tmp_path / telemetry_relative, telemetry.model_dump(mode="json")
-    )
+    atomic_write_json(tmp_path / telemetry_relative, telemetry.model_dump(mode="json"))
 
     assert _validate_or_absent_result_pair(
         run_root=tmp_path,

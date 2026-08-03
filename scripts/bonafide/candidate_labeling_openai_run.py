@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage a local, non-submitting candidate-labeling OpenAI Batch run."""
+"""Manage a receipt-bound candidate-labeling OpenAI Batch run."""
 
 from __future__ import annotations
 
@@ -9,11 +9,14 @@ from pathlib import Path
 
 from circuits.analysis.bonafide.candidate_labeling_openai_run import (
     build_candidate_openai_cost_plan,
+    check_candidate_openai_batch,
     collect_candidate_openai_batch,
     construct_candidate_openai_rewrites,
     initialize_candidate_openai_run,
     load_candidate_openai_run,
     prepare_candidate_openai_batch,
+    recover_candidate_openai_submission,
+    submit_candidate_openai_batch,
 )
 
 
@@ -46,6 +49,31 @@ def parse_args() -> argparse.Namespace:
         required=True,
     )
 
+    submit = commands.add_parser("submit")
+    submit.add_argument("--run-root", type=Path, required=True)
+    submit.add_argument(
+        "--stage",
+        choices=("semantic_generation", "conservative_control", "semantic_rewrite"),
+        required=True,
+    )
+
+    status = commands.add_parser("status")
+    status.add_argument("--run-root", type=Path, required=True)
+    status.add_argument(
+        "--stage",
+        choices=("semantic_generation", "conservative_control", "semantic_rewrite"),
+        required=True,
+    )
+
+    recover = commands.add_parser("recover-submission")
+    recover.add_argument("--run-root", type=Path, required=True)
+    recover.add_argument(
+        "--stage",
+        choices=("semantic_generation", "conservative_control", "semantic_rewrite"),
+        required=True,
+    )
+    recover.add_argument("--batch-id", required=True)
+
     collect = commands.add_parser("collect")
     collect.add_argument("--run-root", type=Path, required=True)
     collect.add_argument(
@@ -53,7 +81,6 @@ def parse_args() -> argparse.Namespace:
         choices=("semantic_generation", "conservative_control", "semantic_rewrite"),
         required=True,
     )
-    collect.add_argument("--provider-file", type=Path, action="append", required=True)
 
     rewrites = commands.add_parser("construct-rewrites")
     rewrites.add_argument("--run-root", type=Path, required=True)
@@ -93,11 +120,29 @@ def main() -> None:
             stage_id=args.stage,
             verify_sources=verify_sources,
         )
+    elif args.command == "submit":
+        result = submit_candidate_openai_batch(
+            run_root=args.run_root,
+            stage_id=args.stage,
+            verify_sources=verify_sources,
+        )
+    elif args.command == "status":
+        result = check_candidate_openai_batch(
+            run_root=args.run_root,
+            stage_id=args.stage,
+            verify_sources=verify_sources,
+        )
+    elif args.command == "recover-submission":
+        result = recover_candidate_openai_submission(
+            run_root=args.run_root,
+            stage_id=args.stage,
+            batch_id=args.batch_id,
+            verify_sources=verify_sources,
+        )
     elif args.command == "collect":
         events = collect_candidate_openai_batch(
             run_root=args.run_root,
             stage_id=args.stage,
-            provider_files=args.provider_file,
             verify_sources=verify_sources,
         )
         result = {

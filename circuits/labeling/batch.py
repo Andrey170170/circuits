@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from circuits.labeling.api import (
     anthropic_usage,
@@ -94,17 +95,21 @@ def submit_openai_batch(
     client = OpenAI(api_key=api_key)
     with input_path.open("rb") as handle:
         uploaded = client.files.create(file=handle, purpose="batch")
+    metadata = {"run_id": run_id, "stage": stage}
     batch = client.batches.create(
         input_file_id=uploaded.id,
         endpoint="/v1/responses",
         completion_window="24h",
-        metadata={"run_id": run_id, "stage": stage},
+        metadata=metadata,
     )
     return {
         "schema_version": "adag.labeling.provider-batch.v1",
         "provider": "openai",
         "batch_id": batch.id,
         "input_file_id": uploaded.id,
+        "endpoint": "/v1/responses",
+        "completion_window": "24h",
+        "metadata": dict(getattr(batch, "metadata", None) or metadata),
         "status": batch.status,
         "output_file_id": batch.output_file_id,
         "error_file_id": batch.error_file_id,
@@ -149,6 +154,10 @@ def retrieve_batch(
             "schema_version": "adag.labeling.provider-batch.v1",
             "provider": provider,
             "batch_id": batch.id,
+            "input_file_id": getattr(batch, "input_file_id", None),
+            "endpoint": getattr(batch, "endpoint", None),
+            "completion_window": getattr(batch, "completion_window", None),
+            "metadata": dict(getattr(batch, "metadata", None) or {}),
             "status": batch.status,
             "output_file_id": batch.output_file_id,
             "error_file_id": batch.error_file_id,
@@ -175,28 +184,14 @@ def collect_openai_batch(
     *,
     key_env: str = "OPENAI_API_KEY",
 ) -> tuple[dict[str, GenerationResult], dict[str, dict[str, Any]]]:
-    from openai import OpenAI
-
-    api_key = os.environ.get(key_env)
-    if not api_key:
-        raise ValueError(f"required API key environment variable is missing: {key_env}")
-    client = OpenAI(api_key=api_key)
-    batch = client.batches.retrieve(batch_id)
-    if batch.status != "completed" or not (
-        batch.output_file_id or batch.error_file_id
-    ):
-        raise ValueError(f"OpenAI batch is not collectable: status={batch.status!r}")
+    _, raw_files = download_openai_batch_files(batch_id, key_env=key_env)
     results: dict[str, GenerationResult] = {}
-    raw_files: dict[str, dict[str, Any]] = {}
-    provider_files = (
-        ("output", batch.output_file_id),
-        ("error", batch.error_file_id),
-    )
-    for source, file_id in provider_files:
-        if not file_id:
+    for source in ("output", "error"):
+        item = raw_files.get(source)
+        if item is None:
             continue
-        content = _openai_file_bytes(client.files.content(file_id))
-        raw_files[source] = {"file_id": file_id, "content": content}
+        file_id = item["file_id"]
+        content = item["content"]
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError as error:
@@ -210,8 +205,7 @@ def collect_openai_batch(
                 row = json.loads(line)
             except json.JSONDecodeError as error:
                 raise ValueError(
-                    f"OpenAI batch {source} file has invalid JSON on line "
-                    f"{line_number}"
+                    f"OpenAI batch {source} file has invalid JSON on line {line_number}"
                 ) from error
             request_id = row.get("custom_id")
             if request_id not in requests:
@@ -237,6 +231,66 @@ def collect_openai_batch(
             + ", ".join(missing)
         )
     return results, raw_files
+
+
+def download_openai_batch_files(
+    batch_id: str, *, key_env: str = "OPENAI_API_KEY"
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Retrieve one completed batch and return its exact opaque result files."""
+
+    from openai import OpenAI
+
+    api_key = os.environ.get(key_env)
+    if not api_key:
+        raise ValueError(f"required API key environment variable is missing: {key_env}")
+    client = OpenAI(api_key=api_key)
+    batch = client.batches.retrieve(batch_id)
+    observed_batch_id = getattr(batch, "id", batch_id)
+    if observed_batch_id != batch_id:
+        raise ValueError("OpenAI batch retrieval returned a different batch id")
+    if batch.status != "completed" or not (batch.output_file_id or batch.error_file_id):
+        raise ValueError(f"OpenAI batch is not collectable: status={batch.status!r}")
+    snapshot = {
+        "schema_version": "adag.labeling.provider-batch.v1",
+        "provider": "openai",
+        "batch_id": observed_batch_id,
+        "input_file_id": getattr(batch, "input_file_id", None),
+        "endpoint": getattr(batch, "endpoint", None),
+        "completion_window": getattr(batch, "completion_window", None),
+        "metadata": dict(getattr(batch, "metadata", None) or {}),
+        "status": batch.status,
+        "output_file_id": batch.output_file_id,
+        "error_file_id": batch.error_file_id,
+        "request_counts": (
+            batch.request_counts.model_dump()
+            if getattr(batch, "request_counts", None)
+            else None
+        ),
+    }
+    raw_files: dict[str, dict[str, Any]] = {}
+    for source, file_id in (
+        ("output", batch.output_file_id),
+        ("error", batch.error_file_id),
+    ):
+        if file_id:
+            raw_files[source] = {
+                "file_id": file_id,
+                "content": _openai_file_bytes(client.files.content(file_id)),
+            }
+    return snapshot, raw_files
+
+
+def download_openai_file_bytes(
+    file_id: str, *, key_env: str = "OPENAI_API_KEY"
+) -> bytes:
+    """Download one exact OpenAI file by immutable provider file id."""
+
+    from openai import OpenAI
+
+    api_key = os.environ.get(key_env)
+    if not api_key:
+        raise ValueError(f"required API key environment variable is missing: {key_env}")
+    return _openai_file_bytes(OpenAI(api_key=api_key).files.content(file_id))
 
 
 def collect_anthropic_batch(
