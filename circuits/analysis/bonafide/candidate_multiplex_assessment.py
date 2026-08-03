@@ -7,8 +7,6 @@ cluster identities, never an invented per-token candidate value.
 
 from __future__ import annotations
 
-import ctypes
-import errno
 import hashlib
 import json
 import math
@@ -34,6 +32,7 @@ from circuits.analysis.bonafide.candidate_clustering_execution import (
     CANDIDATE_CLUSTER_BASELINE_SCHEMA,
     COMMON_ELIGIBILITY_FILE,
     COMMON_ELIGIBILITY_SCHEMA,
+    _publish_directory_no_replace,
     load_candidate_clustering_baseline,
 )
 from circuits.analysis.bonafide.candidate_profiles import (
@@ -868,30 +867,6 @@ def _coverage_metrics(
     }
 
 
-def _publish_no_replace(source: Path, destination: Path) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise OSError(errno.ENOSYS, "atomic no-replace publication is unavailable")
-    renameat2.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    renameat2.restype = ctypes.c_int
-    result = renameat2(-100, os.fsencode(source), -100, os.fsencode(destination), 1)
-    if result == 0:
-        return
-    error_number = ctypes.get_errno()
-    if error_number == errno.EEXIST:
-        raise FileExistsError(
-            error_number, "assessment output already exists", destination
-        )
-    raise OSError(error_number, os.strerror(error_number), destination)
-
-
 def _derive_assessment_tables(
     *,
     input_root: Path,
@@ -1310,7 +1285,7 @@ def build_candidate_multiplex_assessment(
             raise ValueError(
                 "assessment producing revision changed during construction"
             )
-        _publish_no_replace(temporary, output_root)
+        _publish_directory_no_replace(temporary, output_root)
         return manifest
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
