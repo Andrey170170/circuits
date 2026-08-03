@@ -329,8 +329,7 @@ def validate_candidate_labeling_renderer_runtime_paths(repo_root: Path) -> None:
         expected = repo_root / _SOURCE_BINDINGS[role]
         if Path(observed).resolve() != expected.resolve():
             raise ValueError(
-                "candidate labeling renderer module came from another worktree: "
-                f"{role}"
+                f"candidate labeling renderer module came from another worktree: {role}"
             )
 
 
@@ -455,9 +454,9 @@ def select_generation_witnesses(
         seen_tokens: set[tuple[int, str]] = set()
         selected: list[dict[str, Any]] = []
         for selection_index in range(WITNESSES_PER_ANCHOR):
-            scored: list[tuple[int, float, str, Mapping[str, Any], dict[str, bool]]] = (
-                []
-            )
+            scored: list[
+                tuple[int, float, str, Mapping[str, Any], dict[str, bool]]
+            ] = []
             for case_id, row in remaining.items():
                 flags = {
                     "family": str(row["family_id"]) not in seen_families,
@@ -645,7 +644,9 @@ def _output_schema(include_candidate: bool) -> dict[str, Any]:
     if include_candidate:
         candidate_rule = {"type": "string", "minLength": 1}
     else:
-        candidate_rule = {"const": "not_available"}
+        # OpenAI strict structured outputs require every property schema to
+        # declare its JSON type even when a constant fixes the only value.
+        candidate_rule = {"type": "string", "const": "not_available"}
     return {
         "type": "object",
         "additionalProperties": False,

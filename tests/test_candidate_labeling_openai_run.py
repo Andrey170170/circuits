@@ -48,7 +48,7 @@ def _schema(include_candidate: bool) -> dict:
             "exploratory_candidate_description": (
                 {"type": "string", "minLength": 1}
                 if include_candidate
-                else {"const": "not_available"}
+                else {"type": "string", "const": "not_available"}
             ),
             "background_or_confound": {"type": "string", "minLength": 1},
             "limitations": {"type": "string", "minLength": 1},

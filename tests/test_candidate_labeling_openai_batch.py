@@ -30,7 +30,10 @@ def _schema() -> dict:
         "required": list(TYPED_OUTPUT_FIELDS),
         "properties": {
             "input_localization_hypothesis": {"type": "string", "minLength": 1},
-            "exploratory_candidate_description": {"const": "not_available"},
+            "exploratory_candidate_description": {
+                "type": "string",
+                "const": "not_available",
+            },
             "background_or_confound": {"type": "string", "minLength": 1},
             "limitations": {"type": "string", "minLength": 1},
             "status": {"type": "string", "enum": list(STATUS_ENUM)},

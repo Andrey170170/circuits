@@ -287,7 +287,12 @@ def _candidate_schema_error(
         if set(rule) - allowed_keys:
             return f"unsupported schema keyword for {field}"
         if "const" in rule:
-            if set(rule) != {"const"} or item != rule["const"]:
+            if (
+                set(rule) != {"type", "const"}
+                or rule.get("type") != "string"
+                or not isinstance(item, str)
+                or item != rule["const"]
+            ):
                 return f"{field} does not match its required constant"
             continue
         if rule.get("type") != "string" or not isinstance(item, str):
