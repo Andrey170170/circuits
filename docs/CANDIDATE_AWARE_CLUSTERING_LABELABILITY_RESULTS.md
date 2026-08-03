@@ -158,12 +158,16 @@ was made at this checkpoint.
 
 ## Remaining reporting boundary
 
-The next code artifact is a provenance-bound C2/dense-multiplex assessment. It retains all 245 C2
-targets and marks the exact 77-target dense overlap rather than silently inner-joining. Its primary
-measurement grain is target plus signed basis because the candidate profile is a signed sum over
-raw node occurrences; a dense occurrence projection may carry the cluster identity and a foreign
-key to that measurement, but not invent per-token candidate values. It also distinguishes the C2
-`W64` state used by the matched labeling anchors from the separate dense primary 64-cluster state.
+The provenance-bound C2/dense-multiplex assessment is now published under
+`candidate-aware-clustering-c2-v1/multiplex-assessment-v1`, manifest SHA-256
+`8e1e722be3e9f67f0ca449f4e5b92867814f53d7899d9131c2f115c05535221c`. It retains all 245 C2
+targets and marks the exact 77-target dense overlap and 168 unmatched targets rather than silently
+inner-joining. Its primary measurement grain is target plus signed basis because the candidate
+profile is a signed sum over raw node occurrences; the 6,140-row dense occurrence projection
+carries the cluster identity and a foreign key to that measurement, but does not invent per-token
+candidate values. A deep reload re-derived all 45,195 target/basis rows from the three bound source
+artifacts. The assessment also distinguishes the C2 `W64` state used by the matched labeling
+anchors from the separate dense primary 64-cluster state.
 
 The persisted evaluator covers numerical validity, structural metrics, held-out candidate
 coherence, width-one preservation, and conservative labeling readiness. Per-state/per-resolution

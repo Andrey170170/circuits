@@ -2699,3 +2699,12 @@ historical plan; the additive runtime adapter uses provider-neutral stage IDs an
 prompt hashes.  The current iteration default is the cheaper OpenAI Luna/Terra recipe.  Anthropic
 remains a deferred matched comparison rather than the debugging path.  Paid API calls and the
 fixed Transluce scorer remain separately approval-gated and unlaunched.
+
+Revision `d40ad71` completed and published the first provenance-bound multiplex assessment under
+`candidate-aware-clustering-c2-v1/multiplex-assessment-v1`, manifest SHA-256
+`8e1e722be3e9f67f0ca449f4e5b92867814f53d7899d9131c2f115c05535221c`. A deep source reload
+re-derived the artifact exactly from the recorded C2 input, C2-W64 baseline, and dense multiplex.
+It retains all 245 C2 targets, records 77 exact dense matches and 168 explicit unmatched targets,
+and materializes 45,195 target/basis assessment rows plus 6,140 occurrence foreign-key rows. The
+occurrence table carries no imputed candidate values, and the artifact records no labels,
+outcomes, confirmatory holdout access, model calls, or Transluce calls.
