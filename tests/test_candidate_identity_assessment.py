@@ -243,6 +243,28 @@ def test_null_effectiveness_fails_closed_for_small_strata() -> None:
     assert not report["effective"]
 
 
+def test_null_stratifies_on_full_support_including_zero_scientific_coordinates() -> (
+    None
+):
+    rows = [
+        _projected(
+            "family",
+            "response",
+            "target",
+            basis,
+            {0: float(basis + 1)},
+        )
+        for basis in range(4)
+    ]
+    rows[0].support[1] = 1.0
+    rows[1].support[1] = 1.0
+    rows[2].support[2] = 1.0
+    rows[3].support[2] = 1.0
+    blocks, report = _null_blocks(rows, "T")
+    assert blocks == []
+    assert not report["effective"]
+
+
 def test_null_mass_blocks_include_left_endpoint_phase_for_m() -> None:
     rows = [
         _projected(
@@ -316,13 +338,20 @@ def test_seed_byte_recipe_and_joint_null_gate_fail_closed() -> None:
     views = {
         view: (list(generation), list(selection)) for view in ("R", "T", "P", "SR", "M")
     }
-    report = evaluate_projected_views(views, protocol_sha256=protocol)
+    report = evaluate_projected_views(
+        views,
+        protocol_sha256=protocol,
+        provenance_valid=False,
+    )
     assert report["direction_null"]["all_variants_effective"]
     assert report["direction_null"]["replicates"] == 100
     assert report["offline_winner"] is None
     assert report["local_labeling_winner"] is None
     assert not report["labeling_authorized"]
     assert all(not gate["passed"] for gate in report["gates"].values())
+    assert all(
+        not gate["conditions"]["provenance_valid"] for gate in report["gates"].values()
+    )
 
 
 def test_filtered_parquet_never_materializes_audit_rows(tmp_path: Path) -> None:
@@ -347,6 +376,20 @@ def test_filtered_parquet_never_materializes_audit_rows(tmp_path: Path) -> None:
     )
     rows = _filtered_rows(path, "family_partition", schema)
     assert [row["candidate_value"] for row in rows] == ["g", "s"]
+
+    mixed = tmp_path / "mixed.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"family_partition": "generation", "candidate_value": "g"},
+                {"family_partition": "audit", "candidate_value": "AUDIT_SENTINEL"},
+            ],
+            schema=schema,
+        ),
+        mixed,
+    )
+    with pytest.raises(ValueError, match="mixed partition row group"):
+        _filtered_rows(mixed, "family_partition", schema)
 
 
 def test_no_overwrite_fails_before_source_or_revision_access(tmp_path: Path) -> None:

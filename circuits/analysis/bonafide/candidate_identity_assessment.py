@@ -34,6 +34,9 @@ from circuits.analysis.bonafide.candidate_multiplex_assessment import (
     TARGET_BASIS_ASSESSMENT_SCHEMA,
     TARGET_BASIS_FILE,
 )
+from circuits.analysis.bonafide.candidate_multiplex_assessment import (
+    _validate_producing_revision as _validate_assessment_revision,
+)
 from circuits.analysis.bonafide.candidate_profiles import (
     CANDIDATE_CLUSTER_INPUT_SCHEMA,
     TARGET_SCHEMA,
@@ -769,6 +772,7 @@ def evaluate_projected_views(
     views: Mapping[str, tuple[Sequence[ProjectedRow], Sequence[ProjectedRow]]],
     *,
     protocol_sha256: str,
+    provenance_valid: bool,
 ) -> dict[str, Any]:
     """Evaluate the complete frozen family, controls, nulls, and gates."""
 
@@ -903,7 +907,7 @@ def evaluate_projected_views(
             "distribution"
         ]["median"]
         conditions = {
-            "provenance_valid": True,
+            "provenance_valid": provenance_valid is True,
             "all_eight_selection_families": len(
                 reports[variant]["selection"]["scientific"]["per_family_mrr"]
             )
@@ -1004,19 +1008,76 @@ def _validate_self_hashed_manifest(
 def _filtered_rows(
     path: Path, partition_field: str, schema: Any
 ) -> list[dict[str, Any]]:
-    table = pq.read_table(
-        path,
-        filters=[
-            [(partition_field, "=", "generation")],
-            [(partition_field, "=", "selection_scoring")],
-        ],
-    )
+    """Materialize only row groups proven exclusive to executable partitions.
+
+    Arrow row filters may decode a full mixed row group before applying their
+    predicate.  Candidate-value columns therefore require trustworthy row-group
+    partition statistics; a mixed or unclassified row group fails closed.
+    """
+
+    parquet = pq.ParquetFile(path)
+    try:
+        partition_column = parquet.schema.names.index(partition_field)
+    except ValueError as error:
+        raise ValueError(f"partition column is absent from {path.name}") from error
+    allowed_row_groups: list[int] = []
+    for row_group_index in range(parquet.num_row_groups):
+        row_group = parquet.metadata.row_group(row_group_index)
+        column = row_group.column(partition_column)
+        statistics = column.statistics
+        if (
+            statistics is None
+            or not statistics.has_min_max
+            or statistics.null_count not in {0, None}
+        ):
+            raise ValueError(
+                f"partition row group cannot prove audit exclusion: {path.name}"
+            )
+        minimum = statistics.min
+        maximum = statistics.max
+        if isinstance(minimum, bytes):
+            minimum = minimum.decode("utf-8")
+        if isinstance(maximum, bytes):
+            maximum = maximum.decode("utf-8")
+        if minimum != maximum:
+            raise ValueError(
+                f"mixed partition row group cannot prove audit exclusion: {path.name}"
+            )
+        partition = str(minimum)
+        if partition in PARTITIONS:
+            allowed_row_groups.append(row_group_index)
+        elif partition != "audit":
+            raise ValueError(f"unknown partition in {path.name}: {partition!r}")
+    if not allowed_row_groups:
+        raise ValueError(f"no executable partition row groups in {path.name}")
+    table = parquet.read_row_groups(allowed_row_groups)
     if not table.schema.equals(schema, check_metadata=False):
         raise ValueError(f"filtered source parquet schema drift: {path.name}")
     rows = table.to_pylist()
     if any(row[partition_field] not in PARTITIONS for row in rows):
         raise AssertionError("audit firewall failed during filtered parquet load")
     return rows
+
+
+def _validate_bound_source_record(
+    record: Mapping[str, Any], *, label: str
+) -> dict[str, Any]:
+    root = Path(str(record.get("path"))).resolve()
+    if Path(str(record.get("manifest_path"))).resolve() != root / "manifest.json":
+        raise ValueError(f"{label} manifest path binding drift")
+    schema_version = record.get("schema_version")
+    if not isinstance(schema_version, str) or not schema_version:
+        raise TypeError(f"{label} schema binding is invalid")
+    manifest = _validate_self_hashed_manifest(
+        root,
+        expected_schema=schema_version,
+        label=label,
+    )
+    if record.get("manifest_sha256") != manifest.get("manifest_sha256") or record.get(
+        "manifest_file_sha256"
+    ) != file_sha256(root / "manifest.json"):
+        raise ValueError(f"{label} source binding drift")
+    return manifest
 
 
 def _validate_target_phase_grid(targets: Sequence[Mapping[str, Any]]) -> None:
@@ -1115,6 +1176,10 @@ def _load_source_rows(
         label="candidate multiplex assessment",
         required_files=frozenset({TARGET_BASIS_FILE}),
     )
+    assessment_revision = assessment_manifest.get("producing_revision")
+    if not isinstance(assessment_revision, Mapping):
+        raise TypeError("source assessment producing revision is invalid")
+    _validate_assessment_revision(assessment_revision)
     for field in (
         "outcomes_inspected",
         "labels_used",
@@ -1146,6 +1211,10 @@ def _load_source_rows(
     ):
         raise TypeError("source assessment lacks C2 input or W64 baseline binding")
     input_record = sources["c2_input"]
+    _validate_bound_source_record(
+        sources["c2_clustering_baseline"], label="C2 clustering baseline"
+    )
+    _validate_bound_source_record(sources["dense_multiplex"], label="dense multiplex")
     input_root = Path(str(input_record.get("path"))).resolve()
     input_manifest = _validate_self_hashed_manifest(
         input_root,
@@ -1217,7 +1286,17 @@ def _load_source_rows(
         ):
             continue
         target = target_by_case.get(str(row["case_id"]))
-        if target is None or target["family_partition"] != row["family_partition"]:
+        if target is None or any(
+            target[field] != row[field]
+            for field in (
+                "family_partition",
+                "base_question_id",
+                "response_id",
+                "phase_bin",
+                "response_position",
+                "partition_hierarchical_weight",
+            )
+        ):
             raise ValueError("assessment target binding drift")
         cluster = row["c2_w64_cluster_id"]
         vector = row["candidate_contrast_vector"]
@@ -1263,7 +1342,11 @@ def compute_candidate_identity_assessment(
     )
     dictionaries["M"] = dictionary
     views["M"] = (generation_rows, selection_rows)
-    report = evaluate_projected_views(views, protocol_sha256=protocol_sha256)
+    report = evaluate_projected_views(
+        views,
+        protocol_sha256=protocol_sha256,
+        provenance_valid=True,
+    )
     dictionary_report = {
         view: {
             "dimension": len(values),
