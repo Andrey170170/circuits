@@ -189,3 +189,43 @@ cannot repair the failed global stability condition. No within-W64 fit was run, 
 assignment exists, and C2-W64 remains the only clustering state for the evidence-only labeling
 comparison. Audit rows, dense-overlap membership, labels, outcomes, model calls, and Transluce did
 not enter this decision.
+
+## OpenAI matched-evidence labeling result
+
+Commit `cb82fc8` corrected the width-only strict-output schema by declaring the string type beside
+the required `not_available` constant. The first full submission remains archived as
+`openai-labeling-full-v2`: 72 of its 144 initial requests failed provider schema validation before
+inference, all in the width-only arm. Its 72 successful arm-2 results are not used as the matched
+scientific comparison. Known provider usage for that archived attempt is `$0.27478149`.
+
+The corrected immutable inputs are `labeling-renderer-v2`, manifest SHA-256
+`3a15bd3f63cf157a96bbb78d0b30f15f49356b6f2447cc2357c60051a4d46eee`, and
+`openai-labeling-cohort-v2`, manifest SHA-256
+`ca9d31faaa75a30e3c9bb55bb0a985d16b5a7efb64c8baeb9a2584489c6e016d`. The complete run is
+`openai-labeling-full-v3`, run-manifest SHA-256
+`ba355465aa7d67202835257c9d346b53a4e211febd6609ad1ee03dfbb9673db6`. Native OpenAI Batch
+completed all 120 Luna semantic generations, 24 Terra conservative controls, and 24 gated Terra
+rewrites without a provider or local-validation failure. Receipt-derived known usage is
+`$0.72158979`; including the archived schema-invalid attempt, known campaign usage is
+`$0.99637128`.
+
+Candidate evidence did not lower abstention. Luna semantic samples produced 12/60 provisional
+width-only descriptions and 7/60 provisional width-plus-candidate descriptions. Terra controls
+produced 3/12 and 1/12 respectively. After five-sample rewriting, width-only retained two
+provisional statuses (clusters 34 and 41), while width-plus-candidate retained one (cluster 41):
+zero paired status gains, one loss, and an abstention change from 83.3% to 91.7%. Cluster 41 is the
+strongest paired local hypothesis, centered on literal verification/checking wording and adjacent
+procedural text. Cluster 34 is a narrow width-only instruction-template localization. Cluster 43
+is the clearest specific abstention: a repeated `Granulomatosis with polyangiitis` subgroup is
+visible, but the remaining witnesses do not support a cluster-wide description.
+
+The candidate prose generally matches the displayed five-channel values and preserves the local,
+single-target claim boundary, but mostly reports heterogeneous signs, magnitudes, and rank-slot
+patterns. That behavior is consistent with the earlier failed global direction-consistency gate,
+not evidence that the extra channels form a stable semantic cluster property. Because an
+`insufficient_evidence` output cannot be retained and arm 2 has only one status-eligible output,
+the precommitted requirement of three additional retained labels is unreachable. Transluce
+selection/audit scoring therefore cannot rescue this comparison and was not launched for the
+decision. It remains optional diagnostic work on the three provisional outputs, not a promotion
+gate. These results do not establish that top-five tracing is generally unhelpful; they show that
+this target-local candidate signature did not improve labeling of the unchanged C2-W64 clusters.

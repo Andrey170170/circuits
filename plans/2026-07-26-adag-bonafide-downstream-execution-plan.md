@@ -2736,3 +2736,34 @@ consistency gate fails, however: median generation consistency is `0.49575` agai
 `0.55` requirement. Therefore no refinement fit is authorized, no alternative state is created,
 and the current labeling path remains the paired width-only versus width-plus-candidate evidence
 comparison on unchanged C2-W64 clusters.
+
+Revision `cb82fc8` corrected an OpenAI strict-schema defect found by the first full submission: the
+width-only `not_available` constant lacked an explicit string type. The archived
+`openai-labeling-full-v2` attempt has 72 successful arm-2 results and 72 pre-inference schema
+errors and is not a matched scientific result. Its known usage is `$0.27478149`.
+
+The corrected `labeling-renderer-v2` and `openai-labeling-cohort-v2` bind revision `cb82fc8` and
+have manifest SHA-256 values `3a15bd3f63cf157a96bbb78d0b30f15f49356b6f2447cc2357c60051a4d46eee`
+and `ca9d31faaa75a30e3c9bb55bb0a985d16b5a7efb64c8baeb9a2584489c6e016d`. The complete
+`openai-labeling-full-v3` run, manifest SHA-256
+`ba355465aa7d67202835257c9d346b53a4e211febd6609ad1ee03dfbb9673db6`, completed 168/168
+receipt-bound requests: 120 Luna semantic generations, 24 Terra controls, and 24 Terra rewrites.
+Known run usage is `$0.72158979`; cumulative known usage including the archived attempt is
+`$0.99637128`.
+
+The matched result does not pass the status gate. Final width-only rewrites contain two
+`provisional_description` outputs and ten `insufficient_evidence` outputs; width-plus-candidate
+contains one and eleven. The only arm-2 provisional cluster, 41, is also provisional in arm 1.
+Cluster 34 changes from width-only provisional to arm-2 insufficient, so there are zero status
+gains and one loss, and candidate evidence raises rather than lowers abstention. The direction is
+also present in the five Luna samples per prompt (12/60 versus 7/60 provisional) and in the
+independent Terra controls (3/12 versus 1/12). Candidate descriptions are bounded and generally
+literal, but mostly describe heterogeneous numeric directions rather than a coherent shared
+signature.
+
+Since `insufficient_evidence` outputs are ineligible for retention, arm 2 has at most one
+score-eligible output and cannot achieve the required three additional retained labels. Do not
+launch Transluce selection/audit scoring as if it could repair this decision; any later scorer run
+is diagnostic only and must retain the same frozen inputs. Do not scale this OpenAI recipe to more
+clusters. Treat an Anthropic or local-Qwen run as a separately motivated model-sensitivity study,
+not as completion of a passing candidate-evidence result.
