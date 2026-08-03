@@ -2708,3 +2708,21 @@ It retains all 245 C2 targets, records 77 exact dense matches and 168 explicit u
 and materializes 45,195 target/basis assessment rows plus 6,140 occurrence foreign-key rows. The
 occurrence table carries no imputed candidate values, and the artifact records no labels,
 outcomes, confirmatory holdout access, model calls, or Transluce calls.
+
+Before the first live multiplex-diagnostics run, freeze the refinement-eligibility rule in
+`candidate_multiplex_diagnostics.py`. Generation rows alone define recurrent per-basis direction
+consistency, W64 cluster resultant direction/heterogeneity, rank concentration, and phase
+concentration. Selection-scoring rows supply the only decision metric, target-local candidate
+cosine for same-W64 pairs minus different-W64 pairs, reduced equally by target, response, and
+family. Audit rows and dense-overlap membership do not enter the decision.
+
+This first gate authorizes a later constrained fit; it does not create or promote an alternative.
+The gate requires generation median recurrent-basis consistency of at least `0.55`, positive
+selection same-minus-different separation across all eight selection families, positive effects in
+at least seven families, and a 10,000-replicate family-bootstrap lower bound above zero. It also
+requires at least one W64 parent whose stable recurrent subset alone contains ten bases, eight
+generation targets, four generation families, and angular heterogeneity of at least `0.20`. A pass
+permits a separately frozen generation-only within-W64 fit. Promotion would still require the
+existing seed/family stability, selection lift, width-preservation, null, structural, and
+labeling-readiness gates. A failure fixes C2-W64 as the only clustering state for the current
+evidence-only labeling comparison.
