@@ -1,0 +1,54 @@
+{
+  "schema_version": "adag.bonafide.candidate-labeling-runtime-config.v1",
+  "recipe_id": "anthropic-c2-evidence-v1-deferred-comparison",
+  "description": "Deferred all-Anthropic comparison: five Haiku semantic samples with Opus rewrite and independent Opus conservative control.",
+  "evaluation_phase": "deferred_comparison",
+  "deferred": true,
+  "semantic_samples_per_prompt": 5,
+  "semantic_generator": {
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5-20251001",
+    "transport": "native_batch",
+    "api_key_env": "ANTHROPIC_API_KEY",
+    "max_output_tokens": 3200,
+    "temperature": 0.8,
+    "concurrency": 32,
+    "timeout_seconds": 180,
+    "retry": {
+      "max_attempts": 4,
+      "initial_backoff_seconds": 1,
+      "max_backoff_seconds": 30
+    }
+  },
+  "semantic_rewriter": {
+    "provider": "anthropic",
+    "model": "claude-opus-5",
+    "transport": "native_batch",
+    "api_key_env": "ANTHROPIC_API_KEY",
+    "max_output_tokens": 3200,
+    "reasoning": {"type": "adaptive"},
+    "concurrency": 16,
+    "timeout_seconds": 240,
+    "retry": {
+      "max_attempts": 4,
+      "initial_backoff_seconds": 1,
+      "max_backoff_seconds": 30
+    }
+  },
+  "conservative_control": {
+    "provider": "anthropic",
+    "model": "claude-opus-5",
+    "transport": "native_batch",
+    "api_key_env": "ANTHROPIC_API_KEY",
+    "max_output_tokens": 1200,
+    "reasoning": {"type": "adaptive"},
+    "concurrency": 16,
+    "timeout_seconds": 240,
+    "retry": {
+      "max_attempts": 4,
+      "initial_backoff_seconds": 1,
+      "max_backoff_seconds": 30
+    }
+  },
+  "price_snapshot": "prices-2026-07-30.json"
+}
