@@ -169,7 +169,23 @@ candidate values. A deep reload re-derived all 45,195 target/basis rows from the
 artifacts. The assessment also distinguishes the C2 `W64` state used by the matched labeling
 anchors from the separate dense primary 64-cluster state.
 
-The persisted evaluator covers numerical validity, structural metrics, held-out candidate
-coherence, width-one preservation, and conservative labeling readiness. Per-state/per-resolution
-recurrence, phase/rank concentration, projection coverage, and within-cluster heterogeneity remain
-to be persisted before describing the entire label-free reporting section as complete.
+Revision `c4212d8` published the selection-gated diagnostics under
+`candidate-aware-clustering-c2-v1/multiplex-diagnostics-v1`, manifest SHA-256
+`8896bef906c38d22acd5fb56f1f9703e6b04d41205f9ddc13e5243ab949f31fb`. A deep reload reproduced
+the report from the assessment, and an attempted duplicate publication failed closed.
+
+The candidate directions contain real W64-related structure. On all 56 selection targets, the
+hierarchical same-W64 minus different-W64 cosine separation is `0.09856`; all eight family effects
+are positive and the 10,000-replicate family-bootstrap 95% interval is `[0.06883, 0.13252]`.
+Generation separation is `0.14018`. Rank mass is broad across the four principal competitor
+channels rather than concentrated in one rank, and median per-cluster phase entropy is `0.9777`
+on its normalized zero-to-one scale.
+
+The refinement-eligibility gate nevertheless fails. All 418 assigned generation bases satisfy the
+recurrence minimum, but their median across-context direction consistency is `0.49575`, below the
+precommitted `0.55` minimum; the p10 is `0.19462`. Three parents (`4`, `20`, and `43`) have enough
+stable recurrent support and heterogeneity to be theoretically splittable, but that local fact
+cannot repair the failed global stability condition. No within-W64 fit was run, no alternative
+assignment exists, and C2-W64 remains the only clustering state for the evidence-only labeling
+comparison. Audit rows, dense-overlap membership, labels, outcomes, model calls, and Transluce did
+not enter this decision.

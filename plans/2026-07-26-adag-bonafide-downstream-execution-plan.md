@@ -2726,3 +2726,13 @@ permits a separately frozen generation-only within-W64 fit. Promotion would stil
 existing seed/family stability, selection lift, width-preservation, null, structural, and
 labeling-readiness gates. A failure fixes C2-W64 as the only clustering state for the current
 evidence-only labeling comparison.
+
+Revision `c4212d8` then ran the frozen rule and published
+`candidate-aware-clustering-c2-v1/multiplex-diagnostics-v1`, manifest SHA-256
+`8896bef906c38d22acd5fb56f1f9703e6b04d41205f9ddc13e5243ab949f31fb`. Selection separation is
+positive (`0.09856`), present in all eight families, and has a family-bootstrap lower bound of
+`0.06883`. Three W64 parents meet the local theoretical-support gate. The global recurrent-basis
+consistency gate fails, however: median generation consistency is `0.49575` against the frozen
+`0.55` requirement. Therefore no refinement fit is authorized, no alternative state is created,
+and the current labeling path remains the paired width-only versus width-plus-candidate evidence
+comparison on unchanged C2-W64 clusters.
