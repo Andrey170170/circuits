@@ -44,10 +44,21 @@ assigned bases separately for:
 - a shared raw model-top-five-minus-observed contrast representation used only for a fair
   primary-versus-alternative diagnostic.
 
-For each view, the target statistic is mean same-cluster cosine minus mean different-cluster
-cosine. A target is scoreable only when both sets are nonempty. Use one fixed pair pool common to
-both states within a view. Reduce target means equally within response, response means equally
-within family, and family means equally within partition. Report coverage and per-family effects.
+For each view, enumerate all unordered pairs of mapped bases; no pair sampling is permitted. A pair
+enters the fixed common pool only when both bases are assigned in both states and both vectors have
+finite, nonzero norm on their jointly supported coordinates in both states. Construct this
+intersection before classifying the pair as same-cluster or different-cluster separately in each
+state. The primary native candidate cosine uses its complete target-local width-five or width-six
+axis; the alternative native cosine uses its target-local model-top-five axis. These differently
+sized vectors are never compared to one another: only pair identities and validity are
+intersected. The shared contrast diagnostic uses the same target-local five model-rank coordinates
+for both states. Missing support, an empty overlap, or a zero norm is unscoreable and is never
+zero-filled.
+
+For each state and view, the target statistic is mean same-cluster cosine minus mean
+different-cluster cosine. A target is scoreable only when both sets are nonempty. Reduce target
+means equally within response, response means equally within family, and family means equally
+within partition. Report common-pool, same/different, target, response, and family coverage.
 
 For each state, apply 10,000 family-block bootstrap replicates independently in selection-scoring
 and audit. Sample the eight frozen family IDs with replacement and average their fixed family
@@ -61,23 +72,37 @@ fail rather than being redrawn.
 For each of the 18 generation families, leave that family out and rebuild the state's recurrence
 eligibility, full-positive affinity, all three frozen seed fits, and medoid selection at `K=64`.
 Compare the jackknife medoid with the frozen full-data medoid on common assigned bases using ARI.
-An invalid refit is a failed replicate. Require median ARI at least `0.60` and p10 ARI at least
-`0.45` independently for both states.
+The common set must contain at least 80% of the bases assigned by the frozen full-data state;
+otherwise that replicate and the entire state fail. Any invalid refit, unrealized cluster, missing
+seed, nonfinite statistic, or coverage failure fails the entire state and is never excluded,
+replaced, or converted to zero for a median computed over fewer replicates. Require all 18 valid
+replicates, median ARI at least `0.60`, and p10 ARI at least `0.45` independently for both states.
 
 ## Witness readiness
 
 Count candidate and input-profile support from newly validated hybrid occurrences mapped to the
-frozen assignments. A cluster is ready only when both evidence types contain at least:
+frozen assignments. One target is a joint witness only when at least one assigned cluster member
+has both a finite nonzero candidate vector and a finite nonzero input vector on nonempty supported
+coordinates in that same reduced target occurrence. Repeated node occurrences are reduced before
+this check. Count distinct target and family IDs, never occurrence rows. Candidate zero norms,
+input zero norms, and empty input support do not count. A cluster is ready only when its joint
+witnesses contain at least:
 
 - generation: eight targets from four families;
 - selection-scoring: four targets from two families;
 - audit: four targets from two families.
 
-At least 80% of the 64 clusters must be ready in each state. Audit witnesses remain scoring-only
-and must never enter prompts.
+At least 52 of 64 clusters must be ready in each state (`ceil(0.80 * 64)`). Audit witnesses remain
+scoring-only and must never enter prompts.
 
 Before an API call, materialize and hash each ready cluster's exact generation, selection-scoring,
-and audit witness inventory and verify nonempty source profiles and tokenizer alignment. Actual
+and audit witness inventory and verify nonempty source profiles and tokenizer alignment. From the
+jointly supported inventory, freeze exactly `8/4/4` generation/selection-scoring/audit witnesses.
+Within each partition, hash-sort families by the protocol hash, state role, cluster ID, partition,
+and family ID; take one hash-first target from each of the required `4/2/2` families, then fill the
+remaining `4/2/2` positions from still-unselected targets in global hash order. Persist the exact
+ordered target IDs and hashes. Only generation witnesses enter candidate-generation prompts;
+generation plus selection-scoring enter summary prompts; audit never enters an API prompt. Actual
 Transluce scoring is post-label evaluation, not a pre-label gate.
 
 ## Exploratory labeling authorization
@@ -88,17 +113,22 @@ A state authorizes exploratory labeling only when all conditions pass:
 2. generation-family jackknife median/p10 ARI pass;
 3. at least 80% of clusters are witness-ready;
 4. all eight families are scoreable in both held-out-from-fit partitions; and
-5. input-view coherence is positive, its family-bootstrap 95% lower bound is above zero, and at
-   least seven of eight family effects are positive in both partitions.
+5. both input-view and native candidate-view coherence are positive, their family-bootstrap 95%
+   lower bounds are above zero, and at least seven of eight family effects are positive in both
+   partitions.
 
-Candidate-view coherence is reported under the same diagnostics. It is required to describe a
-state as candidate-direction coherent, but it is not required merely to run exploratory
-input-localization labeling when the input-view gate passes. No minimum lift over W64 is used.
+Candidate-view coherence is required because the hybrid prompt exposes candidate-union evidence.
+No minimum lift over W64 is used.
 
 If neither state passes, make no labeling calls. If exactly one passes, label only that state. If
-both pass, label both. Use the OpenAI recipe and the existing cost guard; start with 12
-deterministically spread ready clusters per passing state. The labeling result remains exploratory
-until local simulator scoring and label-quality assessment complete.
+both pass, label both. Use the OpenAI recipe and the existing cost guard; start with 12 ready
+clusters per passing state. Select those 12 before any model call using the frozen two-dimensional
+quantile rule from the earlier C2 protocol: ascending midrank percentiles for member count and
+generation joint-witness target count; target points are the Cartesian product of member
+coordinates `(1/6, 1/2, 5/6)` and support coordinates `(1/8, 3/8, 5/8, 7/8)`; use Hungarian
+minimum squared-distance assignment and the lexicographically smallest cluster-ID tuple among
+global optima. Persist the ordered IDs. The labeling result remains exploratory until local
+simulator scoring and label-quality assessment complete.
 
 ## Persistence and provenance
 
