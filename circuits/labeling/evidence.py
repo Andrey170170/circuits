@@ -24,8 +24,8 @@ CANDIDATE_PROMPT_VERSION = "bonafide-cluster-candidate-v1"
 SUMMARY_PROMPT_VERSION = "bonafide-cluster-summary-v1"
 WIDTH_ONE_CANDIDATE_PROMPT_VERSION = "bonafide-width-one-cluster-candidate-v2"
 WIDTH_ONE_SUMMARY_PROMPT_VERSION = "bonafide-width-one-cluster-summary-v2"
-HYBRID_CANDIDATE_PROMPT_VERSION = "bonafide-hybrid-candidate-cluster-candidate-v1"
-HYBRID_SUMMARY_PROMPT_VERSION = "bonafide-hybrid-candidate-cluster-summary-v1"
+HYBRID_CANDIDATE_PROMPT_VERSION = "bonafide-hybrid-candidate-cluster-candidate-v2"
+HYBRID_SUMMARY_PROMPT_VERSION = "bonafide-hybrid-candidate-cluster-summary-v2"
 PromptPolicy = Literal["legacy_v1", "width_one_v2", "hybrid_candidate_v1"]
 
 
@@ -298,8 +298,9 @@ def candidate_messages(
             "These target-local axes therefore have width five or six, and signed contribution "
             "aggregation preserves cancellation. Each ADAG graph is a pruned, locally "
             "approximate attribution subgraph, not a complete computation transcript. "
-            "Highlighted source spans come from the exact width-one trace for the observed "
-            "token; candidate_union_summary is additive context from the richer candidate-union "
+            "Highlighted source spans come from the observed-candidate fixed-union refinement "
+            "used by cluster construction; candidate_union_summary is additive context from that "
+            "same richer candidate-union "
             "trace and must not override contradictory localized evidence. Candidate directions "
             "describe local token competition, not response identity or temporal continuation. "
             "Shared hint/security/audit language and response style alone are not discriminative. "
@@ -391,8 +392,9 @@ def summary_messages(
             )
         system = (
             "Judge scored cluster descriptions against exact frozen witnesses. Highlighted "
-            "source spans come from single-target width-one traces, while cluster construction "
-            "also used a non-degenerate target-local candidate-logit comparison over model "
+            "source spans come from the observed-candidate fixed-union refinement used by cluster "
+            "construction, which also used a non-degenerate target-local candidate-logit "
+            "comparison over model "
             "top-five candidates and, when needed, an additional observed-token coordinate. "
             "Signed contribution aggregation preserves cancellation. "
             "Candidate directions describe local token competition, not response identity or "

@@ -59,6 +59,7 @@ BRIDGE_SOURCE_PATHS = (
     "circuits/labeling/scoring.py",
     "circuits/labeling/schema.py",
     "docs/HYBRID_CANDIDATE_LABELABILITY_PROTOCOL.md",
+    "docs/LABELING_COMPARISON_PIPELINE.md",
     "scripts/bonafide/hybrid_candidate_labeling.py",
     "scripts/bonafide/labeling_pipeline.py",
     "scripts/bonafide/configs/labeling/openai-hybrid-candidate-v1.json",
@@ -276,6 +277,68 @@ def _candidate_summary(
     }
 
 
+def _input_attribution_summary(
+    *,
+    occurrence_rows: Sequence[Mapping[str, Any]],
+    member_indices: set[int],
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Aggregate the exact fixed-union input view with missing-aware support."""
+
+    if not occurrence_rows:
+        raise ValueError("input summary requires target occurrences")
+    field = (
+        "paper_input_values"
+        if state["representation"] == "paper_normalized_model_top5.v1"
+        else "input_values"
+    )
+    matching = [
+        row for row in occurrence_rows if int(row["basis_index"]) in member_indices
+    ]
+    width = len(occurrence_rows[0][field])
+    if width < 1:
+        raise ValueError("input summary width must be positive")
+    sums = np.zeros(width, dtype=np.float64)
+    support_counts = np.zeros(width, dtype=np.int64)
+    member_occurrences = 0
+    member_bases: set[int] = set()
+    for row in matching:
+        values = np.asarray(row[field], dtype=np.float64)
+        support = np.asarray(row["input_support"], dtype=np.bool_)
+        count = int(row["occurrence_count"])
+        if (
+            values.shape != (width,)
+            or support.shape != (width,)
+            or count <= 0
+            or not np.isfinite(values).all()
+        ):
+            raise ValueError("invalid fixed-union input profile row")
+        member_occurrences += count
+        member_bases.add(int(row["basis_index"]))
+        sums[support] += values[support]
+        support_counts[support] += count
+    supported = support_counts > 0
+    return {
+        "schema_version": "adag.bonafide.fixed-union-input-summary.v1",
+        "source": "observed_candidate_fixed_union_refinement",
+        "representation": (
+            "paper_normalized_input_attribution"
+            if field == "paper_input_values"
+            else "raw_input_attribution"
+        ),
+        "member_basis_count": len(member_bases),
+        "member_occurrence_count": member_occurrences,
+        "signed_sum_by_source_token": [
+            float(sums[index]) if supported[index] else None for index in range(width)
+        ],
+        "mean_by_member_occurrence": [
+            float(sums[index] / support_counts[index]) if supported[index] else None
+            for index in range(width)
+        ],
+        "support_occurrence_count_by_source_token": support_counts.tolist(),
+    }
+
+
 def _cluster_evidence(
     *,
     role: str,
@@ -351,8 +414,16 @@ def _cluster_evidence(
                             int(row["basis_index"]) in set(indices.tolist())
                             for row in occurrences_by_target[target_id]
                         ),
-                        "evidence_scope": "input_width_one_plus_candidate_union_summary",
+                        "evidence_scope": (
+                            "observed_candidate_fixed_union_input_plus_"
+                            "candidate_union_summary"
+                        ),
                     },
+                    "fixed_union_input_summary": _input_attribution_summary(
+                        occurrence_rows=occurrences_by_target[target_id],
+                        member_indices=set(indices.tolist()),
+                        state=state,
+                    ),
                     "candidate_union_summary": _candidate_summary(
                         occurrence_rows=occurrences_by_target[target_id],
                         member_indices=set(indices.tolist()),

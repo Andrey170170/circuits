@@ -230,6 +230,20 @@ def validate_hybrid_recipe_binding(
         raise ValueError("hybrid labeling recipe file hash differs from frozen binding")
 
 
+def deep_validate_hybrid_bundle_for_prepare(
+    frozen_root: Path, recipe: LabelingRecipe
+) -> None:
+    """Make deep bridge recomputation a mandatory hybrid prepare step."""
+
+    if recipe.prompt_policy != "hybrid_candidate_v1":
+        return
+    from circuits.analysis.bonafide.hybrid_candidate_labeling import (
+        load_hybrid_labeling_bundle,
+    )
+
+    load_hybrid_labeling_bundle(frozen_root)
+
+
 def prepare_candidate_run(
     *,
     frozen_root: Path,
@@ -253,6 +267,7 @@ def prepare_candidate_run(
             f"frozen bundle policy {bundle_policy!r}"
         )
     if recipe.prompt_policy == "hybrid_candidate_v1":
+        deep_validate_hybrid_bundle_for_prepare(frozen_root, recipe)
         validate_hybrid_recipe_binding(bundle, recipe, recipe_path)
     code_revision = collect_code_revision()
     if code_revision["git_dirty"] and not allow_dirty:

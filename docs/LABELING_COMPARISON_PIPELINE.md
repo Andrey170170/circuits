@@ -78,12 +78,21 @@ Use a new output root for every recipe. For the two-cluster live smoke:
   --transport-override live
 ```
 
-Use `--cluster-limit 12` for the comparison pilot. The limit is the total across requested states:
-12 becomes six primary and six alternative clusters, while the two-cluster smoke becomes one from
+For generic recipes, the cluster limit is the total across requested states. For the frozen
+`hybrid_candidate_v1` recipe, use `--cluster-limit 12`: it means 12 clusters per authorized state,
+and the requested states must be exactly all authorized roles. A generic two-cluster smoke becomes one from
 each. Omit the limit only for the full 150-ready-cluster comparison. The deterministic selector
 spreads each state's allocation across its sorted ready cluster IDs. A scientific pilot should
 record and, if needed, replace this automatic sample with an explicitly reviewed stratified
 cluster list before submission.
+
+Post-evaluation hybrid bridge note: each frozen witness binds a missing-aware cluster input summary
+from the same reduced observed-candidate fixed-union occurrences used by the evaluation. It sums
+supported profile values and divides each coordinate by its summed occurrence count, using raw
+input values for the primary state and paper-normalized values for the alternative. The older
+width-one compact artifact is authenticated and loaded only for exact source token IDs/text; its
+node topology is not used to reconstruct the hybrid cluster profile. Hybrid preparation invokes
+the deep bundle loader and recomputes these summaries before trusting authorization.
 
 Preparation:
 

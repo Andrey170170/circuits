@@ -12,6 +12,7 @@ from circuits.labeling.config import load_recipe
 from circuits.labeling.io import atomic_write_json, atomic_write_jsonl
 from circuits.labeling.runtime import (
     allocate_cluster_limit,
+    deep_validate_hybrid_bundle_for_prepare,
     execute_live,
     hybrid_cluster_limits,
     resolve_local_snapshot,
@@ -76,6 +77,21 @@ def test_hybrid_recipe_binding_requires_exact_id_and_file_hash(tmp_path: Path) -
     recipe_path.write_text(recipe_path.read_text() + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="file hash"):
         validate_hybrid_recipe_binding(bundle, recipe, recipe_path)
+
+
+def test_hybrid_prepare_requires_deep_bundle_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    recipe = load_recipe(
+        Path("scripts/bonafide/configs/labeling/openai-hybrid-candidate-v1.json")
+    )
+    observed: list[Path] = []
+    monkeypatch.setattr(
+        "circuits.analysis.bonafide.hybrid_candidate_labeling.load_hybrid_labeling_bundle",
+        lambda root: observed.append(root),
+    )
+    deep_validate_hybrid_bundle_for_prepare(tmp_path, recipe)
+    assert observed == [tmp_path]
 
 
 def test_prepare_cli_accepts_exact_cluster_sets() -> None:
