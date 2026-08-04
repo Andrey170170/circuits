@@ -2788,3 +2788,13 @@ as the rank-aligned baseline. Run a new matched single-target OpenAI labeling co
 `T`, `P`, or `SR` passes, using the highest-ranked passer under the frozen rule. An `M` pass
 authorizes only a separately frozen non-billable longitudinal renderer-design step. If no local
 variant passes, make no single-target labeling API calls.
+
+The first executable attempt on 2026-08-03 stopped before metric computation because the compact
+target Parquet has mixed audit/executable row groups. No assessment artifact or model request was
+created. The frozen firewall-safe retry projects only structural target-index fields from that
+table, filters to the 189 generation/selection targets, and then reconstructs candidate identity
+and compact contrasts from those targets' individually validated raw candidate-union artifacts.
+It does not decode compact candidate JSON/value columns, open either mixed candidate-value table,
+or resolve an audit raw artifact. W64 membership comes from the validated persisted baseline, and
+the multiplex assessment is retained only as a provenance binding. This changes source loading,
+not the committed representations, gates, seeds, or winner rule.

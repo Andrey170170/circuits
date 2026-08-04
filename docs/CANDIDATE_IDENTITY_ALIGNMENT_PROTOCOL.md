@@ -23,10 +23,31 @@ the one-shot selection evaluation.
 
 ## Frozen inputs and grain
 
-Use the existing C2 input bundle, C2-W64 baseline, and multiplex assessment. The scientific record
-grain is one `case_id x activation-signed basis`. Candidate metadata come from the target's frozen
-`candidate_selection_json`; values come from the corresponding five-vector of
-`contribution(model rank r) - contribution(observed token)`.
+Use the existing C2 input bundle, C2-W64 baseline, raw candidate-union artifacts bound by the input
+manifest, and multiplex-assessment manifest. The scientific record grain is one
+`case_id x activation-signed basis`. Candidate metadata come from each executable target's raw,
+validated `candidate_selection`; values are reconstructed with the same frozen
+`extract_candidate_profiles()` function that built the compact five-vector of
+`contribution(model rank r) - contribution(observed token)`. Do not open the mixed
+`candidate-profiles.parquet` or `target-basis-assessment.parquet` value tables during this test.
+
+The compact `targets.parquet` is used only as a structural target index. Project exactly
+`case_id`, `source_width1_artifact_id`, `candidate_union_artifact_id`,
+`candidate_union_payload_sha256`, `candidate_union_topology_sha256`, `base_question_id`,
+`response_id`, `phase_bin`, `response_position`, `family_partition`, and
+`partition_hierarchical_weight`; do not decode `candidate_selection_json`, observed-token text or
+identity, `example_json`, or any candidate-value column. This projection mechanically exposes
+structural audit index rows because the source row groups mix partitions. Filter that projected
+index to `generation` and `selection_scoring` before resolving or opening artifacts. Require one
+and only one raw candidate-union directory for each of the 189 executable targets and never resolve
+or open an audit candidate-union artifact.
+
+Validate each selected artifact against its target-index artifact ID, payload hash, topology hash,
+source width-one ID, response position, and frozen candidate-union plan hash. Load the persisted
+C2-W64 baseline without recursively loading its mixed C2 source, extract the sole W64 medoid
+assignment, and join reconstructed activation-signed bases by exact model ID, model revision,
+layer, neuron index, and polarity. The multiplex assessment remains a manifest/provenance binding;
+its mixed target-basis table is not an executable value source.
 
 For ranks one through five, join by `full_distribution_rank`. The observed token is the reference,
 not an additional competitor. If the observed token itself occupies a model-top-five rank, omit
@@ -37,8 +58,9 @@ deterministic surface key and later rendering.
 All feature dictionaries and generation centroids use the 18 generation families only. Selection
 contains eight frozen families and is evaluated once for the complete committed variant family.
 Transformation/evaluation code never parses, summarizes, or loads audit candidate metadata or
-candidate-profile values; the feasibility-only whole-target-table structural exposure is bound by
-the receipt above.
+candidate-profile values and never opens an audit raw candidate artifact. It may decode only the
+explicit structural target-index fields above for mixed audit rows. The feasibility-only
+whole-target-table exposure is separately bound by the receipt above.
 
 ## Representations
 
