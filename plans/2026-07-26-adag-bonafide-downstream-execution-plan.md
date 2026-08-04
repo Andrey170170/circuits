@@ -2801,3 +2801,31 @@ not the committed representations, gates, seeds, or winner rule.
 The exact metrics-free extraction contract is self-hashed in
 `plans/candidate-identity-executable-source-v1.json`; the retry first publishes its immutable
 executable-only source artifact, and only then evaluates the frozen representation family.
+
+Execution completed on 2026-08-03 from clean revision `1e13e92`. The metrics-free executable
+source is `candidate-identity-source-v1`, manifest
+`c9cdeaafa1cc0231bc5dc0adfc83b4f085c816c6d4a0d7478c57278e27f96898`: 133 generation targets
+with 24,545 W64-assigned candidate profiles and 56 selection targets with 10,054 profiles. Its
+receipt records no audit candidate artifact, metadata, or value access; no mixed candidate-value
+table, raw manifest/metrics file, label, outcome, or confirmatory holdout was opened.
+
+The one-shot `candidate-identity-assessment-v1` manifest is
+`62e7cd11a381ac4df776157f7be933fcfb35ecd0a50a425aefb6a955eae72ce4`. No scientific variant
+passed, so `offline_winner=null`, `local_labeling_winner=null`, and
+`labeling_authorized=false`. The principal results were:
+
+| View | Generation recurrent median | Selection weight coverage | Selection MRR | MRR minus R | Positive families |
+|---|---:|---:|---:|---:|---:|
+| R | 0.49575 | 1.00000 | 0.09911 | comparator | comparator |
+| T | 0.38502 | 0.67762 | 0.08794 | -0.01117 | 2/8 |
+| P | 0.37789 | 0.32036 | 0.04787 | -0.05124 | 1/8 |
+| SR | 0.38211 | 0.99969 | 0.09950 | +0.00039 | 5/8 |
+| M | 0.52705 | 0.00000 | 0.00000 | -0.09911 | 0/8 |
+
+`SR` beat its support control by 0.02791 and exceeded the nominal joint-null thresholds, but its
+lift over R was only 0.00039 rather than 0.03, its 95% family-bootstrap interval was
+[-0.00615, 0.00595], and only five families improved. The direction null was also fail-closed as
+ineffective because only about 46.8% of T/P/SR rows and hierarchical mass were movable, below the
+frozen 80% requirement. `M` increased recurrence relative to R but covered only 4.22% of generation
+weight, remained below the 0.55 recurrence gate, and produced no scoreable selection rows. Under
+the frozen decision rule, make no labeling API calls from this assembly test.
