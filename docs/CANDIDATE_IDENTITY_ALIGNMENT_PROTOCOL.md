@@ -30,6 +30,8 @@ validated `candidate_selection`; values are reconstructed with the same frozen
 `extract_candidate_profiles()` function that built the compact five-vector of
 `contribution(model rank r) - contribution(observed token)`. Do not open the mixed
 `candidate-profiles.parquet` or `target-basis-assessment.parquet` value tables during this test.
+The exact metrics-free extraction authorization, source hashes, projected columns, decoder order,
+and exposure contract are frozen in `plans/candidate-identity-executable-source-v1.json`.
 
 The compact `targets.parquet` is used only as a structural target index. Project exactly
 `case_id`, `source_width1_artifact_id`, `candidate_union_artifact_id`,
@@ -48,6 +50,14 @@ C2-W64 baseline without recursively loading its mixed C2 source, extract the sol
 assignment, and join reconstructed activation-signed bases by exact model ID, model revision,
 layer, neuron index, and polarity. The multiplex assessment remains a manifest/provenance binding;
 its mixed target-basis table is not an executable value source.
+
+Because the standard raw-artifact loader also parses artifact manifest/example and metrics files,
+do not use it for this extraction. Verify the selected `candidate_union.pkl.gz` against the frozen
+payload hash first, then deserialize that trusted payload directly, validate its
+`CandidateUnionTrace`, and perform the identity checks above. Publish the reconstructed executable
+targets and profiles as a new immutable `adag.bonafide.candidate-identity-source.v1` artifact before
+computing any representation metric. The assessment consumes that source artifact, not raw or
+mixed source files.
 
 For ranks one through five, join by `full_distribution_rank`. The observed token is the reference,
 not an additional competitor. If the observed token itself occupies a model-top-five rank, omit

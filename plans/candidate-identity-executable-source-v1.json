@@ -1,0 +1,101 @@
+{
+  "authorization_sha256": "ff5aafeec23c31c419b95338c18e3af883eb4ce90e7c410a0218ad0700c8627f",
+  "allowed_partitions": {
+    "generation": 133,
+    "selection_scoring": 56
+  },
+  "authorized_output": {
+    "artifact_schema": "adag.bonafide.candidate-identity-source.v1",
+    "profile_grain": "case_id x activation-signed basis",
+    "purpose": "metrics-free executable-only candidate identity source"
+  },
+  "decoder_contract": {
+    "artifact_resolution": "exactly one <candidate_union_root>/bonafide.candidate-union.v1/<wave>/<candidate_union_artifact_id>/candidate_union.pkl.gz match after executable partition filtering",
+    "candidate_identity_source": "hash-bound CandidateUnionTrace.candidate_selection",
+    "payload_validation_order": [
+      "resolve only allowed artifact IDs",
+      "verify candidate_union.pkl.gz SHA256 against candidate_union_payload_sha256",
+      "deserialize trusted hash-bound payload without opening its manifest.json or metrics.json",
+      "validate CandidateUnionTrace",
+      "cross-check artifact/source/topology/position/plan identities",
+      "reconstruct profiles with the original extract_candidate_profiles implementation"
+    ],
+    "w64_source": "persisted C2-W64 baseline loaded without recursive C2 source verification"
+  },
+  "exposure_contract": {
+    "assessment_target_basis_table_opened": false,
+    "audit_candidate_artifacts_opened": false,
+    "audit_candidate_metadata_loaded": false,
+    "audit_candidate_values_loaded": false,
+    "audit_metrics_computed": false,
+    "audit_structural_target_index_fields_loaded": true,
+    "candidate_profile_table_opened": false,
+    "confirmatory_holdout_opened": false,
+    "labels_or_prior_model_outputs_loaded": false,
+    "outcomes_loaded": false,
+    "raw_artifact_manifest_or_metrics_files_opened": false
+  },
+  "forbidden_target_columns": [
+    "candidate_selection_json",
+    "observed_token_id",
+    "observed_token_text",
+    "example_json"
+  ],
+  "hash_convention": "SHA256 of canonical UTF-8 JSON with sorted keys, compact separators, no trailing newline, and authorization_sha256 omitted",
+  "original_rederivation_code": [
+    {
+      "path": "circuits/analysis/bonafide/candidate_profiles.py",
+      "sha256": "93a3ca17a36cf80daa3a94419ef0607b2584f7b3eef61959220e4abca91af9d7"
+    },
+    {
+      "path": "circuits/tracing/artifact.py",
+      "sha256": "323697c391ddbc7075525450efbe728ec5b77aea5cca4d11ab4e2f4222c79acd"
+    },
+    {
+      "path": "circuits/tracing/candidates.py",
+      "sha256": "c8d71c96e10d82cc3aaa4486f9cb5f881ad25ef360ac3b1bae517c8806e91bc1"
+    },
+    {
+      "path": "circuits/tracing/candidate_union.py",
+      "sha256": "df70bdcb6cd2ffa6b89ee7116f08ae4fb70dc28c9b94c9a062e41b06fa616c79"
+    }
+  ],
+  "projected_target_columns": [
+    "case_id",
+    "source_width1_artifact_id",
+    "candidate_union_artifact_id",
+    "candidate_union_payload_sha256",
+    "candidate_union_topology_sha256",
+    "base_question_id",
+    "response_id",
+    "phase_bin",
+    "response_position",
+    "family_partition",
+    "partition_hierarchical_weight"
+  ],
+  "purpose": "authorize a metrics-free executable-only source extraction after the mixed-row-group fail-closed stop",
+  "schema_version": "adag.bonafide.candidate-identity-source-authorization.v1",
+  "sources": {
+    "candidate_union_plan": {
+      "canonical_sha256": "0390409e9488fa822be50c0114242369bfa50ff27559d6da40ba182e6d91ae68",
+      "file_sha256": "7d8a79144a6616a30ac67802d2975ef8a7fe5f92bfc1f879ed1a980fbe0a7724",
+      "path": "/scratch/general/vast/u1653998/circuits/dev-worktrees/candidate-aware-input-d1d000d/scripts/bonafide/manifests/qwen3_4b_instruct_candidate_union_c2_plan_v1.json"
+    },
+    "candidate_union_root": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/candidate-union-c2-v1",
+    "c2_input": {
+      "manifest_file_sha256": "8eb27a6410d208ff07b8fffbad7651a6c4deae3d14ef27d3ee5e8d1fc333da68",
+      "manifest_sha256": "a1870accbd8630471eb58daeff2e1cfc19c0a46d17b37d2bde3cbb6b06b11fff",
+      "path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/candidate-aware-clustering-c2-v1/inputs"
+    },
+    "c2_w64_baseline": {
+      "manifest_file_sha256": "ed624b68fc065e8f843f63df9b0d6ba3d2a8e9ba2450b150cbabe2e722e36d7d",
+      "manifest_sha256": "67e99f2d4e19382518daacd3144cd36bcf71af2fc784d87582c2f57dc5ce2509",
+      "path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/candidate-aware-clustering-c2-v1/baseline-v1"
+    },
+    "multiplex_assessment_provenance_only": {
+      "manifest_file_sha256": "4f878b120997b3596f8b1143ddaa4ccfa12ca2af3e8afae611246f74f47fdaa9",
+      "manifest_sha256": "8e1e722be3e9f67f0ca449f4e5b92867814f53d7899d9131c2f115c05535221c",
+      "path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/candidate-aware-clustering-c2-v1/multiplex-assessment-v1"
+    }
+  }
+}

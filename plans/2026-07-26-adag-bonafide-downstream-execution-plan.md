@@ -2798,3 +2798,6 @@ It does not decode compact candidate JSON/value columns, open either mixed candi
 or resolve an audit raw artifact. W64 membership comes from the validated persisted baseline, and
 the multiplex assessment is retained only as a provenance binding. This changes source loading,
 not the committed representations, gates, seeds, or winner rule.
+The exact metrics-free extraction contract is self-hashed in
+`plans/candidate-identity-executable-source-v1.json`; the retry first publishes its immutable
+executable-only source artifact, and only then evaluates the frozen representation family.
