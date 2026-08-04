@@ -138,6 +138,71 @@ def test_width_one_prompts_separate_background_and_use_exact_allowed_witnesses()
     assert "provisional_label" in summary_text
 
 
+def test_hybrid_candidate_prompts_expose_top_five_but_never_audit() -> None:
+    row = _row()
+    row["balanced_target_exemplars"][0]["candidate_union_summary"] = {
+        "candidate_width": 5,
+        "signed_contribution_sum": [1.0, -0.5, 0.25, 0.0, -0.75],
+        "axis_scope": "target_local",
+    }
+    candidate, _ = candidate_messages(
+        row,
+        highlighted_sequences={"trace-1": "HYBRID_GENERATION_EXACT"},
+        prompt_policy="hybrid_candidate_v1",
+    )
+    candidate_text = "\n".join(message.content for message in candidate)
+    assert "top five" in candidate_text
+    assert "candidate_union_summary" in candidate_text
+    assert "no non-degenerate contribution" not in candidate_text
+    assert "HYBRID_GENERATION_EXACT" in candidate_text
+    assert "selection response" not in candidate_text
+
+    profile_payload = {
+        "partitions": {
+            "generation": [
+                {
+                    "trace_unit_id": "trace-1",
+                    "family_partition": "generation",
+                    "record": {
+                        "tokens": ["GENERATION"],
+                        "token_ids": [1],
+                        "activations": [2.0],
+                    },
+                }
+            ],
+            "selection_scoring": [
+                {
+                    "trace_unit_id": "trace-2",
+                    "family_partition": "selection_scoring",
+                    "record": {
+                        "tokens": ["SELECTION"],
+                        "token_ids": [2],
+                        "activations": [1.0],
+                    },
+                }
+            ],
+            "audit": [{"trace_unit_id": "AUDIT_FORBIDDEN"}],
+        }
+    }
+    witnesses = {
+        partition: render_persisted_partition_witnesses(
+            row, profile_payload, partition=partition
+        )
+        for partition in ("generation", "selection_scoring")
+    }
+    summary, _ = summary_messages(
+        row,
+        scored_candidates=[{"text": "candidate", "correlation": 0.5}],
+        prompt_policy="hybrid_candidate_v1",
+        highlighted_witnesses=witnesses,
+    )
+    summary_text = "\n".join(message.content for message in summary)
+    assert "GENERATION" in summary_text
+    assert "SELECTION" in summary_text
+    assert "AUDIT_FORBIDDEN" not in summary_text
+    assert "top-five" in summary_text
+
+
 def test_legacy_prompt_policy_is_the_default() -> None:
     implicit = candidate_messages(_row(), highlighted_sequences={"trace-1": "same"})
     explicit = candidate_messages(

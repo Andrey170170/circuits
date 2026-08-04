@@ -31,7 +31,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("primary", "alternative"),
         default=("primary", "alternative"),
     )
-    prepare.add_argument("--cluster-limit", type=int)
+    prepare.add_argument(
+        "--cluster-limit",
+        type=int,
+        help=(
+            "Generic recipes: total across states. hybrid_candidate_v1: required to be "
+            "12 and interpreted per authorized state."
+        ),
+    )
     prepare.add_argument("--primary-clusters", nargs="+", type=int)
     prepare.add_argument("--alternative-clusters", nargs="+", type=int)
     prepare.add_argument("--run-id")

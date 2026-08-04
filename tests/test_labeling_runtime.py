@@ -3,16 +3,20 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
+from circuits.labeling.config import load_recipe
 from circuits.labeling.io import atomic_write_json, atomic_write_jsonl
 from circuits.labeling.runtime import (
     allocate_cluster_limit,
     execute_live,
+    hybrid_cluster_limits,
     resolve_local_snapshot,
     validate_explicit_cluster_selection,
+    validate_hybrid_recipe_binding,
 )
 from circuits.labeling.schema import ChatMessage, GenerationRequest
 from scripts.bonafide.labeling_pipeline import build_parser
@@ -32,6 +36,46 @@ def test_cluster_limit_is_total_across_states() -> None:
         "primary": 6,
         "alternative": 6,
     }
+
+
+def test_hybrid_cluster_limit_is_twelve_per_authorized_state() -> None:
+    bundle = SimpleNamespace(
+        states={
+            role: SimpleNamespace(
+                manifest={"exploratory_labeling_authorized": True}
+            )
+            for role in ("primary", "alternative")
+        }
+    )
+    assert hybrid_cluster_limits(
+        bundle, ["primary", "alternative"], None, 12
+    ) == {"primary": 12, "alternative": 12}
+    with pytest.raises(ValueError, match="exactly all authorized roles"):
+        hybrid_cluster_limits(bundle, ["primary"], None, 12)
+    with pytest.raises(ValueError, match="overrides are forbidden"):
+        hybrid_cluster_limits(
+            bundle, ["primary", "alternative"], {"primary": [1]}, 12
+        )
+    for limit in (None, 6, 24):
+        with pytest.raises(ValueError, match="exactly 12 per state"):
+            hybrid_cluster_limits(bundle, ["primary", "alternative"], None, limit)
+
+
+def test_hybrid_recipe_binding_requires_exact_id_and_file_hash(tmp_path: Path) -> None:
+    source = Path("scripts/bonafide/configs/labeling/openai-hybrid-candidate-v1.json")
+    recipe_path = tmp_path / source.name
+    recipe_path.write_bytes(source.read_bytes())
+    binding = {
+        "recipe_id": "openai-5.6-hybrid-candidate-v1",
+        "path": "scripts/bonafide/configs/labeling/openai-hybrid-candidate-v1.json",
+        "sha256": file_sha256(recipe_path),
+    }
+    bundle = SimpleNamespace(manifest={"labeling_recipe": binding})
+    recipe = load_recipe(recipe_path)
+    validate_hybrid_recipe_binding(bundle, recipe, recipe_path)
+    recipe_path.write_text(recipe_path.read_text() + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="file hash"):
+        validate_hybrid_recipe_binding(bundle, recipe, recipe_path)
 
 
 def test_prepare_cli_accepts_exact_cluster_sets() -> None:

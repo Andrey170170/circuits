@@ -75,8 +75,8 @@ def assess_width_one_quality(*, run_root: Path) -> dict[str, Any]:
 
     run_manifest = load_run_manifest(run_root)
     recipe = LabelingRecipe.model_validate(run_manifest["recipe"])
-    if recipe.prompt_policy != "width_one_v2":
-        raise ValueError("quality assessment is defined only for width_one_v2 runs")
+    if recipe.prompt_policy not in {"width_one_v2", "hybrid_candidate_v1"}:
+        raise ValueError("quality assessment requires an evidence-rich prompt policy")
     assessment_root = run_root / "assessments" / "label_quality_v2"
     if assessment_root.exists():
         raise FileExistsError(f"quality assessment already exists: {assessment_root}")
@@ -414,12 +414,24 @@ def _write_quality_assessment(
                     "gates_label_decision": False,
                     "interpretation": "separate held-out evaluation; never acceptance or rewrite evidence",
                 },
-                "evidence_limitations": {
-                    "trace_scope": "single_target_width_one",
-                    "contribution_evidence": "shallow",
-                    "non_degenerate_contribution_comparison": False,
-                    "top_k_target_comparison": False,
-                },
+                "evidence_limitations": (
+                    {
+                        "trace_scope": "single_target_width_one",
+                        "contribution_evidence": "shallow",
+                        "non_degenerate_contribution_comparison": False,
+                        "top_k_target_comparison": False,
+                    }
+                    if recipe.prompt_policy == "width_one_v2"
+                    else {
+                        "trace_scope": "single_target_candidate_union",
+                        "source_highlights": "exact_width_one_input_attribution",
+                        "candidate_width": "five_or_six_target_local",
+                        "signed_cancellation_preserved": True,
+                        "non_degenerate_contribution_comparison": True,
+                        "top_k_target_comparison": True,
+                        "cross_target_candidate_rank_semantics": False,
+                    }
+                ),
                 "provenance": {
                     "run_manifest_sha256": run_manifest["manifest_sha256"],
                     "source_manifest_sha256": run_manifest["source_manifest_sha256"],

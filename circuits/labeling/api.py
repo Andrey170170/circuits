@@ -84,6 +84,48 @@ def parse_json_output(
             )
         ):
             return None, "invalid_json"
+    if prompt_template_version == "bonafide-hybrid-candidate-cluster-candidate-v1":
+        fields = (
+            "description",
+            "localized_evidence",
+            "candidate_comparison_evidence",
+            "limitations",
+        )
+        if set(value) != set(fields) or any(
+            not isinstance(value.get(field), str) or not value[field].strip()
+            for field in fields
+        ):
+            return None, "invalid_json"
+    if prompt_template_version == "bonafide-hybrid-candidate-cluster-summary-v1":
+        fields = (
+            "label",
+            "rationale",
+            "candidate_comparison_evidence",
+            "limitations",
+        )
+        confidence = value.get("confidence")
+        status = value.get("status")
+        if (
+            set(value) != {*fields, "confidence", "status"}
+            or any(
+                not isinstance(value.get(field), str) or not value[field].strip()
+                for field in fields
+            )
+            or isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not 0 <= confidence <= 1
+            or len(value["label"].split()) > 12
+            or status not in {"provisional_label", "insufficient_evidence"}
+            or (
+                status == "insufficient_evidence"
+                and value.get("label") != "insufficient_evidence"
+            )
+            or (
+                status == "provisional_label"
+                and value.get("label") == "insufficient_evidence"
+            )
+        ):
+            return None, "invalid_json"
     return value, "success"
 
 
@@ -404,6 +446,17 @@ class FakeBackend(AsyncGenerationBackend):
                     background_or_confound="Shared corpus context is not localized evidence.",
                     limitations="Single-target width-one attribution only.",
                 )
+            elif (
+                request.prompt_template_version
+                == "bonafide-hybrid-candidate-cluster-candidate-v1"
+            ):
+                value.update(
+                    localized_evidence="Deterministic highlighted-token evidence.",
+                    candidate_comparison_evidence=(
+                        "Deterministic target-local candidate comparison."
+                    ),
+                    limitations="Exploratory candidate-union attribution only.",
+                )
         else:
             value = {
                 "label": f"cluster-{request.cluster_id}",
@@ -418,6 +471,17 @@ class FakeBackend(AsyncGenerationBackend):
                     status="provisional_label",
                     background_or_confound="Shared corpus context is excluded.",
                     limitations="Single-target width-one attribution only.",
+                )
+            elif (
+                request.prompt_template_version
+                == "bonafide-hybrid-candidate-cluster-summary-v1"
+            ):
+                value.update(
+                    status="provisional_label",
+                    candidate_comparison_evidence=(
+                        "Deterministic target-local candidate comparison."
+                    ),
+                    limitations="Exploratory candidate-union attribution only.",
                 )
         text = json.dumps(value, sort_keys=True)
         input_tokens = sum(len(message.content.split()) for message in request.messages)

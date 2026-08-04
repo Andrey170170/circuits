@@ -10,6 +10,11 @@ from pydantic import Field, model_validator
 
 from circuits.labeling.schema import ProviderKind, StrictModel, TransportKind
 
+HYBRID_CANDIDATE_RECIPE_ID = "openai-5.6-hybrid-candidate-v1"
+HYBRID_CANDIDATE_RECIPE_PATH = (
+    "scripts/bonafide/configs/labeling/openai-hybrid-candidate-v1.json"
+)
+
 
 class RetryConfig(StrictModel):
     max_attempts: int = Field(default=3, ge=1, le=10)
@@ -60,7 +65,9 @@ class LabelingRecipe(StrictModel):
     schema_version: Literal["adag.labeling.recipe.v1"] = "adag.labeling.recipe.v1"
     recipe_id: str
     description: str
-    prompt_policy: Literal["legacy_v1", "width_one_v2"] = "legacy_v1"
+    prompt_policy: Literal[
+        "legacy_v1", "width_one_v2", "hybrid_candidate_v1"
+    ] = "legacy_v1"
     candidate_samples: int = Field(default=5, ge=1, le=20)
     candidate_generator: ModelRoleConfig
     scorer: LocalScorerConfig = Field(default_factory=LocalScorerConfig)
@@ -69,11 +76,11 @@ class LabelingRecipe(StrictModel):
 
     @model_validator(mode="after")
     def validate_width_one_policy(self) -> "LabelingRecipe":
-        if self.prompt_policy != "width_one_v2":
+        if self.prompt_policy not in {"width_one_v2", "hybrid_candidate_v1"}:
             return self
         if self.cluster_summarizer.max_output_tokens < 1200:
             raise ValueError(
-                "width_one_v2 summaries require at least 1200 output tokens"
+                f"{self.prompt_policy} summaries require at least 1200 output tokens"
             )
         for name, role in (
             ("candidate_generator", self.candidate_generator),
@@ -85,7 +92,7 @@ class LabelingRecipe(StrictModel):
                 and role.temperature is not None
             ):
                 raise ValueError(
-                    f"width_one_v2 {name} cannot set temperature with provider reasoning"
+                    f"{self.prompt_policy} {name} cannot set temperature with provider reasoning"
                 )
         return self
 
