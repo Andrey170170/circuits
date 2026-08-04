@@ -24,22 +24,18 @@ from statistics import mean, median
 from typing import Any
 
 import numpy as np
-import pyarrow.parquet as pq
 
 from circuits.analysis.bonafide.candidate_clustering_execution import (
     _publish_directory_no_replace,
 )
-from circuits.analysis.bonafide.candidate_multiplex_assessment import (
-    ASSESSMENT_SCHEMA_VERSION,
-    TARGET_BASIS_ASSESSMENT_SCHEMA,
-    TARGET_BASIS_FILE,
+from circuits.analysis.bonafide.candidate_identity_source import (
+    EXPECTED_TARGET_COUNTS,
+    PARTITIONS,
+    SOURCE_SCHEMA_VERSION,
+    load_candidate_identity_source,
 )
-from circuits.analysis.bonafide.candidate_multiplex_assessment import (
-    _validate_producing_revision as _validate_assessment_revision,
-)
-from circuits.analysis.bonafide.candidate_profiles import (
-    CANDIDATE_CLUSTER_INPUT_SCHEMA,
-    TARGET_SCHEMA,
+from circuits.analysis.bonafide.candidate_identity_source import (
+    EXPOSURE_CONTRACT as SOURCE_EXPOSURE_CONTRACT,
 )
 from circuits.analysis.bonafide.canonical import (
     canonical_sha256,
@@ -52,7 +48,6 @@ REPORT_FILE = "assessment.json"
 VARIANTS = ("T", "P", "SR", "M")
 ALL_VIEWS = ("R", "T", "P", "SR", "M")
 LOCAL_VARIANTS = ("T", "P", "SR")
-PARTITIONS = ("generation", "selection_scoring")
 GENERATION_FAMILY_COUNT = 18
 SELECTION_FAMILY_COUNT = 8
 NULL_REPLICATES = 100
@@ -60,12 +55,10 @@ BOOTSTRAP_REPLICATES = 10_000
 NULL_EFFECTIVENESS_THRESHOLD = 0.8
 
 _PROTOCOL_RELATIVE = "docs/CANDIDATE_IDENTITY_ALIGNMENT_PROTOCOL.md"
-_FEASIBILITY_RELATIVE = "plans/candidate-identity-feasibility-v1.json"
 _SOURCE_PATHS = (
     "circuits/analysis/bonafide/candidate_identity_assessment.py",
     "scripts/bonafide/candidate_identity_assess.py",
     _PROTOCOL_RELATIVE,
-    _FEASIBILITY_RELATIVE,
 )
 
 Sparse = dict[int, float]
@@ -1005,81 +998,6 @@ def _validate_self_hashed_manifest(
     return manifest
 
 
-def _filtered_rows(
-    path: Path, partition_field: str, schema: Any
-) -> list[dict[str, Any]]:
-    """Materialize only row groups proven exclusive to executable partitions.
-
-    Arrow row filters may decode a full mixed row group before applying their
-    predicate.  Candidate-value columns therefore require trustworthy row-group
-    partition statistics; a mixed or unclassified row group fails closed.
-    """
-
-    parquet = pq.ParquetFile(path)
-    try:
-        partition_column = parquet.schema.names.index(partition_field)
-    except ValueError as error:
-        raise ValueError(f"partition column is absent from {path.name}") from error
-    allowed_row_groups: list[int] = []
-    for row_group_index in range(parquet.num_row_groups):
-        row_group = parquet.metadata.row_group(row_group_index)
-        column = row_group.column(partition_column)
-        statistics = column.statistics
-        if (
-            statistics is None
-            or not statistics.has_min_max
-            or statistics.null_count not in {0, None}
-        ):
-            raise ValueError(
-                f"partition row group cannot prove audit exclusion: {path.name}"
-            )
-        minimum = statistics.min
-        maximum = statistics.max
-        if isinstance(minimum, bytes):
-            minimum = minimum.decode("utf-8")
-        if isinstance(maximum, bytes):
-            maximum = maximum.decode("utf-8")
-        if minimum != maximum:
-            raise ValueError(
-                f"mixed partition row group cannot prove audit exclusion: {path.name}"
-            )
-        partition = str(minimum)
-        if partition in PARTITIONS:
-            allowed_row_groups.append(row_group_index)
-        elif partition != "audit":
-            raise ValueError(f"unknown partition in {path.name}: {partition!r}")
-    if not allowed_row_groups:
-        raise ValueError(f"no executable partition row groups in {path.name}")
-    table = parquet.read_row_groups(allowed_row_groups)
-    if not table.schema.equals(schema, check_metadata=False):
-        raise ValueError(f"filtered source parquet schema drift: {path.name}")
-    rows = table.to_pylist()
-    if any(row[partition_field] not in PARTITIONS for row in rows):
-        raise AssertionError("audit firewall failed during filtered parquet load")
-    return rows
-
-
-def _validate_bound_source_record(
-    record: Mapping[str, Any], *, label: str
-) -> dict[str, Any]:
-    root = Path(str(record.get("path"))).resolve()
-    if Path(str(record.get("manifest_path"))).resolve() != root / "manifest.json":
-        raise ValueError(f"{label} manifest path binding drift")
-    schema_version = record.get("schema_version")
-    if not isinstance(schema_version, str) or not schema_version:
-        raise TypeError(f"{label} schema binding is invalid")
-    manifest = _validate_self_hashed_manifest(
-        root,
-        expected_schema=schema_version,
-        label=label,
-    )
-    if record.get("manifest_sha256") != manifest.get("manifest_sha256") or record.get(
-        "manifest_file_sha256"
-    ) != file_sha256(root / "manifest.json"):
-        raise ValueError(f"{label} source binding drift")
-    return manifest
-
-
 def _validate_target_phase_grid(targets: Sequence[Mapping[str, Any]]) -> None:
     per_response: dict[str, dict[int, str]] = defaultdict(dict)
     for target in targets:
@@ -1168,159 +1086,82 @@ def _parse_target_events(
 
 
 def _load_source_rows(
-    assessment_root: Path, feasibility_path: Path
+    source_root: Path,
 ) -> tuple[dict[str, Any], list[SourceRow], list[SourceRow]]:
-    assessment_manifest = _validate_self_hashed_manifest(
-        assessment_root,
-        expected_schema=ASSESSMENT_SCHEMA_VERSION,
-        label="candidate multiplex assessment",
-        required_files=frozenset({TARGET_BASIS_FILE}),
-    )
-    assessment_revision = assessment_manifest.get("producing_revision")
-    if not isinstance(assessment_revision, Mapping):
-        raise TypeError("source assessment producing revision is invalid")
-    _validate_assessment_revision(assessment_revision)
-    for field in (
-        "outcomes_inspected",
-        "labels_used",
-        "descriptions_generated",
-        "model_calls_made",
-        "confirmatory_holdout_opened",
-    ):
-        if assessment_manifest.get(field) is not False:
-            raise ValueError(f"source assessment violates {field} firewall")
-    if (
-        assessment_manifest.get("candidate_measurement_scope")
-        != "target_basis_signed_sum"
-        or assessment_manifest.get("occurrence_projection_contains_candidate_values")
-        is not False
-        or assessment_manifest.get("cluster_state")
-        != {
-            "identifier": "c2_w64",
-            "view": "W",
-            "n_clusters": 64,
-            "assignment": "medoid_seed",
-        }
-    ):
-        raise ValueError("source assessment C2-W64 measurement binding drift")
-    sources = assessment_manifest.get("sources")
-    if (
-        not isinstance(sources, Mapping)
-        or not isinstance(sources.get("c2_input"), Mapping)
-        or not isinstance(sources.get("c2_clustering_baseline"), Mapping)
-    ):
-        raise TypeError("source assessment lacks C2 input or W64 baseline binding")
-    input_record = sources["c2_input"]
-    _validate_bound_source_record(
-        sources["c2_clustering_baseline"], label="C2 clustering baseline"
-    )
-    _validate_bound_source_record(sources["dense_multiplex"], label="dense multiplex")
-    input_root = Path(str(input_record.get("path"))).resolve()
-    input_manifest = _validate_self_hashed_manifest(
-        input_root,
-        expected_schema=CANDIDATE_CLUSTER_INPUT_SCHEMA,
-        label="C2 input",
-        required_files=frozenset({"targets.parquet"}),
-    )
-    if input_record.get("manifest_sha256") != input_manifest.get(
-        "manifest_sha256"
-    ) or input_record.get("manifest_file_sha256") != file_sha256(
-        input_root / "manifest.json"
-    ):
-        raise ValueError("source assessment C2 input binding drift")
-    for field in (
-        "outcomes_inspected",
-        "model_calls_made",
-        "cluster_fit_performed",
-        "confirmatory_holdout_opened",
-    ):
-        if input_manifest.get(field) is not False:
-            raise ValueError(f"C2 input violates {field} firewall")
-    feasibility = load_json_object(feasibility_path)
-    feasibility_core = dict(feasibility)
-    if feasibility_core.pop("receipt_sha256", None) != canonical_sha256(
-        feasibility_core
-    ):
-        raise ValueError("candidate identity feasibility receipt self-hash mismatch")
-    inspection = feasibility.get("inspection")
-    if not isinstance(inspection, Mapping) or any(
-        inspection.get(field) is not False
-        for field in (
-            "audit_candidate_profile_values_loaded",
-            "audit_candidate_selection_json_parsed",
-            "audit_metrics_computed",
-            "audit_rows_summarized",
-            "candidate_profile_table_loaded",
-            "selection_metric_computed",
-            "transformed_values_computed",
-        )
-    ):
-        raise ValueError("candidate identity feasibility firewall drift")
-    source = feasibility.get("source")
-    if (
-        not isinstance(source, Mapping)
-        or Path(str(source.get("input_manifest_path"))).resolve()
-        != input_root / "manifest.json"
-        or source.get("input_manifest_sha256") != input_manifest.get("manifest_sha256")
-        or source.get("targets_file_sha256")
-        != file_sha256(input_root / "targets.parquet")
-    ):
-        raise ValueError("candidate identity feasibility source binding drift")
+    """Load only the immutable executable-only source artifact."""
 
-    targets = _filtered_rows(
-        input_root / "targets.parquet", "family_partition", TARGET_SCHEMA
+    manifest, target_tables, profile_tables = load_candidate_identity_source(
+        source_root
     )
+    if manifest.get("schema_version") != SOURCE_SCHEMA_VERSION:
+        raise ValueError("candidate identity source schema drift")
+    if manifest.get("exposure_contract") != SOURCE_EXPOSURE_CONTRACT:
+        raise ValueError("candidate identity source exposure drift")
+    if manifest.get("cluster_state") != {
+        "identifier": "c2_w64",
+        "view": "W",
+        "n_clusters": 64,
+        "assignment": "medoid_seed",
+    }:
+        raise ValueError("candidate identity source C2-W64 binding drift")
+
+    targets = [
+        row
+        for partition in PARTITIONS
+        for row in target_tables[partition].to_pylist()
+    ]
     _validate_target_phase_grid(targets)
-    assessment = _filtered_rows(
-        assessment_root / TARGET_BASIS_FILE,
-        "family_partition",
-        TARGET_BASIS_ASSESSMENT_SCHEMA,
-    )
     target_by_case = {str(row["case_id"]): row for row in targets}
     if len(target_by_case) != len(targets):
-        raise ValueError("duplicate filtered target identity")
+        raise ValueError("duplicate published target identity")
+
     result: dict[str, list[SourceRow]] = {partition: [] for partition in PARTITIONS}
-    for row in assessment:
-        if not bool(row["candidate_profile_available"]) or not bool(
-            row["c2_w64_assigned"]
-        ):
-            continue
-        target = target_by_case.get(str(row["case_id"]))
-        if target is None or any(
-            target[field] != row[field]
-            for field in (
-                "family_partition",
-                "base_question_id",
-                "response_id",
-                "phase_bin",
-                "response_position",
-                "partition_hierarchical_weight",
+    seen: set[tuple[str, int]] = set()
+    for partition in PARTITIONS:
+        for row in profile_tables[partition].to_pylist():
+            case_id = str(row["case_id"])
+            basis_index = int(row["signed_basis_index"])
+            identity = (case_id, basis_index)
+            if identity in seen:
+                raise ValueError("duplicate published target-basis identity")
+            seen.add(identity)
+            target = target_by_case.get(case_id)
+            if target is None or target["family_partition"] != partition:
+                raise ValueError("published profile target binding drift")
+            cluster = row["c2_w64_cluster_id"]
+            assigned = bool(row["c2_w64_assigned"])
+            if assigned != (cluster is not None):
+                raise ValueError("published C2-W64 assignment nullability drift")
+            if not assigned:
+                continue
+            result[partition].append(
+                SourceRow(
+                    family_id=str(target["base_question_id"]),
+                    response_id=str(target["response_id"]),
+                    target_id=case_id,
+                    basis_index=basis_index,
+                    cluster_id=int(cluster),
+                    layer=int(row["layer"]),
+                    polarity=str(row["polarity"]),
+                    phase=int(target["phase_bin"]),
+                    observed_token_id=int(target["observed_token_id"]),
+                    observed_token_text=str(target["observed_token_text"]),
+                    events=_parse_target_events(
+                        target, row["candidate_contrast_vector"]
+                    ),
+                )
             )
-        ):
-            raise ValueError("assessment target binding drift")
-        cluster = row["c2_w64_cluster_id"]
-        vector = row["candidate_contrast_vector"]
-        if cluster is None or vector is None:
-            raise ValueError("candidate-supported W64 row has null scientific values")
-        result[str(row["family_partition"])].append(
-            SourceRow(
-                family_id=str(row["base_question_id"]),
-                response_id=str(row["response_id"]),
-                target_id=str(row["case_id"]),
-                basis_index=int(row["signed_basis_index"]),
-                cluster_id=int(cluster),
-                layer=int(row["layer"]),
-                polarity=str(row["polarity"]),
-                phase=int(row["phase_bin"]),
-                observed_token_id=int(target["observed_token_id"]),
-                observed_token_text=str(target["observed_token_text"]),
-                events=_parse_target_events(target, vector),
-            )
-        )
-    for partition, expected in (("generation", 18), ("selection_scoring", 8)):
-        if len({row.family_id for row in result[partition]}) != expected:
+    for partition, expected_families in (
+        ("generation", GENERATION_FAMILY_COUNT),
+        ("selection_scoring", SELECTION_FAMILY_COUNT),
+    ):
+        if target_tables[partition].num_rows != EXPECTED_TARGET_COUNTS[partition]:
+            raise ValueError(f"{partition} published target count drift")
+        if not result[partition]:
+            raise ValueError(f"{partition} has no candidate-supported W64 rows")
+        if len({row.family_id for row in result[partition]}) != expected_families:
             raise ValueError(f"{partition} does not contain the frozen family count")
-    return assessment_manifest, result["generation"], result["selection_scoring"]
+    return manifest, result["generation"], result["selection_scoring"]
 
 
 def compute_candidate_identity_assessment(
@@ -1368,7 +1209,7 @@ def _source_record(root: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def build_candidate_identity_assessment(
-    *, assessment_root: Path, output_root: Path, repo_root: Path
+    *, source_root: Path, output_root: Path, repo_root: Path
 ) -> dict[str, Any]:
     output = output_root.resolve()
     if output.exists():
@@ -1377,10 +1218,7 @@ def build_candidate_identity_assessment(
         )
     revision = _collect_revision(repo_root)
     protocol_sha256 = file_sha256(repo_root / _PROTOCOL_RELATIVE)
-    feasibility_path = repo_root / _FEASIBILITY_RELATIVE
-    source_manifest, generation, selection = _load_source_rows(
-        assessment_root.resolve(), feasibility_path
-    )
+    source_manifest, generation, selection = _load_source_rows(source_root.resolve())
     report, dictionaries = compute_candidate_identity_assessment(
         generation, selection, protocol_sha256=protocol_sha256
     )
@@ -1399,12 +1237,10 @@ def build_candidate_identity_assessment(
         core: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "purpose": "label_free_candidate_identity_alignment_selection_evaluation",
-            "source_assessment": _source_record(assessment_root, source_manifest),
+            "candidate_identity_source": _source_record(source_root, source_manifest),
             "protocol": {
                 "path": _PROTOCOL_RELATIVE,
                 "sha256": protocol_sha256,
-                "feasibility_receipt_path": _FEASIBILITY_RELATIVE,
-                "feasibility_receipt_sha256": file_sha256(feasibility_path),
             },
             "producing_revision": revision,
             "decision": {
@@ -1416,6 +1252,8 @@ def build_candidate_identity_assessment(
                 "audit_candidate_metadata_loaded": False,
                 "audit_candidate_values_loaded": False,
                 "audit_metrics_computed": False,
+                "mixed_source_value_tables_opened": False,
+                "raw_candidate_artifacts_opened": False,
                 "labels_used": False,
                 "model_calls_made": False,
             },
@@ -1437,12 +1275,7 @@ def build_candidate_identity_assessment(
             raise ValueError(
                 "candidate identity producing revision changed during construction"
             )
-        current_source = _validate_self_hashed_manifest(
-            assessment_root,
-            expected_schema=ASSESSMENT_SCHEMA_VERSION,
-            label="candidate multiplex assessment",
-            required_files=frozenset({TARGET_BASIS_FILE}),
-        )
+        current_source, _, _ = load_candidate_identity_source(source_root)
         if current_source != source_manifest:
             raise ValueError("candidate identity source changed during construction")
         _publish_directory_no_replace(temporary, output)
@@ -1491,11 +1324,8 @@ def load_candidate_identity_assessment(
     if (
         not isinstance(protocol, Mapping)
         or protocol.get("path") != _PROTOCOL_RELATIVE
-        or protocol.get("feasibility_receipt_path") != _FEASIBILITY_RELATIVE
         or protocol.get("sha256")
         != source_by_path.get(_PROTOCOL_RELATIVE, {}).get("sha256")
-        or protocol.get("feasibility_receipt_sha256")
-        != source_by_path.get(_FEASIBILITY_RELATIVE, {}).get("sha256")
     ):
         raise ValueError("candidate identity protocol binding drift")
     report = load_json_object(artifact / REPORT_FILE)
@@ -1505,16 +1335,11 @@ def load_candidate_identity_assessment(
         "labeling_authorized": report.get("labeling_authorized"),
     }:
         raise ValueError("candidate identity decision summary drift")
-    source = manifest.get("source_assessment")
+    source = manifest.get("candidate_identity_source")
     if not isinstance(source, Mapping):
         raise TypeError("candidate identity source binding is invalid")
     source_root = Path(str(source.get("path"))).resolve()
-    source_manifest = _validate_self_hashed_manifest(
-        source_root,
-        expected_schema=ASSESSMENT_SCHEMA_VERSION,
-        label="candidate multiplex assessment",
-        required_files=frozenset({TARGET_BASIS_FILE}),
-    )
+    source_manifest, _, _ = load_candidate_identity_source(source_root)
     if source.get("manifest_sha256") != source_manifest.get(
         "manifest_sha256"
     ) or source.get("manifest_file_sha256") != file_sha256(

@@ -787,6 +787,28 @@ def load_candidate_identity_source(
     if not isinstance(revision, Mapping):
         raise TypeError("candidate identity source producing revision is invalid")
     _validate_revision(revision)
+    revision_files = revision.get("files")
+    if not isinstance(revision_files, list):
+        raise TypeError("candidate identity source revision inventory is invalid")
+    revision_by_path = {
+        str(record.get("path")): record
+        for record in revision_files
+        if isinstance(record, Mapping)
+    }
+    authorization = manifest.get("authorization")
+    protocol = manifest.get("protocol")
+    if (
+        not isinstance(authorization, Mapping)
+        or authorization.get("path") != AUTHORIZATION_RELATIVE
+        or authorization.get("authorization_sha256") != AUTHORIZATION_SHA256
+        or authorization.get("file_sha256")
+        != revision_by_path.get(AUTHORIZATION_RELATIVE, {}).get("sha256")
+        or not isinstance(protocol, Mapping)
+        or protocol.get("path") != PROTOCOL_RELATIVE
+        or protocol.get("sha256")
+        != revision_by_path.get(PROTOCOL_RELATIVE, {}).get("sha256")
+    ):
+        raise ValueError("candidate identity source authorization binding drift")
     records = manifest.get("files")
     if not isinstance(records, list):
         raise TypeError("candidate identity source file inventory is invalid")
@@ -800,6 +822,12 @@ def load_candidate_identity_source(
         raise ValueError("candidate identity source file inventory drift")
     targets = {}
     profiles = {}
+    model = manifest.get("model")
+    if not isinstance(model, Mapping):
+        raise TypeError("candidate identity source model binding is invalid")
+    expected_model = (str(model.get("model_id")), str(model.get("model_revision")))
+    basis_identity: dict[int, tuple[str, str, int, int, str]] = {}
+    seen_target_basis: set[tuple[str, int]] = set()
     for partition in PARTITIONS:
         target_path = source_root / TARGET_FILES[partition]
         profile_path = source_root / PROFILE_FILES[partition]
@@ -823,6 +851,37 @@ def load_candidate_identity_source(
         target_ids = set(targets[partition]["case_id"].to_pylist())
         if set(profiles[partition]["case_id"].to_pylist()) - target_ids:
             raise ValueError("candidate identity source profile target binding drift")
+        for row in profiles[partition].to_pylist():
+            basis_index = int(row["signed_basis_index"])
+            identity = (
+                str(row["model_id"]),
+                str(row["model_revision"]),
+                int(row["layer"]),
+                int(row["neuron_index"]),
+                str(row["polarity"]),
+            )
+            if identity[:2] != expected_model:
+                raise ValueError("candidate identity source model identity drift")
+            previous = basis_identity.setdefault(basis_index, identity)
+            if previous != identity:
+                raise ValueError("candidate identity source signed-basis join drift")
+            target_basis = (str(row["case_id"]), basis_index)
+            if target_basis in seen_target_basis:
+                raise ValueError("candidate identity source target-basis duplication")
+            seen_target_basis.add(target_basis)
+            assigned = bool(row["c2_w64_assigned"])
+            cluster = row["c2_w64_cluster_id"]
+            if assigned != (cluster is not None) or (
+                cluster is not None and not 0 <= int(cluster) < 64
+            ):
+                raise ValueError("candidate identity source W64 assignment drift")
+            vector = np.asarray(row["candidate_contrast_vector"], dtype=np.float64)
+            if (
+                vector.shape != (5,)
+                or not np.isfinite(vector).all()
+                or int(row["candidate_occurrence_count"]) <= 0
+            ):
+                raise ValueError("candidate identity source reconstructed profile drift")
     counts = manifest.get("counts")
     if (
         not isinstance(counts, Mapping)
@@ -832,4 +891,47 @@ def load_candidate_identity_source(
         != {partition: profiles[partition].num_rows for partition in PARTITIONS}
     ):
         raise ValueError("candidate identity source count summary drift")
+    if counts.get("targets_by_partition") != EXPECTED_TARGET_COUNTS:
+        raise ValueError("candidate identity source frozen target count drift")
+    structural = manifest.get("structural_target_projection")
+    if structural != {
+        "columns": list(PROJECTED_TARGET_COLUMNS),
+        "all_partition_counts": {
+            **EXPECTED_TARGET_COUNTS,
+            "audit": EXPECTED_AUDIT_TARGET_COUNT,
+        },
+        "audit_rows_converted_to_python": False,
+    }:
+        raise ValueError("candidate identity source structural projection drift")
+    selected = manifest.get("selected_payloads")
+    if not isinstance(selected, Mapping) or not isinstance(
+        selected.get("records"), list
+    ):
+        raise TypeError("candidate identity selected payload inventory is invalid")
+    payload_records = selected["records"]
+    target_records = {
+        str(row["candidate_union_artifact_id"]): (
+            partition,
+            str(row["candidate_union_payload_sha256"]),
+        )
+        for partition in PARTITIONS
+        for row in targets[partition].to_pylist()
+    }
+    payload_bindings = {
+        str(record.get("artifact_id")): (
+            str(record.get("partition")),
+            str(record.get("payload_sha256")),
+        )
+        for record in payload_records
+        if isinstance(record, Mapping)
+    }
+    if (
+        len(payload_records) != sum(EXPECTED_TARGET_COUNTS.values())
+        or len(target_records) != sum(EXPECTED_TARGET_COUNTS.values())
+        or len(payload_bindings) != sum(EXPECTED_TARGET_COUNTS.values())
+        or int(selected.get("count", -1)) != len(payload_records)
+        or selected.get("record_set_sha256") != canonical_sha256(payload_records)
+        or payload_bindings != target_records
+    ):
+        raise ValueError("candidate identity selected payload binding drift")
     return manifest, targets, profiles

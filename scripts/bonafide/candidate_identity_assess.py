@@ -14,12 +14,12 @@ from circuits.analysis.bonafide.candidate_identity_assessment import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--assessment-root", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     args = parser.parse_args()
     manifest = build_candidate_identity_assessment(
-        assessment_root=args.assessment_root,
+        source_root=args.source_root,
         output_root=args.output_root,
         repo_root=args.repo_root,
     )

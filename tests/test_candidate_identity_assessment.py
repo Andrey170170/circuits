@@ -5,9 +5,9 @@ import json
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
+from circuits.analysis.bonafide import candidate_identity_assessment as assessment
 from circuits.analysis.bonafide.candidate_identity_assessment import (
     CandidateEvent as Event,
 )
@@ -15,7 +15,6 @@ from circuits.analysis.bonafide.candidate_identity_assessment import (
     ProjectedRow,
     SourceRow,
     SparseCentroids,
-    _filtered_rows,
     _hierarchical_scores,
     _null_blocks,
     _parse_target_events,
@@ -27,6 +26,12 @@ from circuits.analysis.bonafide.candidate_identity_assessment import (
     build_candidate_identity_assessment,
     evaluate_projected_views,
     surface_relation_key,
+)
+from circuits.analysis.bonafide.candidate_identity_source import (
+    EXPOSURE_CONTRACT,
+    PROFILE_SCHEMA,
+    SOURCE_SCHEMA_VERSION,
+    TARGET_SCHEMA,
 )
 
 
@@ -354,50 +359,93 @@ def test_seed_byte_recipe_and_joint_null_gate_fail_closed() -> None:
     )
 
 
-def test_filtered_parquet_never_materializes_audit_rows(tmp_path: Path) -> None:
-    schema = pa.schema(
-        [
-            pa.field("family_partition", pa.string(), nullable=False),
-            pa.field("candidate_value", pa.string(), nullable=False),
-        ]
-    )
-    path = tmp_path / "rows.parquet"
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {"family_partition": "generation", "candidate_value": "g"},
-                {"family_partition": "selection_scoring", "candidate_value": "s"},
-                {"family_partition": "audit", "candidate_value": "AUDIT_SENTINEL"},
-            ],
-            schema=schema,
-        ),
-        path,
-        row_group_size=1,
-    )
-    rows = _filtered_rows(path, "family_partition", schema)
-    assert [row["candidate_value"] for row in rows] == ["g", "s"]
-
-    mixed = tmp_path / "mixed.parquet"
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {"family_partition": "generation", "candidate_value": "g"},
-                {"family_partition": "audit", "candidate_value": "AUDIT_SENTINEL"},
-            ],
-            schema=schema,
-        ),
-        mixed,
-    )
-    with pytest.raises(ValueError, match="mixed partition row group"):
-        _filtered_rows(mixed, "family_partition", schema)
-
-
 def test_no_overwrite_fails_before_source_or_revision_access(tmp_path: Path) -> None:
     output = tmp_path / "existing"
     output.mkdir()
     with pytest.raises(FileExistsError, match="refusing to replace"):
         build_candidate_identity_assessment(
-            assessment_root=tmp_path / "missing-source",
+            source_root=tmp_path / "missing-source",
             output_root=output,
             repo_root=tmp_path / "missing-repo",
         )
+
+
+def test_evaluator_loads_only_published_source_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_tables = {}
+    profile_tables = {}
+    for partition in assessment.PARTITIONS:
+        selection, vector = _selection()
+        target_rows = []
+        profile_rows = []
+        for phase in range(7):
+            case_id = f"{partition}-{phase}"
+            target_rows.append(
+                {
+                    "case_id": case_id,
+                    "source_width1_artifact_id": f"source-{case_id}",
+                    "candidate_union_artifact_id": f"union-{case_id}",
+                    "candidate_union_payload_sha256": "1" * 64,
+                    "candidate_union_topology_sha256": "2" * 64,
+                    "base_question_id": f"family-{partition}",
+                    "response_id": f"response-{partition}",
+                    "phase_bin": phase,
+                    "response_position": phase,
+                    "family_partition": partition,
+                    "partition_hierarchical_weight": 1.0,
+                    **selection,
+                }
+            )
+            profile_rows.append(
+                {
+                    "case_id": case_id,
+                    "signed_basis_index": phase,
+                    "model_id": "model",
+                    "model_revision": "revision",
+                    "layer": 2,
+                    "neuron_index": phase,
+                    "polarity": "+",
+                    "c2_w64_assigned": True,
+                    "c2_w64_cluster_id": phase % 2,
+                    "candidate_contrast_vector": vector,
+                    "candidate_occurrence_count": 1,
+                    "family_partition": partition,
+                }
+            )
+        target_tables[partition] = pa.Table.from_pylist(
+            target_rows, schema=TARGET_SCHEMA
+        )
+        profile_tables[partition] = pa.Table.from_pylist(
+            profile_rows, schema=PROFILE_SCHEMA
+        )
+    manifest = {
+        "schema_version": SOURCE_SCHEMA_VERSION,
+        "exposure_contract": EXPOSURE_CONTRACT,
+        "cluster_state": {
+            "identifier": "c2_w64",
+            "view": "W",
+            "n_clusters": 64,
+            "assignment": "medoid_seed",
+        },
+    }
+    loaded_roots = []
+    monkeypatch.setattr(
+        assessment,
+        "load_candidate_identity_source",
+        lambda root: (loaded_roots.append(root) or manifest, target_tables, profile_tables),
+    )
+    monkeypatch.setattr(
+        assessment,
+        "EXPECTED_TARGET_COUNTS",
+        {"generation": 7, "selection_scoring": 7},
+    )
+    monkeypatch.setattr(assessment, "GENERATION_FAMILY_COUNT", 1)
+    monkeypatch.setattr(assessment, "SELECTION_FAMILY_COUNT", 1)
+
+    loaded, generation, selection = assessment._load_source_rows(tmp_path)
+
+    assert loaded is manifest
+    assert loaded_roots == [tmp_path]
+    assert len(generation) == len(selection) == 7
+    assert all(len(row.events) == 4 for row in generation + selection)
