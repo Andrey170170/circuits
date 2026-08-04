@@ -158,6 +158,23 @@ EXPOSURE_CONTRACT = {
     "raw_artifact_manifest_or_metrics_files_opened": False,
 }
 
+CLUSTER_STATE = {
+    "identifier": "c2_w64",
+    "view": "W",
+    "n_clusters": 64,
+    "assignment": "medoid_seed",
+}
+
+IDENTITY_CHECKS = {
+    "artifact_id": "exact_selected_directory",
+    "payload_sha256": "verified_before_deserialization",
+    "source_width1_artifact_id": "trace_equals_projected_target",
+    "topology_sha256": "trace_equals_projected_target",
+    "response_position": "trace_equals_projected_target",
+    "candidate_union_plan": "transitively_bound_by_c2_input_manifest",
+    "signed_basis": "exact_model_revision_layer_neuron_polarity_join_to_c2_w64",
+}
+
 
 def _git(root: Path, *arguments: str, binary: bool = False) -> str | bytes:
     completed = subprocess.run(
@@ -301,13 +318,15 @@ def _validate_authorized_sources(
     assert isinstance(plan_record, Mapping)
 
     input_root = Path(str(input_record["path"])).resolve()
+    if file_sha256(input_root / "manifest.json") != input_record.get(
+        "manifest_file_sha256"
+    ):
+        raise ValueError("candidate identity C2 input manifest file drift")
     input_manifest = _load_self_hashed_manifest(
         input_root, expected_schema=CANDIDATE_CLUSTER_INPUT_SCHEMA
     )
     if (
         input_manifest.get("manifest_sha256") != input_record.get("manifest_sha256")
-        or file_sha256(input_root / "manifest.json")
-        != input_record.get("manifest_file_sha256")
     ):
         raise ValueError("candidate identity C2 input binding drift")
     for field in (
@@ -502,6 +521,20 @@ def _write_parquet(path: Path, rows: Sequence[Mapping[str, Any]], schema: pa.Sch
         os.close(descriptor)
 
 
+def _validate_selected_trace_binding(
+    trace: CandidateUnionTrace,
+    target: Mapping[str, Any],
+    *,
+    artifact_id: str,
+) -> None:
+    if (
+        trace.source_width1_artifact_id != target["source_width1_artifact_id"]
+        or trace.shared_response_position != int(target["response_position"])
+        or trace.topology_sha256 != target["candidate_union_topology_sha256"]
+    ):
+        raise ValueError(f"candidate identity selected trace binding drift: {artifact_id}")
+
+
 def _derive_rows(
     *,
     targets: Sequence[Mapping[str, Any]],
@@ -526,12 +559,7 @@ def _derive_rows(
         trace = load_hash_bound_candidate_union_trace(
             payload_path, expected_sha256=payload_sha256
         )
-        if (
-            trace.source_width1_artifact_id != target["source_width1_artifact_id"]
-            or trace.shared_response_position != int(target["response_position"])
-            or trace.topology_sha256 != target["candidate_union_topology_sha256"]
-        ):
-            raise ValueError(f"candidate identity selected trace binding drift: {artifact_id}")
+        _validate_selected_trace_binding(trace, target, artifact_id=artifact_id)
         selection = trace.candidate_selection
         profiles, _, diagnostics = extract_candidate_profiles(
             # Empty metadata makes the no-manifest/no-metrics boundary explicit. The
@@ -584,9 +612,15 @@ def _derive_rows(
             )
         payload_records.append(
             {
+                "case_id": str(target["case_id"]),
                 "artifact_id": artifact_id,
                 "partition": partition,
                 "payload_sha256": payload_sha256,
+                "source_width1_artifact_id": str(
+                    target["source_width1_artifact_id"]
+                ),
+                "topology_sha256": str(target["candidate_union_topology_sha256"]),
+                "response_position": int(target["response_position"]),
                 "relative_payload_path": str(payload_path.relative_to(candidate_union_root)),
             }
         )
@@ -597,6 +631,19 @@ def _derive_rows(
             key=lambda row: (str(row["case_id"]), int(row["signed_basis_index"]))
         )
     return target_rows, profile_rows, payload_records
+
+
+def _extract_w64_assignments(baseline: Any, *, basis_count: int) -> np.ndarray:
+    if baseline.manifest.get("chosen_cluster_count") != 64:
+        raise ValueError("candidate identity authorized baseline is not W64")
+    assignments = extract_chosen_medoid_assignments(
+        baseline, basis_count=basis_count
+    )["W"]
+    if assignments.shape != (basis_count,) or np.any(
+        (assignments < -1) | (assignments >= 64)
+    ):
+        raise ValueError("candidate identity W64 assignment domain drift")
+    return assignments
 
 
 def build_candidate_identity_source(
@@ -621,9 +668,9 @@ def build_candidate_identity_source(
     baseline = load_candidate_clustering_baseline(baseline_root, verify_source=False)
     if baseline.manifest != baseline_manifest:
         raise ValueError("candidate identity baseline deep load drift")
-    assignments = extract_chosen_medoid_assignments(
+    assignments = _extract_w64_assignments(
         baseline, basis_count=len(basis_by_key)
-    )["W"]
+    )
     target_rows, profile_rows, payload_records = _derive_rows(
         targets=targets,
         candidate_union_root=candidate_union_root,
@@ -685,28 +732,13 @@ def build_candidate_identity_source(
                 ]["canonical_sha256"],
             },
             "model": {"model_id": model_id, "model_revision": model_revision},
-            "cluster_state": {
-                "identifier": "c2_w64",
-                "view": "W",
-                "n_clusters": 64,
-                "assignment": "medoid_seed",
-            },
+            "cluster_state": CLUSTER_STATE,
             "structural_target_projection": {
                 "columns": list(PROJECTED_TARGET_COLUMNS),
                 "all_partition_counts": structural_counts,
                 "audit_rows_converted_to_python": False,
             },
-            "identity_checks": {
-                "artifact_id": "exact_selected_directory",
-                "payload_sha256": "verified_before_deserialization",
-                "source_width1_artifact_id": "trace_equals_projected_target",
-                "topology_sha256": "trace_equals_projected_target",
-                "response_position": "trace_equals_projected_target",
-                "candidate_union_plan": "transitively_bound_by_c2_input_manifest",
-                "signed_basis": (
-                    "exact_model_revision_layer_neuron_polarity_join_to_c2_w64"
-                ),
-            },
+            "identity_checks": IDENTITY_CHECKS,
             "audit_sentinels": {
                 "structural_rows_projected": EXPECTED_AUDIT_TARGET_COUNT,
                 "rows_converted_to_python": 0,
@@ -753,10 +785,20 @@ def build_candidate_identity_source(
         raise
 
 
-def _exact_table(path: Path, schema: pa.Schema) -> pa.Table:
+def _exact_table(
+    path: Path, schema: pa.Schema, record: Mapping[str, Any]
+) -> pa.Table:
+    if (
+        not path.is_file()
+        or path.stat().st_size != int(record.get("size_bytes", -1))
+        or file_sha256(path) != record.get("sha256")
+    ):
+        raise ValueError(f"candidate identity source file drift: {path.name}")
     table = pq.read_table(path)
     if not table.schema.equals(schema, check_metadata=False):
         raise ValueError(f"candidate identity source parquet schema drift: {path.name}")
+    if table.num_rows != int(record.get("row_count", -1)):
+        raise ValueError(f"candidate identity source row count drift: {path.name}")
     return table
 
 
@@ -809,8 +851,68 @@ def load_candidate_identity_source(
         != revision_by_path.get(PROTOCOL_RELATIVE, {}).get("sha256")
     ):
         raise ValueError("candidate identity source authorization binding drift")
+    revision_root = Path(str(revision.get("repo_root"))).resolve()
+    if not (revision_root / ".git").exists():
+        revision_root = Path(__file__).resolve().parents[3]
+    authorization_bytes = _git(
+        revision_root,
+        "show",
+        f"{revision.get('git_commit')}:{AUTHORIZATION_RELATIVE}",
+        binary=True,
+    )
+    assert isinstance(authorization_bytes, bytes)
+    frozen_authorization = json.loads(authorization_bytes)
+    if not isinstance(frozen_authorization, dict):
+        raise TypeError("candidate identity frozen authorization is invalid")
+    authorization_core = dict(frozen_authorization)
+    if (
+        authorization_core.pop("authorization_sha256", None)
+        != AUTHORIZATION_SHA256
+        or canonical_sha256(authorization_core) != AUTHORIZATION_SHA256
+    ):
+        raise ValueError("candidate identity frozen authorization drift")
+    authorized_sources = frozen_authorization.get("sources")
+    if not isinstance(authorized_sources, Mapping):
+        raise TypeError("candidate identity frozen source bindings are invalid")
+    c2_input = authorized_sources.get("c2_input")
+    baseline = authorized_sources.get("c2_w64_baseline")
+    assessment = authorized_sources.get("multiplex_assessment_provenance_only")
+    plan = authorized_sources.get("candidate_union_plan")
+    if not all(
+        isinstance(record, Mapping)
+        for record in (c2_input, baseline, assessment, plan)
+    ):
+        raise TypeError("candidate identity frozen source record is invalid")
+    assert isinstance(c2_input, Mapping)
+    assert isinstance(baseline, Mapping)
+    assert isinstance(assessment, Mapping)
+    assert isinstance(plan, Mapping)
+    expected_sources = {
+        "c2_input_manifest_sha256": c2_input.get("manifest_sha256"),
+        "c2_input_manifest_file_sha256": c2_input.get("manifest_file_sha256"),
+        "c2_w64_baseline_manifest_sha256": baseline.get("manifest_sha256"),
+        "c2_w64_baseline_manifest_file_sha256": baseline.get(
+            "manifest_file_sha256"
+        ),
+        "multiplex_assessment_manifest_sha256": assessment.get("manifest_sha256"),
+        "multiplex_assessment_manifest_file_sha256": assessment.get(
+            "manifest_file_sha256"
+        ),
+        "candidate_union_root": str(authorized_sources.get("candidate_union_root")),
+        "candidate_union_plan_canonical_sha256": plan.get("canonical_sha256"),
+    }
+    if (
+        manifest.get("sources") != expected_sources
+        or manifest.get("cluster_state") != CLUSTER_STATE
+        or manifest.get("identity_checks") != IDENTITY_CHECKS
+    ):
+        raise ValueError("candidate identity source provenance claim drift")
     records = manifest.get("files")
-    if not isinstance(records, list):
+    if (
+        not isinstance(records, list)
+        or any(not isinstance(record, Mapping) for record in records)
+        or len(records) != len(set(TARGET_FILES.values()) | set(PROFILE_FILES.values()))
+    ):
         raise TypeError("candidate identity source file inventory is invalid")
     expected_files = set(TARGET_FILES.values()) | set(PROFILE_FILES.values())
     by_name = {
@@ -831,19 +933,12 @@ def load_candidate_identity_source(
     for partition in PARTITIONS:
         target_path = source_root / TARGET_FILES[partition]
         profile_path = source_root / PROFILE_FILES[partition]
-        targets[partition] = _exact_table(target_path, TARGET_SCHEMA)
-        profiles[partition] = _exact_table(profile_path, PROFILE_SCHEMA)
-        for path, table in (
-            (target_path, targets[partition]),
-            (profile_path, profiles[partition]),
-        ):
-            record = by_name[path.name]
-            if (
-                path.stat().st_size != int(record.get("size_bytes", -1))
-                or file_sha256(path) != record.get("sha256")
-                or table.num_rows != int(record.get("row_count", -1))
-            ):
-                raise ValueError(f"candidate identity source file drift: {path.name}")
+        targets[partition] = _exact_table(
+            target_path, TARGET_SCHEMA, by_name[target_path.name]
+        )
+        profiles[partition] = _exact_table(
+            profile_path, PROFILE_SCHEMA, by_name[profile_path.name]
+        )
         if set(targets[partition]["family_partition"].to_pylist()) != {partition}:
             raise ValueError("candidate identity source target partition drift")
         if set(profiles[partition]["family_partition"].to_pylist()) != {partition}:
@@ -911,20 +1006,45 @@ def load_candidate_identity_source(
     payload_records = selected["records"]
     target_records = {
         str(row["candidate_union_artifact_id"]): (
+            str(row["case_id"]),
             partition,
             str(row["candidate_union_payload_sha256"]),
+            str(row["source_width1_artifact_id"]),
+            str(row["candidate_union_topology_sha256"]),
+            int(row["response_position"]),
         )
         for partition in PARTITIONS
         for row in targets[partition].to_pylist()
     }
     payload_bindings = {
         str(record.get("artifact_id")): (
+            str(record.get("case_id")),
             str(record.get("partition")),
             str(record.get("payload_sha256")),
+            str(record.get("source_width1_artifact_id")),
+            str(record.get("topology_sha256")),
+            int(record.get("response_position", -1)),
         )
         for record in payload_records
         if isinstance(record, Mapping)
     }
+    payload_paths_valid = all(
+        isinstance(record, Mapping)
+        and Path(str(record.get("relative_payload_path"))).parts
+        == (
+            CANDIDATE_UNION_TRACE_FAMILY_ID,
+            Path(str(record.get("relative_payload_path"))).parts[1],
+            str(record.get("artifact_id")),
+            DATA_FILENAME,
+        )
+        for record in payload_records
+        if isinstance(record, Mapping)
+        and len(Path(str(record.get("relative_payload_path"))).parts) == 4
+    ) and all(
+        isinstance(record, Mapping)
+        and len(Path(str(record.get("relative_payload_path"))).parts) == 4
+        for record in payload_records
+    )
     if (
         len(payload_records) != sum(EXPECTED_TARGET_COUNTS.values())
         or len(target_records) != sum(EXPECTED_TARGET_COUNTS.values())
@@ -932,6 +1052,7 @@ def load_candidate_identity_source(
         or int(selected.get("count", -1)) != len(payload_records)
         or selected.get("record_set_sha256") != canonical_sha256(payload_records)
         or payload_bindings != target_records
+        or not payload_paths_valid
     ):
         raise ValueError("candidate identity selected payload binding drift")
     return manifest, targets, profiles

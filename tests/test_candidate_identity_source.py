@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import pickle
 from pathlib import Path
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -158,6 +159,53 @@ def test_payload_resolution_is_limited_to_exact_selected_artifact(
     audit.touch()
 
     assert source._resolve_payload(tmp_path, "selected") == selected.resolve()
+
+
+def test_non_w64_baseline_is_rejected_before_assignment_extraction() -> None:
+    baseline = SimpleNamespace(manifest={"chosen_cluster_count": 32})
+    with pytest.raises(ValueError, match="not W64"):
+        source._extract_w64_assignments(baseline, basis_count=1)
+
+
+def test_selected_trace_identity_mismatch_fails_closed() -> None:
+    trace = SimpleNamespace(
+        source_width1_artifact_id="source",
+        shared_response_position=3,
+        topology_sha256="wrong-topology",
+    )
+    target = {
+        "source_width1_artifact_id": "source",
+        "response_position": 3,
+        "candidate_union_topology_sha256": "expected-topology",
+    }
+    with pytest.raises(ValueError, match="trace binding drift"):
+        source._validate_selected_trace_binding(
+            trace,
+            target,
+            artifact_id="artifact",
+        )
+
+
+def test_published_parquet_hash_is_checked_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "published.parquet"
+    path.write_bytes(b"not trusted parquet")
+
+    def _forbidden_read(*args: object, **kwargs: object) -> object:
+        raise AssertionError("Parquet was decoded before its hash was accepted")
+
+    monkeypatch.setattr(source.pq, "read_table", _forbidden_read)
+    with pytest.raises(ValueError, match="source file drift"):
+        source._exact_table(
+            path,
+            source.TARGET_SCHEMA,
+            {
+                "size_bytes": path.stat().st_size,
+                "sha256": "0" * 64,
+                "row_count": 1,
+            },
+        )
 
 
 def test_source_no_overwrite_fails_before_revision_or_input_access(
