@@ -1,0 +1,67 @@
+{
+  "schema_version": "bonafide-t5-corpus-preparation-profile/v1",
+  "profile_id": "qwen3-4b-instruct-2507-t5-corpus-v1",
+  "campaign_id": "qwen3-4b-instruct-2507-circuits-corpus-v1",
+  "inputs": {
+    "generation_csv": {
+      "path": "/scratch/rai/vast1/u1653998/bonafide/campaigns/qwen3-4b-instruct-2507-circuits-corpus-v1/attempts/generation-v1.csv",
+      "sha256": "7dec2ed942fcb6f5d5be281d61f3184db7f37689163b11e2b9c0c86af4cdcf62"
+    },
+    "request_grid": {
+      "path": "/scratch/rai/vast1/u1653998/bonafide/campaigns/qwen3-4b-instruct-2507-circuits-corpus-v1/requests/v1/request-grid.csv",
+      "sha256": "dca8515520302e802e8f926a57c7e67907595340cacdef9ad00b9ada92cd9c5b"
+    },
+    "run_metadata": {
+      "path": "/scratch/rai/vast1/u1653998/bonafide/runs/qwen3-4b-instruct-2507-circuits-corpus-v1/1740919/run-metadata.json",
+      "sha256": "7c31da7772be644308760a0080c34b84d8172035ab1f2382b6e843ce4a35b7af"
+    },
+    "frozen_screening_implementation": {
+      "path": "/scratch/rai/vast1/u1653998/bonafide/source-snapshots/qwen3-4b-instruct-2507-circuits-corpus-v1/a4b8a77f819cb5835c75cfd3f96d21eeb7a4147d76b9b9432037586e8402a75a/scripts/screen_qwen3_circuits_corpus.py",
+      "sha256": "b99f54aa58df8634d210024dc5118b72d3dc68665b061fbf0058e7f1257efab5"
+    },
+    "tokenizer_source_manifest": {
+      "path": "/uufs/chpc.utah.edu/common/home/u1653998/projects/circuits/scripts/bonafide/manifests/qwen3_4b_instruct_final_traces.json",
+      "sha256": "706143579c8ebcbd05e1fee150d2f3facf5f3f7e7de372c40e399b83a01687e2"
+    },
+    "trace_run_config": {
+      "path": "/uufs/chpc.utah.edu/common/home/u1653998/projects/circuits/scripts/bonafide/configs/qwen3_4b_instruct.json",
+      "sha256": "ea15b49ae5f5a07af8c145e5ed157a08297b6ebed24145064d9bbbf60ab336fb"
+    }
+  },
+  "role_map": {
+    "primary_new_prompt": "primary_discovery",
+    "discovery_bridge": "bridge_calibration"
+  },
+  "target_selection": {
+    "policy_id": "stratified-random-20.v1",
+    "targets_per_response": 20,
+    "seed": "qwen3-4b-instruct-2507-t5-corpus-v1",
+    "design": "one deterministic probability sample from each of 20 contiguous response-token strata",
+    "dense_response_traces_included": false
+  },
+  "candidate_tracing": {
+    "candidate_policy_id": "model_top5_plus_observed",
+    "candidate_count_min": 5,
+    "candidate_count_max": 6,
+    "topology": "independent specified-token traces followed by exact-union fixed-topology rescoring",
+    "candidate_union_contract": "adag.bonafide.candidate-union.v1"
+  },
+  "execution": {
+    "pass1_max_items_per_wave": 64,
+    "pass2_max_cases_per_wave": 12,
+    "max_array_tasks": 1000,
+    "recommended_array_concurrency": 4
+  },
+  "expected_counts": {
+    "selected_responses": 479,
+    "targets": 9580,
+    "response_roles": {
+      "bridge_calibration": 23,
+      "primary_discovery": 456
+    },
+    "target_roles": {
+      "bridge_calibration": 460,
+      "primary_discovery": 9120
+    }
+  }
+}

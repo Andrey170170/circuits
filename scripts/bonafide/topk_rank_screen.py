@@ -6,13 +6,15 @@ import argparse
 import json
 import os
 import uuid
-from collections.abc import Mapping, Sequence
+from collections import defaultdict
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import torch
+
 from circuits.tracing.candidates import select_candidate_logits
 from circuits.tracing.trace import (
-    _teacher_forced_position_logits,
     prepare_teacher_forced_input,
 )
 from scripts.bonafide.execution_plan import sha256_file
@@ -28,6 +30,7 @@ from scripts.bonafide.runner import (
 SCHEMA_VERSION = "bonafide-topk-rank-screen/v1"
 SELECTION_RULE = "lowest_stored_observed_probability_then_artifact_id"
 EXACT_POOL_SELECTION_RULE = "exact_frozen_selection_pool_order"
+ALL_SOURCE_ITEMS_RULE = "all_non_holdout_source_items_in_manifest_order"
 
 
 def select_rank_screen_items(
@@ -109,13 +112,9 @@ def select_exact_rank_screen_items(
     seen: set[str] = set()
     for case in raw_cases:
         if not isinstance(case, Mapping):
-            raise ValueError("exact rank-screen cases must be objects")
+            raise TypeError("exact rank-screen cases must be objects")
         artifact_id = case.get("source_width1_artifact_id")
-        if (
-            not isinstance(artifact_id, str)
-            or not artifact_id
-            or artifact_id in seen
-        ):
+        if not isinstance(artifact_id, str) or not artifact_id or artifact_id in seen:
             raise ValueError(f"invalid or duplicate exact screen case: {artifact_id}")
         seen.add(artifact_id)
         pair = source_items.get(artifact_id)
@@ -137,53 +136,138 @@ def select_exact_rank_screen_items(
     return selected
 
 
+def select_all_rank_screen_items(
+    source_manifest: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return every single-target non-holdout source item in manifest order."""
+
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for wave in source_manifest.get("waves", []):
+        role = wave.get("corpus_role")
+        if not isinstance(role, str) or role.endswith("confirmatory_holdout"):
+            continue
+        for raw_item in wave.get("items", []):
+            item = dict(raw_item)
+            validate_target_selection(item)
+            artifact_id = item.get("artifact_id")
+            if (
+                not isinstance(artifact_id, str)
+                or not artifact_id
+                or artifact_id in seen
+            ):
+                raise ValueError(
+                    f"invalid or duplicate all-item rank-screen source: {artifact_id}"
+                )
+            if len(item["target_selection"]["response_token_positions"]) != 1:
+                raise ValueError("all-item rank screening requires single targets")
+            seen.add(artifact_id)
+            selected.append(item)
+    if not selected:
+        raise ValueError("all-item rank screen source is empty")
+    return selected
+
+
 def screen_candidate_ranks(
     model,
     tokenizer,
     items: Sequence[Mapping[str, Any]],
+    *,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Measure observed rank and the realized union width without tracing graphs."""
+    """Measure candidate ranks with one causal forward pass per response.
 
-    results: list[dict[str, Any]] = []
-    for item in items:
+    Every result is still a single-position scientific unit.  Grouping only
+    shares the model forward pass: logits at each prediction position are
+    unchanged by later response tokens under causal attention.
+    """
+
+    grouped: dict[str, list[tuple[int, Mapping[str, Any]]]] = defaultdict(list)
+    response_contracts: dict[str, tuple[str, str]] = {}
+    for index, item in enumerate(items):
         positions = item["target_selection"]["response_token_positions"]
         if len(positions) != 1:
             raise ValueError("rank screening requires one response target position")
-        position = int(positions[0])
         example = item["example"]
+        example_id = str(example["example_id"])
+        contract = (str(example["prompt"]), str(example["response"]))
+        if response_contracts.setdefault(example_id, contract) != contract:
+            raise ValueError(f"rank-screen response identity drift: {example_id}")
+        grouped[example_id].append((index, item))
+
+    indexed_results: list[tuple[int, dict[str, Any]]] = []
+    device = next(model.parameters()).device
+    for example_id, indexed_items in grouped.items():
+        ordered = sorted(
+            indexed_items,
+            key=lambda pair: (
+                int(pair[1]["target_selection"]["response_token_positions"][0]),
+                str(pair[1]["artifact_id"]),
+            ),
+        )
+        positions = [
+            int(item["target_selection"]["response_token_positions"][0])
+            for _, item in ordered
+        ]
+        if len(set(positions)) != len(positions):
+            raise ValueError(
+                f"rank-screen response has duplicate targets: {example_id}"
+            )
+        example = ordered[0][1]["example"]
         prepared = prepare_teacher_forced_input(
             tokenizer,
             example["prompt"],
             example["response"],
-            [position],
+            positions,
         )
-        expected_observed_token_id = int(
-            item["target_selection"]["final_target_token_id"]
-        )
-        if prepared.target_token_ids != [expected_observed_token_id]:
+        expected_ids = [
+            int(item["target_selection"]["final_target_token_id"])
+            for _, item in ordered
+        ]
+        if prepared.target_token_ids != expected_ids:
             raise ValueError(
-                "rank-screen tokenizer target disagrees with frozen source item"
+                "rank-screen tokenizer targets disagree with frozen source items"
             )
-        position_logits = _teacher_forced_position_logits(model, prepared)
-        selection = select_candidate_logits(
-            position_logits,
-            observed_token_id=expected_observed_token_id,
-            policy_id="model_top5_plus_observed",
-            candidate_count=6,
-            decode_token=lambda token_id: tokenizer.decode([token_id]),
-        )
-        result = {
-            "source_width1_artifact_id": item["artifact_id"],
-            "example_id": example["example_id"],
-            "corpus_role": item["target_selection"]["final_selection"]["corpus_role"],
-            "target_response_position": position,
-            "input_token_count": len(prepared.input_ids),
-            "candidate_count": len(selection.candidates),
-            "candidate_selection": selection.to_dict(),
-        }
-        results.append(result)
-        print(json.dumps(result, sort_keys=True, allow_nan=False), flush=True)
-    return results
+        input_ids = torch.tensor([prepared.input_ids], device=device)
+        attention_mask = torch.tensor([prepared.attention_mask], device=device)
+        with torch.no_grad():
+            logits = model(input_ids=input_ids, attention_mask=attention_mask).logits[0]
+        for item_index, item in ordered:
+            position = int(item["target_selection"]["response_token_positions"][0])
+            expected_observed_token_id = int(
+                item["target_selection"]["final_target_token_id"]
+            )
+            prediction_position = prepared.assistant_prefix_token_count + position - 1
+            position_logits = logits[prediction_position].detach()
+            selection = select_candidate_logits(
+                position_logits,
+                observed_token_id=expected_observed_token_id,
+                policy_id="model_top5_plus_observed",
+                candidate_count=6,
+                decode_token=lambda token_id: tokenizer.decode([token_id]),
+            )
+            indexed_results.append(
+                (
+                    item_index,
+                    {
+                        "source_width1_artifact_id": item["artifact_id"],
+                        "example_id": example_id,
+                        "corpus_role": item["target_selection"]["final_selection"][
+                            "corpus_role"
+                        ],
+                        "target_response_position": position,
+                        "input_token_count": (
+                            prepared.assistant_prefix_token_count + position + 1
+                        ),
+                        "candidate_count": len(selection.candidates),
+                        "candidate_selection": selection.to_dict(),
+                    },
+                )
+            )
+        if progress_callback is not None:
+            progress_callback(len(indexed_results), len(items))
+        del logits, input_ids, attention_mask
+    return [result for _, result in sorted(indexed_results)]
 
 
 def save_rank_screen(path: Path, payload: Mapping[str, Any]) -> Path:
@@ -213,6 +297,9 @@ def main() -> None:
     selection_group = parser.add_mutually_exclusive_group()
     selection_group.add_argument("--max-items", type=int)
     selection_group.add_argument("--selection-pool", type=Path)
+    selection_group.add_argument("--all-items", action="store_true")
+    parser.add_argument("--print-records", action="store_true")
+    parser.add_argument("--progress-every", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -221,7 +308,7 @@ def main() -> None:
     source_manifest = load_json(args.source_manifest)
     tokenizer_provenance = source_manifest.get("tokenizer")
     if not isinstance(tokenizer_provenance, Mapping):
-        raise ValueError("rank-screen source manifest lacks tokenizer provenance")
+        raise TypeError("rank-screen source manifest lacks tokenizer provenance")
     if (
         tokenizer_provenance.get("model_id") != config["model"]["model_id"]
         or tokenizer_provenance.get("revision") != config["model"]["revision"]
@@ -241,12 +328,45 @@ def main() -> None:
             raise ValueError("rank-screen selection pool source hash drift")
         items = select_exact_rank_screen_items(source_manifest, selection_pool)
         selection_rule = EXACT_POOL_SELECTION_RULE
+    elif args.all_items:
+        items = select_all_rank_screen_items(source_manifest)
+        selection_rule = ALL_SOURCE_ITEMS_RULE
     else:
         max_items = args.max_items if args.max_items is not None else 32
         items = select_rank_screen_items(source_manifest, max_items=max_items)
         selection_rule = SELECTION_RULE
+    if args.progress_every < 0:
+        raise ValueError("progress_every must be nonnegative")
+    next_progress = args.progress_every
+
+    def report_progress(completed: int, total: int) -> None:
+        nonlocal next_progress
+        if not next_progress or completed < next_progress:
+            return
+        print(
+            json.dumps(
+                {
+                    "status": "rank_screen_progress",
+                    "completed": completed,
+                    "total": total,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        while next_progress <= completed:
+            next_progress += args.progress_every
+
     model, tokenizer = _load_model_and_tokenizer(config)
-    results = screen_candidate_ranks(model, tokenizer, items)
+    results = screen_candidate_ranks(
+        model,
+        tokenizer,
+        items,
+        progress_callback=report_progress if args.progress_every else None,
+    )
+    if args.print_records:
+        for result in results:
+            print(json.dumps(result, sort_keys=True, allow_nan=False), flush=True)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "selection_evidence_only": True,

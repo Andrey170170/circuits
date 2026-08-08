@@ -2829,3 +2829,40 @@ ineffective because only about 46.8% of T/P/SR rows and hierarchical mass were m
 frozen 80% requirement. `M` increased recurrence relative to R but covered only 4.22% of generation
 weight, remained below the 0.55 recurrence gate, and produced no scoreable selection rows. Under
 the frozen decision rule, make no labeling API calls from this assembly test.
+
+## 20. Independent-response T5 corpus expansion
+
+The generation-only Qwen campaign completed on 2026-08-07/08. Its 1,864-row consolidated CSV and
+all 1,864 atomic attempt records validate against the completed run metadata. Trace-compatible
+mechanical screening yields 456 primary response cells and 23 discovery-bridge cells after one
+important compatibility correction: vLLM retained Qwen's terminal `<|im_end|>` token in natural
+EOS completion-token arrays even though the frozen screen described that token as excluded.
+Tracing treats it as the assistant suffix. The downstream intake therefore removes exactly the
+declared suffix and re-encodes the frozen response text with the authenticated tracing tokenizer
+before reapplying the frozen predicates. This also resolves 32 equivalent but non-identical BPE
+segmentations (six among selected responses), producing a separately versioned screen rather than
+silently accepting either the off-by-one length or generation/trace token drift.
+
+The prepared `qwen3-4b-instruct-2507-t5-corpus-v1` source contains every one-draw selected response
+in those two roles. It chooses 20 deterministic stratified-random response positions per response:
+9,120 targets from 456 new primary responses and 460 targets from 23 bridge responses, for 9,580
+independent positions. Eligible alternate draws are retained but are not duplicated into the
+primary tracing corpus. Dense W1 responses remain separate and are not T5-retraced by this profile.
+
+The execution order is now:
+
+1. freeze the prepared source manifest and run one batched all-target rank screen (479 causal
+   forwards rather than 9,580 independent forwards);
+2. build six specified-candidate pass-one manifests under the frozen
+   `model_top5_plus_observed` rule;
+3. run a one-wave smoke, then the reviewed pass-one array at concurrency four;
+4. bind completed pass-one references into exact-union fixed-topology refinement plans;
+5. run pass two, assemble candidate-union artifacts, and only then construct the new paper-style
+   clustering inputs and evaluate labelability.
+
+Preparation does not authorize GPU submission. The full profile is estimated from C2 measurements
+at roughly 1,750 A100-hours across both trace passes, or about 18 queue-free days at concurrency
+four. Before full execution, the rank-screen receipt and one pass-one smoke must be checked, and a
+new outcome-blind 96/128-response checkpoint remains a valid lower-cost alternative. Exact paths,
+hashes, commands, and the immutable artifact inventory are recorded in
+`docs/T5_CORPUS_TRACING_RUNBOOK.md`.

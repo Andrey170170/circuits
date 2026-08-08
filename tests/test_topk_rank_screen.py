@@ -4,6 +4,7 @@ from copy import deepcopy
 
 from scripts.bonafide.topk_rank_screen import (
     screen_candidate_ranks,
+    select_all_rank_screen_items,
     select_exact_rank_screen_items,
     select_rank_screen_items,
 )
@@ -66,6 +67,50 @@ def test_rank_screen_measures_union_width_without_graph_tracing() -> None:
         125,
         124,
         123,
+    ]
+
+
+def test_rank_screen_batches_targets_from_one_response() -> None:
+    source = _rank_source_manifest()
+    first = source["waves"][0]["items"][0]
+    second = deepcopy(first)
+    second["artifact_id"] = "source-trace-2"
+    second["target_selection"]["response_token_positions"] = [3]
+    second["target_selection"]["final_target_token_id"] = 30
+    model = FakeModel()
+
+    progress = []
+    results = screen_candidate_ranks(
+        model,
+        FakeChatTokenizer(),
+        [first, second],
+        progress_callback=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert model.forward_calls == 1
+    assert [result["source_width1_artifact_id"] for result in results] == [
+        "source-trace-1",
+        "source-trace-2",
+    ]
+    assert [result["input_token_count"] for result in results] == [7, 8]
+    assert progress == [(2, 2)]
+
+
+def test_all_item_rank_screen_preserves_non_holdout_manifest_order() -> None:
+    source = _rank_source_manifest()
+    second = deepcopy(source["waves"][0]["items"][0])
+    second["artifact_id"] = "second"
+    source["waves"][0]["items"].append(second)
+    holdout = deepcopy(source["waves"][0])
+    holdout["corpus_role"] = "broad_confirmatory_holdout"
+    holdout["items"][0]["artifact_id"] = "holdout"
+    source["waves"].append(holdout)
+
+    selected = select_all_rank_screen_items(source)
+
+    assert [item["artifact_id"] for item in selected] == [
+        "source-trace-1",
+        "second",
     ]
 
 
