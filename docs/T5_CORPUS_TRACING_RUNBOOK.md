@@ -1,7 +1,9 @@
 # Qwen T5 corpus tracing runbook
 
-Status: corpus intake is prepared and validated; no rank-screen or tracing GPU job has been
-submitted.
+Status (2026-08-09): corpus intake, rank screening, and the pass-one bundle are complete. Pass-one
+array `14543695` is running from frozen commit
+`a15cc41d4861ce371f74b676d6e8076159579f17`; original task indices 37, 46, and 52 have failed while
+the rest of the array continues. The salvage lane below is implemented but has not been submitted.
 
 ## Frozen source and scope
 
@@ -148,7 +150,105 @@ sbatch --array="0-$((TASK_COUNT - 1))%4" \
 
 Submission remains an explicit later action. The preparation step does not authorize it.
 
-## Resource implication
+### Stage 3b: provenance-preserving pass-one salvage
+
+Do not patch the source snapshot used by an active pass-one array. A pending array element checks
+that snapshot's commit and tracked cleanliness, and the code revision is part of every trace's
+artifact identity. Instead, freeze a second clean orchestration snapshot containing the salvage
+tools. The planner reads the original bundle and artifact root, recovers the complete
+identity-defining execution contract from completed artifacts (model, ADAG config, warm-up,
+batch size, code revision, runtime, trace family, and manifest), rejects a supplied config that
+differs from that contract, recomputes every exact original artifact identity, and emits only
+missing pairs. It validates metadata, identity self-hashes, and full payload checksums for every
+completed artifact in scope (and requires at least one completed reference artifact overall). It
+also hashes every scanned selected-wave execution summary and attaches prior
+`error`/`oom` records to the corresponding missing pair.
+
+For the current array failures, scope the first plan to the stopped original task indices so work
+still pending in the active array is not accidentally scheduled twice:
+
+```bash
+sacct -M notchpeak -X \
+  -j 14543695_37,14543695_46,14543695_52 \
+  --format=JobID,State,ExitCode -n -P | \
+  awk -F'|' '$1 == "14543695_37" || $1 == "14543695_46" || $1 == "14543695_52"'
+```
+
+Before planning, require all three exact array rows to report terminal `FAILED` state, not
+`RUNNING`, `PENDING`, or a requeued attempt. The planner independently requires terminal
+`error`/`oom` evidence under each selected wave's execution-summary directory. This is the default
+active-array safety gate.
+
+```bash
+ORIGINAL_COMMIT=a15cc41d4861ce371f74b676d6e8076159579f17
+ORIGINAL_TREE=/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/t5-corpus-v1/source-snapshots/$ORIGINAL_COMMIT
+ORCHESTRATION_TREE=/absolute/clean/salvage/source-snapshot
+ORCHESTRATION_COMMIT="$(git -C "$ORCHESTRATION_TREE" rev-parse HEAD)"
+BUNDLE=/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/t5-corpus-v1/pass1-bundle-v1/t5-pass1-bundle.json
+BUNDLE_SHA256=a32b29edbc822c757d5cb20b550f1336416b5c71e00c0cc8aaea996ba99ac508
+ARTIFACT_ROOT=/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/t5-corpus-v1/pass1
+SALVAGE_DIR=/new/immutable/t5-pass1-salvage-plan-v1
+
+cd "$ORCHESTRATION_TREE"
+"$T5_ENV/bin/python" -m scripts.bonafide.build_t5_pass1_salvage \
+  --bundle "$BUNDLE" \
+  --bundle-sha256 "$BUNDLE_SHA256" \
+  --artifact-root "$ARTIFACT_ROOT" \
+  --frozen-source-tree "$ORIGINAL_TREE" \
+  --frozen-git-commit "$ORIGINAL_COMMIT" \
+  --orchestration-source-tree "$ORCHESTRATION_TREE" \
+  --orchestration-git-commit "$ORCHESTRATION_COMMIT" \
+  --config "$ORIGINAL_TREE/scripts/bonafide/configs/qwen3_4b_instruct.json" \
+  --python-bin "$T5_ENV/bin/python" \
+  --original-task-index 37 \
+  --original-task-index 46 \
+  --original-task-index 52 \
+  --max-items-per-task 1 \
+  --output-dir "$SALVAGE_DIR"
+```
+
+After the entire original array is globally quiescent, a final all-task missing sweep may omit the
+three `--original-task-index` arguments and add `--allow-quiescent-missing-scan`. This is an
+explicit operator assertion recorded in the self-hashed plan; never use it while `squeue` still
+shows any element of the original array as running or pending. Because that sweep checksum-validates
+every completed artifact, run it from a CPU Slurm allocation rather than a login node.
+
+The default one-item task shape gives every missing trace an independent scheduler fate. If a
+future salvage set would exceed the array limit, increase `--max-items-per-task`: the executor
+still invokes the original frozen runner in a fresh subprocess for each artifact, records its
+outcome, and continues after a failed subprocess. This intentionally reloads the model per trace;
+it is a bounded repair mechanism, not a replacement for normal batched pass-one execution.
+
+Inspect the self-hashed plan and its `counts` before any submission. If `salvage_tasks` is zero,
+nothing should be submitted. Otherwise freeze its file hash and submit exactly its task range:
+
+```bash
+SALVAGE_PLAN="$SALVAGE_DIR/t5-pass1-salvage-plan.json"
+SALVAGE_PLAN_SHA256="$(sha256sum "$SALVAGE_PLAN" | awk '{print $1}')"
+SALVAGE_TASK_COUNT="$(
+  "$T5_ENV/bin/python" -c \
+    'import json, pathlib, sys; print(len(json.loads(pathlib.Path(sys.argv[1]).read_text())["tasks"]))' \
+    "$SALVAGE_PLAN"
+)"
+
+sbatch --test-only --array="0-$((SALVAGE_TASK_COUNT - 1))%4" \
+  --export=ALL,SALVAGE_PLAN="$SALVAGE_PLAN",SALVAGE_PLAN_SHA256="$SALVAGE_PLAN_SHA256",EXPECTED_ORCHESTRATION_COMMIT="$ORCHESTRATION_COMMIT",UV_PROJECT_ENVIRONMENT="$T5_ENV" \
+  scripts/bonafide/t5_pass1_salvage.sbatch
+```
+
+The salvage executor fails closed before model load if the plan, original bundle, either source
+tree, config, Python environment, or GPU/runtime cohort drifts. Successful artifacts are therefore
+written with the original trace runner's commit and artifact identity. Per-attempt receipts live
+under `pass1/salvage-receipts/<plan-manifest-sha256>/`; original-runner summaries live separately
+under `pass1/salvage-execution-summaries/`. Planning and `sbatch --test-only` do not authorize a
+real submission.
+
+The five-minute Slurm `USR1` warning is forwarded to the current frozen runner. A signal race is
+handled harmlessly, but a signaled salvage task records `task_stopped` and exits nonzero. There is
+no automatic requeue: wait for the attempt to terminate, build a new immutable missing-artifact
+plan from the resulting receipts/summaries, and submit that new plan explicitly.
+
+## Original resource estimate
 
 This full profile is much larger than C2. C2 measured 245 target cases at approximately 23.8
 A100-hours for independent pass one and 20.9 A100-hours for fixed-union pass two. Scaling by target
@@ -157,8 +257,7 @@ two, before retry/queue overhead. At four-way concurrency that is roughly 18 que
 both passes. The exact realized width-five/six mix and rank-screen output should replace this
 estimate before submission.
 
-Therefore, preparation covers every selected response, but execution should remain checkpointed:
-first confirm the rank screen and one pass-one smoke wave, then decide whether to execute the full
-all-response profile or freeze a smaller 96/128-response discovery checkpoint. A smaller profile
-must be a new outcome-blind selection artifact; it must not silently edit this all-response source
-manifest.
+The full all-response pass-one profile was selected and is now running. The estimate above remains
+planning provenance rather than a current ETA; use completed task runtimes and scheduler occupancy
+for live forecasts. Pass two remains a later explicit decision after pass-one completion and
+salvage validation.
