@@ -46,12 +46,23 @@ PYTHON_BIN="${UV_PROJECT_ENVIRONMENT}/bin/python"
 CONFIG="${CONFIG:-${REPO_ROOT}/scripts/bonafide/configs/qwen3_4b_instruct.json}"
 MAX_ITEMS="${MAX_ITEMS:-32}"
 SELECTION_ARGS=(--max-items "$MAX_ITEMS")
-if [[ -n "${SELECTION_POOL:-}" ]]; then
+if [[ "${ALL_ITEMS:-0}" == "1" ]]; then
+    if [[ -n "${SELECTION_POOL:-}" ]]; then
+        echo "ALL_ITEMS=1 and SELECTION_POOL are mutually exclusive." >&2
+        exit 2
+    fi
+    SELECTION_ARGS=(--all-items)
+elif [[ -n "${SELECTION_POOL:-}" ]]; then
     if [[ "$SELECTION_POOL" != /* ]] || [[ ! -f "$SELECTION_POOL" ]]; then
         echo "SELECTION_POOL must be an existing absolute path." >&2
         exit 2
     fi
     SELECTION_ARGS=(--selection-pool "$SELECTION_POOL")
+fi
+if [[ "${PRINT_RECORDS:-0}" == "1" ]]; then
+    SELECTION_ARGS+=(--print-records)
+elif [[ -n "${PROGRESS_EVERY:-}" ]]; then
+    SELECTION_ARGS+=(--progress-every "$PROGRESS_EVERY")
 fi
 
 export HF_HUB_OFFLINE=1

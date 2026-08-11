@@ -1,0 +1,60 @@
+{
+  "hash_convention": "SHA256 of canonical UTF-8 JSON with sorted keys, compact separators, no trailing newline, and receipt_sha256 omitted",
+  "inspection": {
+    "audit_candidate_profile_values_loaded": false,
+    "audit_candidate_selection_json_parsed": false,
+    "audit_metrics_computed": false,
+    "audit_rows_structurally_loaded_in_target_table": true,
+    "audit_rows_summarized": false,
+    "candidate_profile_table_loaded": false,
+    "generation": {
+      "adjacent_unique_phase_pairs": 114,
+      "candidate_slots": 670,
+      "competitor_slots": 537,
+      "responses": 19,
+      "responses_with_duplicate_phase": 0,
+      "target_count": 133,
+      "unique_candidate_tokens": 465,
+      "unique_competitor_tokens": 400,
+      "unique_repeated_candidate_tokens": 97
+    },
+    "prior_label_outputs_are_executable_inputs": false,
+    "prior_label_outputs_motivated_protocol": true,
+    "selection_metric_computed": false,
+    "selection_scoring": {
+      "adjacent_unique_phase_pairs": 48,
+      "candidate_slots": 282,
+      "competitor_slots": 226,
+      "responses": 8,
+      "responses_with_duplicate_phase": 0,
+      "target_count": 56,
+      "unique_candidate_tokens": 180,
+      "unique_competitor_tokens": 155,
+      "unique_repeated_candidate_tokens": 51
+    },
+    "selection_structurally_exposed_but_value_unscored": true,
+    "target_columns_read": [
+      "base_question_id",
+      "candidate_selection_json",
+      "case_id",
+      "family_partition",
+      "observed_token_id",
+      "observed_token_text",
+      "phase_bin",
+      "response_id",
+      "response_position"
+    ],
+    "transformed_values_computed": false
+  },
+  "purpose": "bind_pre_metric_candidate_identity_alignment_feasibility_exposure",
+  "receipt_sha256": "4413707d053edff3fb1e022a7ab9f079eab437504c877fa4b2a609fe5833196a",
+  "schema_version": "adag.bonafide.candidate-identity-feasibility.v1",
+  "source": {
+    "input_manifest_path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/candidate-aware-clustering-c2-v1/inputs/manifest.json",
+    "input_manifest_sha256": "a1870accbd8630471eb58daeff2e1cfc19c0a46d17b37d2bde3cbb6b06b11fff",
+    "targets_file_sha256": "9cb54a608aefaa2ef23c80dc2d6c89aa0a2915d357b2c8998b3e85cb29f0e408",
+    "targets_path": "/scratch/general/vast/u1653998/circuits/results/bonafide/downstream/candidate-aware-clustering-c2-v1/inputs/targets.parquet",
+    "targets_row_count": 245,
+    "targets_size_bytes": 129872
+  }
+}

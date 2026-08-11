@@ -1,0 +1,54 @@
+{
+  "schema_version": "adag.bonafide.candidate-labeling-runtime-config.v1",
+  "recipe_id": "openai-c2-evidence-v1",
+  "description": "OpenAI-first C2 evidence iteration: five Luna semantic samples, Terra rewrite, and independent Terra conservative control.",
+  "evaluation_phase": "iteration",
+  "deferred": false,
+  "semantic_samples_per_prompt": 5,
+  "semantic_generator": {
+    "provider": "openai",
+    "model": "gpt-5.6-luna",
+    "transport": "native_batch",
+    "api_key_env": "OPENAI_API_KEY",
+    "max_output_tokens": 3200,
+    "reasoning": {"effort": "low"},
+    "concurrency": 32,
+    "timeout_seconds": 180,
+    "retry": {
+      "max_attempts": 4,
+      "initial_backoff_seconds": 1,
+      "max_backoff_seconds": 30
+    }
+  },
+  "semantic_rewriter": {
+    "provider": "openai",
+    "model": "gpt-5.6-terra",
+    "transport": "native_batch",
+    "api_key_env": "OPENAI_API_KEY",
+    "max_output_tokens": 3200,
+    "reasoning": {"effort": "low"},
+    "concurrency": 32,
+    "timeout_seconds": 180,
+    "retry": {
+      "max_attempts": 4,
+      "initial_backoff_seconds": 1,
+      "max_backoff_seconds": 30
+    }
+  },
+  "conservative_control": {
+    "provider": "openai",
+    "model": "gpt-5.6-terra",
+    "transport": "native_batch",
+    "api_key_env": "OPENAI_API_KEY",
+    "max_output_tokens": 1200,
+    "reasoning": {"effort": "low"},
+    "concurrency": 32,
+    "timeout_seconds": 180,
+    "retry": {
+      "max_attempts": 4,
+      "initial_backoff_seconds": 1,
+      "max_backoff_seconds": 30
+    }
+  },
+  "price_snapshot": "prices-2026-07-30.json"
+}

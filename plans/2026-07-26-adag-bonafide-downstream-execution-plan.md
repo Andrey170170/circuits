@@ -2659,17 +2659,30 @@ evidence against the identical clusters/witnesses with candidate evidence added.
 `227cde5658f1381963b94df192b8e86e1188ca13e28c334003a5a100d3496b55`. It contains all 601
 generation witness rows, 530 prompt-ineligible held-out scorer rows, and 24 paired arm handoffs.
 
-Execution order from this checkpoint is:
+The renderer freeze remains historical and immutable.  The integrated top-five/labeling branch
+continues from it in the following order:
 
-1. freeze a bounded renderer that selects one identical, W-only-determined generation witness set
-   per anchor for both arms and renders candidate numbers to six significant digits;
-2. prepare the full token/cost estimate and exact Opus-generation, Opus-rewrite, and Terra-control
-   batch parameters for approval;
-3. run the fixed Transluce simulator only on `input_localization_hypothesis`, first on selection
-   and then on audit without changing the label or selected generic control;
-4. freeze blinded review IDs/forms before review and unblind only after the required decisions;
-5. decide the evidence-only pilot by the prospectively frozen retained-label, abstention, and loss
-   thresholds. Candidate text remains exploratory even if the evidence-only pilot passes.
+1. publish a provenance-bound assessment crosswalk joining the C2 target/basis measurements,
+   `C2-W64` assignments, and dense response-time multiplex identities without rewriting any source
+   artifact;
+2. measure explicit dense-multiplex coverage, candidate-direction consistency, within- versus
+   between-`C2-W64` separation, phase/rank concentration, and within-cluster heterogeneity;
+3. project the matched target/basis measurements onto dense multiplex occurrences as annotations
+   and foreign-key references only.  Candidate profiles are target/basis signed sums, not new
+   per-token attribution values;
+4. fit candidate-conditioned or within-`C2-W64` occurrence subclusters only when the label-free
+   diagnostics justify them, and preserve unchanged `C2-W64` as the primary state otherwise;
+5. freeze one primary and, only if it passes the same gates, one alternative state before labels;
+6. prepare the matched labeling execution cohort with OpenAI as the iteration provider: Luna for
+   high-volume semantic generation and Terra for rewriting/summarization and the conservative
+   control.  Native batch, telemetry, and a hard cost guard remain required;
+7. after fake-backend tests and a small OpenAI validation show the runtime is free of simple
+   request, parsing, resume, and firewall bugs, run the fixed Transluce simulator on
+   `input_localization_hypothesis`, first on selection and then on audit;
+8. freeze blinded review IDs/forms before review and unblind only after the required decisions;
+9. run the matched Anthropic recipe only as the full provider comparison after the OpenAI path is
+   operational, then decide the evidence-only pilot by the prospectively frozen retained-label,
+   abstention, and loss thresholds.  Candidate text remains exploratory even if the pilot passes.
 
 No model call is authorized directly by the evidence bundle: its manifest deliberately records
 `renderer_frozen=false` and requires the renderer/request cohort to be committed first.
@@ -2681,6 +2694,175 @@ width-only-selected generation witnesses per anchor, the identical witness order
 24 typed prompts, six-significant-digit candidate rendering, and explicit generation-stage
 firewalls. Its unresolved zero-call plan contains 120 Opus semantic requests, 24 Opus rewrites,
 and 24 Terra conservative controls. The frozen Qwen tokenizer counts 383,583 proxy input tokens
-across the 24 serialized prompt payloads. The next gate is therefore item 2 above: resolve exact
-provider IDs, output ceilings, request batching, and the maximum/expected cost for approval. Paid
-API calls and the fixed Transluce scorer remain unlaunched.
+across the 24 serialized prompt payloads.  Those provider-named stage IDs describe the frozen
+historical plan; the additive runtime adapter uses provider-neutral stage IDs and binds the same
+prompt hashes.  The current iteration default is the cheaper OpenAI Luna/Terra recipe.  Anthropic
+remains a deferred matched comparison rather than the debugging path.  Paid API calls and the
+fixed Transluce scorer remain separately approval-gated and unlaunched.
+
+Revision `d40ad71` completed and published the first provenance-bound multiplex assessment under
+`candidate-aware-clustering-c2-v1/multiplex-assessment-v1`, manifest SHA-256
+`8e1e722be3e9f67f0ca449f4e5b92867814f53d7899d9131c2f115c05535221c`. A deep source reload
+re-derived the artifact exactly from the recorded C2 input, C2-W64 baseline, and dense multiplex.
+It retains all 245 C2 targets, records 77 exact dense matches and 168 explicit unmatched targets,
+and materializes 45,195 target/basis assessment rows plus 6,140 occurrence foreign-key rows. The
+occurrence table carries no imputed candidate values, and the artifact records no labels,
+outcomes, confirmatory holdout access, model calls, or Transluce calls.
+
+Before the first live multiplex-diagnostics run, freeze the refinement-eligibility rule in
+`candidate_multiplex_diagnostics.py`. Generation rows alone define recurrent per-basis direction
+consistency, W64 cluster resultant direction/heterogeneity, rank concentration, and phase
+concentration. Selection-scoring rows supply the only decision metric, target-local candidate
+cosine for same-W64 pairs minus different-W64 pairs, reduced equally by target, response, and
+family. Audit rows and dense-overlap membership do not enter the decision.
+
+This first gate authorizes a later constrained fit; it does not create or promote an alternative.
+The gate requires generation median recurrent-basis consistency of at least `0.55`, positive
+selection same-minus-different separation across all eight selection families, positive effects in
+at least seven families, and a 10,000-replicate family-bootstrap lower bound above zero. It also
+requires at least one W64 parent whose stable recurrent subset alone contains ten bases, eight
+generation targets, four generation families, and angular heterogeneity of at least `0.20`. A pass
+permits a separately frozen generation-only within-W64 fit. Promotion would still require the
+existing seed/family stability, selection lift, width-preservation, null, structural, and
+labeling-readiness gates. A failure fixes C2-W64 as the only clustering state for the current
+evidence-only labeling comparison.
+
+Revision `c4212d8` then ran the frozen rule and published
+`candidate-aware-clustering-c2-v1/multiplex-diagnostics-v1`, manifest SHA-256
+`8896bef906c38d22acd5fb56f1f9703e6b04d41205f9ddc13e5243ab949f31fb`. Selection separation is
+positive (`0.09856`), present in all eight families, and has a family-bootstrap lower bound of
+`0.06883`. Three W64 parents meet the local theoretical-support gate. The global recurrent-basis
+consistency gate fails, however: median generation consistency is `0.49575` against the frozen
+`0.55` requirement. Therefore no refinement fit is authorized, no alternative state is created,
+and the current labeling path remains the paired width-only versus width-plus-candidate evidence
+comparison on unchanged C2-W64 clusters.
+
+Revision `cb82fc8` corrected an OpenAI strict-schema defect found by the first full submission: the
+width-only `not_available` constant lacked an explicit string type. The archived
+`openai-labeling-full-v2` attempt has 72 successful arm-2 results and 72 pre-inference schema
+errors and is not a matched scientific result. Its known usage is `$0.27478149`.
+
+The corrected `labeling-renderer-v2` and `openai-labeling-cohort-v2` bind revision `cb82fc8` and
+have manifest SHA-256 values `3a15bd3f63cf157a96bbb78d0b30f15f49356b6f2447cc2357c60051a4d46eee`
+and `ca9d31faaa75a30e3c9bb55bb0a985d16b5a7efb64c8baeb9a2584489c6e016d`. The complete
+`openai-labeling-full-v3` run, manifest SHA-256
+`ba355465aa7d67202835257c9d346b53a4e211febd6609ad1ee03dfbb9673db6`, completed 168/168
+receipt-bound requests: 120 Luna semantic generations, 24 Terra controls, and 24 Terra rewrites.
+Known run usage is `$0.72158979`; cumulative known usage including the archived attempt is
+`$0.99637128`.
+
+The matched result does not pass the status gate. Final width-only rewrites contain two
+`provisional_description` outputs and ten `insufficient_evidence` outputs; width-plus-candidate
+contains one and eleven. The only arm-2 provisional cluster, 41, is also provisional in arm 1.
+Cluster 34 changes from width-only provisional to arm-2 insufficient, so there are zero status
+gains and one loss, and candidate evidence raises rather than lowers abstention. The direction is
+also present in the five Luna samples per prompt (12/60 versus 7/60 provisional) and in the
+independent Terra controls (3/12 versus 1/12). Candidate descriptions are bounded and generally
+literal, but mostly describe heterogeneous numeric directions rather than a coherent shared
+signature.
+
+Since `insufficient_evidence` outputs are ineligible for retention, arm 2 has at most one
+score-eligible output and cannot achieve the required three additional retained labels. Do not
+launch Transluce selection/audit scoring as if it could repair this decision; any later scorer run
+is diagnostic only and must retain the same frozen inputs. Do not scale this OpenAI recipe to more
+clusters. Treat an Anthropic or local-Qwen run as a separately motivated model-sensitivity study,
+not as completion of a passing candidate-evidence result.
+
+### 19.4 Candidate identity and recurrence assembly
+
+The next iteration does not add more candidate ranks or relabel the existing five coordinates.
+The completed C2 profiles already store contribution-minus-observed contrasts, and a target-local
+rank-to-token permutation leaves within-target cosine unchanged. The new exploratory test instead
+aligns evidence across targets by exact competitor token, exact observed-to-competitor pair,
+deterministic surface relation, and exact same-basis/same-competitor adjacent-phase recurrence.
+
+Freeze and execute `docs/CANDIDATE_IDENTITY_ALIGNMENT_PROTOCOL.md` before computing any transformed
+value-aware selection metric. `plans/candidate-identity-feasibility-v1.json` records that selection
+target/candidate-set identities and phase-recurrence counts were structurally exposed but
+value-unscored during feasibility; audit
+target metadata was mechanically loaded but not parsed or summarized, and audit candidate values
+and metrics remain closed. Generation alone fits dictionaries and W64 centroids; selection is a
+one-shot decision partition. Prior labels motivated the protocol but are never executable inputs.
+Every variant must beat its support-only control and both joint direction-null comparisons as well
+as the rank-aligned baseline. Run a new matched single-target OpenAI labeling cohort only when
+`T`, `P`, or `SR` passes, using the highest-ranked passer under the frozen rule. An `M` pass
+authorizes only a separately frozen non-billable longitudinal renderer-design step. If no local
+variant passes, make no single-target labeling API calls.
+
+The first executable attempt on 2026-08-03 stopped before metric computation because the compact
+target Parquet has mixed audit/executable row groups. No assessment artifact or model request was
+created. The frozen firewall-safe retry projects only structural target-index fields from that
+table, filters to the 189 generation/selection targets, and then reconstructs candidate identity
+and compact contrasts from those targets' individually validated raw candidate-union artifacts.
+It does not decode compact candidate JSON/value columns, open either mixed candidate-value table,
+or resolve an audit raw artifact. W64 membership comes from the validated persisted baseline, and
+the multiplex assessment is retained only as a provenance binding. This changes source loading,
+not the committed representations, gates, seeds, or winner rule.
+The exact metrics-free extraction contract is self-hashed in
+`plans/candidate-identity-executable-source-v1.json`; the retry first publishes its immutable
+executable-only source artifact, and only then evaluates the frozen representation family.
+
+Execution completed on 2026-08-03 from clean revision `1e13e92`. The metrics-free executable
+source is `candidate-identity-source-v1`, manifest
+`c9cdeaafa1cc0231bc5dc0adfc83b4f085c816c6d4a0d7478c57278e27f96898`: 133 generation targets
+with 24,545 W64-assigned candidate profiles and 56 selection targets with 10,054 profiles. Its
+receipt records no audit candidate artifact, metadata, or value access; no mixed candidate-value
+table, raw manifest/metrics file, label, outcome, or confirmatory holdout was opened.
+
+The one-shot `candidate-identity-assessment-v1` manifest is
+`62e7cd11a381ac4df776157f7be933fcfb35ecd0a50a425aefb6a955eae72ce4`. No scientific variant
+passed, so `offline_winner=null`, `local_labeling_winner=null`, and
+`labeling_authorized=false`. The principal results were:
+
+| View | Generation recurrent median | Selection weight coverage | Selection MRR | MRR minus R | Positive families |
+|---|---:|---:|---:|---:|---:|
+| R | 0.49575 | 1.00000 | 0.09911 | comparator | comparator |
+| T | 0.38502 | 0.67762 | 0.08794 | -0.01117 | 2/8 |
+| P | 0.37789 | 0.32036 | 0.04787 | -0.05124 | 1/8 |
+| SR | 0.38211 | 0.99969 | 0.09950 | +0.00039 | 5/8 |
+| M | 0.52705 | 0.00000 | 0.00000 | -0.09911 | 0/8 |
+
+`SR` beat its support control by 0.02791 and exceeded the nominal joint-null thresholds, but its
+lift over R was only 0.00039 rather than 0.03, its 95% family-bootstrap interval was
+[-0.00615, 0.00595], and only five families improved. The direction null was also fail-closed as
+ineffective because only about 46.8% of T/P/SR rows and hierarchical mass were movable, below the
+frozen 80% requirement. `M` increased recurrence relative to R but covered only 4.22% of generation
+weight, remained below the 0.55 recurrence gate, and produced no scoreable selection rows. Under
+the frozen decision rule, make no labeling API calls from this assembly test.
+
+## 20. Independent-response T5 corpus expansion
+
+The generation-only Qwen campaign completed on 2026-08-07/08. Its 1,864-row consolidated CSV and
+all 1,864 atomic attempt records validate against the completed run metadata. Trace-compatible
+mechanical screening yields 456 primary response cells and 23 discovery-bridge cells after one
+important compatibility correction: vLLM retained Qwen's terminal `<|im_end|>` token in natural
+EOS completion-token arrays even though the frozen screen described that token as excluded.
+Tracing treats it as the assistant suffix. The downstream intake therefore removes exactly the
+declared suffix and re-encodes the frozen response text with the authenticated tracing tokenizer
+before reapplying the frozen predicates. This also resolves 32 equivalent but non-identical BPE
+segmentations (six among selected responses), producing a separately versioned screen rather than
+silently accepting either the off-by-one length or generation/trace token drift.
+
+The prepared `qwen3-4b-instruct-2507-t5-corpus-v1` source contains every one-draw selected response
+in those two roles. It chooses 20 deterministic stratified-random response positions per response:
+9,120 targets from 456 new primary responses and 460 targets from 23 bridge responses, for 9,580
+independent positions. Eligible alternate draws are retained but are not duplicated into the
+primary tracing corpus. Dense W1 responses remain separate and are not T5-retraced by this profile.
+
+The execution order is now:
+
+1. freeze the prepared source manifest and run one batched all-target rank screen (479 causal
+   forwards rather than 9,580 independent forwards);
+2. build six specified-candidate pass-one manifests under the frozen
+   `model_top5_plus_observed` rule;
+3. run a one-wave smoke, then the reviewed pass-one array at concurrency four;
+4. bind completed pass-one references into exact-union fixed-topology refinement plans;
+5. run pass two, assemble candidate-union artifacts, and only then construct the new paper-style
+   clustering inputs and evaluate labelability.
+
+Preparation does not authorize GPU submission. The full profile is estimated from C2 measurements
+at roughly 1,750 A100-hours across both trace passes, or about 18 queue-free days at concurrency
+four. Before full execution, the rank-screen receipt and one pass-one smoke must be checked, and a
+new outcome-blind 96/128-response checkpoint remains a valid lower-cost alternative. Exact paths,
+hashes, commands, and the immutable artifact inventory are recorded in
+`docs/T5_CORPUS_TRACING_RUNBOOK.md`.

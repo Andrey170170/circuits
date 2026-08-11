@@ -19,7 +19,13 @@ from typing import Any, Literal
 
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.labeling.api import create_backend
-from circuits.labeling.config import LabelingRecipe, ModelRoleConfig, load_recipe
+from circuits.labeling.config import (
+    HYBRID_CANDIDATE_RECIPE_ID,
+    HYBRID_CANDIDATE_RECIPE_PATH,
+    LabelingRecipe,
+    ModelRoleConfig,
+    load_recipe,
+)
 from circuits.labeling.evidence import (
     candidate_messages,
     evidence_identity,
@@ -179,6 +185,65 @@ def validate_explicit_cluster_selection(
         )
 
 
+def hybrid_cluster_limits(
+    bundle: Any,
+    states: Sequence[str],
+    explicit_clusters: dict[str, list[int]] | None,
+    cluster_limit: int | None,
+) -> dict[str, int]:
+    """Enforce the frozen 12-per-passing-state hybrid launch contract."""
+
+    passing = [
+        role
+        for role in ("primary", "alternative")
+        if bundle.states[role].manifest.get("exploratory_labeling_authorized") is True
+    ]
+    if not passing:
+        raise ValueError("no hybrid state is authorized for exploratory labeling")
+    if len(states) != len(passing) or set(states) != set(passing):
+        raise ValueError(
+            "hybrid requested states must be exactly all authorized roles: "
+            + ", ".join(passing)
+        )
+    if explicit_clusters:
+        raise ValueError("hybrid cluster overrides are forbidden; use frozen anchors")
+    if cluster_limit != 12:
+        raise ValueError("hybrid cluster limit must be exactly 12 per state")
+    return dict.fromkeys(states, 12)
+
+
+def validate_hybrid_recipe_binding(
+    bundle: Any, recipe: LabelingRecipe, recipe_path: Path
+) -> None:
+    """Require the exact frozen OpenAI recipe recorded by the bridge."""
+
+    expected = bundle.manifest.get("labeling_recipe")
+    if not isinstance(expected, dict) or expected != {
+        "recipe_id": HYBRID_CANDIDATE_RECIPE_ID,
+        "path": HYBRID_CANDIDATE_RECIPE_PATH,
+        "sha256": expected.get("sha256") if isinstance(expected, dict) else None,
+    }:
+        raise ValueError("hybrid labeling recipe binding is missing or malformed")
+    if recipe.recipe_id != HYBRID_CANDIDATE_RECIPE_ID:
+        raise ValueError("hybrid labeling requires the frozen OpenAI recipe ID")
+    if file_sha256(recipe_path) != expected["sha256"]:
+        raise ValueError("hybrid labeling recipe file hash differs from frozen binding")
+
+
+def deep_validate_hybrid_bundle_for_prepare(
+    frozen_root: Path, recipe: LabelingRecipe
+) -> None:
+    """Make deep bridge recomputation a mandatory hybrid prepare step."""
+
+    if recipe.prompt_policy != "hybrid_candidate_v1":
+        return
+    from circuits.analysis.bonafide.hybrid_candidate_labeling import (
+        load_hybrid_labeling_bundle,
+    )
+
+    load_hybrid_labeling_bundle(frozen_root)
+
+
 def prepare_candidate_run(
     *,
     frozen_root: Path,
@@ -195,6 +260,15 @@ def prepare_candidate_run(
         raise FileExistsError(f"output root already exists: {output_root}")
     bundle = load_frozen_bundle(frozen_root)
     recipe = load_recipe(recipe_path)
+    bundle_policy = bundle.manifest.get("prompt_policy")
+    if bundle_policy is not None and recipe.prompt_policy != bundle_policy:
+        raise ValueError(
+            f"recipe prompt policy {recipe.prompt_policy!r} differs from "
+            f"frozen bundle policy {bundle_policy!r}"
+        )
+    if recipe.prompt_policy == "hybrid_candidate_v1":
+        deep_validate_hybrid_bundle_for_prepare(frozen_root, recipe)
+        validate_hybrid_recipe_binding(bundle, recipe, recipe_path)
     code_revision = collect_code_revision()
     if code_revision["git_dirty"] and not allow_dirty:
         raise ValueError(
@@ -203,14 +277,35 @@ def prepare_candidate_run(
     chosen_states = list(dict.fromkeys(states))
     if not chosen_states:
         raise ValueError("at least one state is required")
-    validate_explicit_cluster_selection(chosen_states, explicit_clusters, cluster_limit)
-    limits = allocate_cluster_limit(chosen_states, cluster_limit)
+    if recipe.prompt_policy == "hybrid_candidate_v1":
+        limits = hybrid_cluster_limits(
+            bundle, chosen_states, explicit_clusters, cluster_limit
+        )
+    else:
+        validate_explicit_cluster_selection(
+            chosen_states, explicit_clusters, cluster_limit
+        )
+        limits = allocate_cluster_limit(chosen_states, cluster_limit)
     selected: dict[str, list[int]] = {}
     for name in chosen_states:
         state = bundle.states[name]
         explicit = (explicit_clusters or {}).get(name)
         state_limit = limits[name]
-        if explicit is None and state_limit == 0:
+        if recipe.prompt_policy == "hybrid_candidate_v1":
+            recommendation = state.manifest.get("recommended_cluster_selection")
+            if not isinstance(recommendation, dict) or recommendation.get("method") != (
+                "fixed_3x4_midrank_hungarian_lexicographic_v1"
+            ):
+                raise ValueError(
+                    f"{name} lacks the frozen hybrid 12-cluster recommendation"
+                )
+            recommended = list(recommendation.get("anchors_in_target_point_order", []))
+            if len(recommended) != 12 or not set(recommended).issubset(
+                state.ready_cluster_ids
+            ):
+                raise ValueError(f"{name} hybrid cluster recommendation is invalid")
+            selected[name] = recommended
+        elif explicit is None and state_limit == 0:
             selected[name] = []
         else:
             selected[name] = select_cluster_ids(
@@ -370,6 +465,17 @@ def prepare_candidate_run(
                 "non_degenerate_contribution_comparison": False,
                 "top_k_target_comparison": False,
             }
+        elif recipe.prompt_policy == "hybrid_candidate_v1":
+            manifest["evidence_limitations"] = {
+                "trace_scope": "single_target_candidate_union",
+                "source_highlights": "exact_width_one_input_attribution",
+                "candidate_topology": "candidate_union_fixed_union_refinement",
+                "candidate_width": "five_or_six_target_local",
+                "signed_cancellation_preserved": True,
+                "non_degenerate_contribution_comparison": True,
+                "top_k_target_comparison": True,
+                "cross_target_candidate_rank_semantics": False,
+            }
         manifest["manifest_sha256"] = canonical_sha256(manifest)
         atomic_write_json(staging / "manifest.json", manifest)
         output_root.parent.mkdir(parents=True, exist_ok=True)
@@ -477,7 +583,7 @@ def prepare_summary_stage(
             skipped_candidate_ids = {
                 request_id
                 for request_id, parsed in parsed_candidates.items()
-                if recipe.prompt_policy == "width_one_v2"
+                if recipe.prompt_policy in {"width_one_v2", "hybrid_candidate_v1"}
                 and parsed["description"].strip() == "insufficient_evidence"
             }
             scored_candidates = validate_local_score_artifact(
@@ -490,7 +596,7 @@ def prepare_summary_stage(
                 expected_request_ids=set(parsed_candidates) - skipped_candidate_ids,
                 expected_skipped_request_ids=skipped_candidate_ids,
             )
-            if recipe.prompt_policy == "width_one_v2":
+            if recipe.prompt_policy in {"width_one_v2", "hybrid_candidate_v1"}:
                 for scored in scored_candidates:
                     request_id = scored["request_id"]
                     if scored.get("candidate") != parsed_candidates[request_id]:
@@ -523,7 +629,7 @@ def prepare_summary_stage(
                     )
             row = bundle.states[state].evidence[cluster_id]
             highlighted_witnesses: dict[str, str] | None = None
-            if recipe.prompt_policy == "width_one_v2":
+            if recipe.prompt_policy in {"width_one_v2", "hybrid_candidate_v1"}:
                 profile_relative = (
                     Path("profiles") / state / f"cluster-{cluster_id:04d}.json"
                 )
@@ -621,15 +727,27 @@ def prepare_summary_stage(
             "transport": transport_override or role.transport,
         },
     }
-    if recipe.prompt_policy == "width_one_v2":
+    if recipe.prompt_policy in {"width_one_v2", "hybrid_candidate_v1"}:
         stage_manifest["evidence_inputs"] = v2_inputs
-        stage_manifest["evidence_limitations"] = {
-            "trace_scope": "single_target_width_one",
-            "contribution_evidence": "shallow",
-            "non_degenerate_contribution_comparison": False,
-            "top_k_target_comparison": False,
-            "excluded_witness_partitions": ["audit"],
-        }
+        stage_manifest["evidence_limitations"] = (
+            {
+                "trace_scope": "single_target_width_one",
+                "contribution_evidence": "shallow",
+                "non_degenerate_contribution_comparison": False,
+                "top_k_target_comparison": False,
+                "excluded_witness_partitions": ["audit"],
+            }
+            if recipe.prompt_policy == "width_one_v2"
+            else {
+                "trace_scope": "single_target_candidate_union",
+                "source_highlights": "exact_width_one_input_attribution",
+                "candidate_width": "five_or_six_target_local",
+                "signed_cancellation_preserved": True,
+                "top_k_target_comparison": True,
+                "cross_target_candidate_rank_semantics": False,
+                "excluded_witness_partitions": ["audit"],
+            }
+        )
     stage_manifest["manifest_sha256"] = canonical_sha256(stage_manifest)
     atomic_write_json(
         run_root / "stages" / "cluster_summary" / "manifest.json",
@@ -646,6 +764,10 @@ async def execute_live(
 ) -> dict[str, int]:
     manifest = load_run_manifest(run_root)
     recipe = LabelingRecipe.model_validate(manifest["recipe"])
+    if recipe.prompt_policy == "hybrid_candidate_v1":
+        raise ValueError(
+            "hybrid_candidate_v1 forbids execute-live; use native batch with its cost plan"
+        )
     requests = load_stage_requests(run_root, stage)
     if request_ids is not None:
         requests = [
@@ -940,6 +1062,10 @@ async def retry_failed_generation(
         raise ValueError("at least one request ID is required")
     manifest = load_run_manifest(run_root)
     recipe = LabelingRecipe.model_validate(manifest["recipe"])
+    if recipe.prompt_policy == "hybrid_candidate_v1":
+        raise ValueError(
+            "hybrid_candidate_v1 forbids live retries under the fixed $10 batch cost plan"
+        )
     requests_by_id = {
         request.request_id: request for request in load_stage_requests(run_root, stage)
     }

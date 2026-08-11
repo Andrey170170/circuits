@@ -84,6 +84,12 @@ ignore = [
 "circuits/analysis/bonafide/clustering_evaluation.py" = [
     "UP035",  # Byte-hashed frozen implementation; preserve artifact compatibility.
 ]
+"circuits/tracing/artifact.py" = ["UP035", "UP017", "TRY004"]
+"circuits/tracing/candidate_union.py" = [
+    "UP035",
+    "UP017",
+    "B905",  # Byte-hashed frozen implementation; preserve exact source bytes.
+]
 "scripts/steering.py" = ["ALL"]  # Stale notebook prototype; not an executable module.
 "tests/**/*.py" = ["B011"]
 
@@ -100,6 +106,8 @@ include = [
     "scripts/bonafide",
 ]
 exclude = [
+    # Candidate identity authorization v1 byte-hashes this frozen implementation.
+    "circuits/analysis/bonafide/candidate_profiles.py",
     # These dynamic tracing internals predate the typed artifact/provenance layer.
     "circuits/tracing/attribution.py",
     "circuits/tracing/clja.py",

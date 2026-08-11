@@ -15,22 +15,21 @@ import os
 import shutil
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from numpy.typing import NDArray
 
 from circuits.analysis.bonafide.canonical import (
     canonical_sha256,
     file_sha256,
     load_json_object,
 )
-from circuits.analysis.bonafide.identity import Polarity, SignedBasisKey
+from circuits.analysis.bonafide.identity import SignedBasisKey
 from circuits.tracing.artifact import load_compact_trace
 from circuits.tracing.candidate_union import (
     CandidateUnionArtifact,
@@ -237,17 +236,6 @@ class ValidatedTargetProfiles:
     candidate: Mapping[SignedBasisKey, CandidateBasisProfile]
 
 
-class _CandidateNodeRow(Protocol):
-    """Columns required from a pandas candidate-node named tuple."""
-
-    layer: Any
-    neuron: Any
-    applicable_by_candidate: Any
-    candidate_activation: Any
-    candidate_attribution: Any
-    candidate_contribution: Any
-
-
 def _finite(value: object, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{field} must be numeric")
@@ -261,13 +249,13 @@ def _sequence(value: object, field: str) -> list[Any]:
     if isinstance(value, (str, bytes)):
         raise TypeError(f"{field} must be a one-dimensional sequence")
     try:
-        result = list(cast(Iterable[Any], value))
+        result = list(value)  # type: ignore[arg-type]
     except TypeError as error:
         raise ValueError(f"{field} must be a one-dimensional sequence") from error
     return result
 
 
-def _activation_polarity(value: float) -> Polarity | None:
+def _activation_polarity(value: float) -> str | None:
     if value > 0:
         return "+"
     if value < 0:
@@ -296,13 +284,7 @@ def rank_aligned_candidate_contrasts(
         raise ValueError("candidate axis must contain model ranks one through five")
     values = [_finite(value, "candidate contribution") for value in contribution_values]
     observed = values[observed_index]
-    return (
-        values[by_rank[1]] - observed,
-        values[by_rank[2]] - observed,
-        values[by_rank[3]] - observed,
-        values[by_rank[4]] - observed,
-        values[by_rank[5]] - observed,
-    )
+    return tuple(values[by_rank[rank]] - observed for rank in range(1, 6))  # type: ignore[return-value]
 
 
 def extract_width_one_profiles(
@@ -349,7 +331,7 @@ def extract_width_one_profiles(
             model_revision=model_revision,
             layer=layer,
             neuron_index=int(row.neuron),
-            polarity=polarity,
+            polarity=polarity,  # type: ignore[arg-type]
         )
         accumulator = accumulators.setdefault(
             basis,
@@ -402,7 +384,7 @@ def extract_candidate_profiles(
         raise ValueError("candidate union must place exactly one observed token first")
     ranks = [int(candidate.full_distribution_rank) for candidate in candidates]
     final_layer = int(trace.df_node["layer"].max())
-    sums: dict[SignedBasisKey, NDArray[np.float64]] = {}
+    sums: dict[SignedBasisKey, np.ndarray] = {}
     counts: Counter[SignedBasisKey] = Counter()
     zero_activation_count = 0
     invariance_rtol = 1e-6
@@ -413,8 +395,7 @@ def extract_candidate_profiles(
     maximum_absolute_deviation = 0.0
     maximum_relative_deviation = 0.0
     polarity_crosswalk: Counter[str] = Counter()
-    for raw_row in trace.df_node.itertuples(index=False):
-        row = cast(_CandidateNodeRow, raw_row)
+    for row in trace.df_node.itertuples(index=False):
         layer = int(row.layer)
         if not 0 <= layer < final_layer:
             continue
@@ -486,7 +467,7 @@ def extract_candidate_profiles(
             model_revision=model_revision,
             layer=layer,
             neuron_index=int(row.neuron),
-            polarity=polarity,
+            polarity=polarity,  # type: ignore[arg-type]
         )
         if basis in sums:
             sums[basis] += contrast
@@ -495,13 +476,7 @@ def extract_candidate_profiles(
         counts[basis] += 1
     profiles = {
         basis: CandidateBasisProfile(
-            values=(
-                float(sums[basis][0]),
-                float(sums[basis][1]),
-                float(sums[basis][2]),
-                float(sums[basis][3]),
-                float(sums[basis][4]),
-            ),
+            values=tuple(float(value) for value in sums[basis]),  # type: ignore[arg-type]
             occurrence_count=counts[basis],
         )
         for basis in sorted(sums)
@@ -994,8 +969,8 @@ def load_validated_target_profiles(
                     "phase_bin": int(case["phase_bin"]),
                     "response_position": expected_position,
                     "candidate_count": len(candidate_ids),
-                    "observed_token_id": union.trace.candidate_selection.observed_token_id,
-                    "observed_token_text": union.trace.candidate_selection.observed_token_text,
+                    "observed_token_id": int(selection_dict["observed_token_id"]),
+                    "observed_token_text": str(selection_dict["observed_token_text"]),
                     "candidate_selection_json": json.dumps(
                         selection_dict,
                         sort_keys=True,

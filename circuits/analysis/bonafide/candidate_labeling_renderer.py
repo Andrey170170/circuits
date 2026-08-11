@@ -648,7 +648,9 @@ def _output_schema(include_candidate: bool) -> dict[str, Any]:
     if include_candidate:
         candidate_rule = {"type": "string", "minLength": 1}
     else:
-        candidate_rule = {"const": "not_available"}
+        # OpenAI strict structured outputs require every property schema to
+        # declare its JSON type even when a constant fixes the only value.
+        candidate_rule = {"type": "string", "const": "not_available"}
     return {
         "type": "object",
         "additionalProperties": False,

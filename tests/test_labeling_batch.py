@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from circuits.analysis.bonafide.canonical import file_sha256
-from circuits.labeling.batch import collect_openai_batch
+from circuits.labeling.batch import collect_openai_batch, submit_openai_batch
 from circuits.labeling.batch_runtime import (
     _archive_openai_batch_files,
     _validate_or_absent_result_pair,
@@ -114,6 +114,55 @@ def _install_openai(
 
 def _jsonl(*rows: dict[str, object]) -> bytes:
     return ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+
+
+def test_openai_submit_uses_required_batch_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    input_path = tmp_path / "input.jsonl"
+    input_path.write_bytes(b'{"custom_id":"request-1"}\n')
+    observed: dict[str, object] = {}
+
+    class FakeFiles:
+        def create(self, *, file: object, purpose: str) -> SimpleNamespace:
+            observed["purpose"] = purpose
+            observed["content"] = file.read()  # type: ignore[attr-defined]
+            return SimpleNamespace(id="file-input")
+
+    class FakeBatches:
+        def create(self, **kwargs: object) -> SimpleNamespace:
+            observed["batch"] = kwargs
+            return SimpleNamespace(
+                id="batch-1",
+                status="validating",
+                output_file_id=None,
+                error_file_id=None,
+                metadata=kwargs["metadata"],
+            )
+
+    client = SimpleNamespace(files=FakeFiles(), batches=FakeBatches())
+    monkeypatch.setitem(
+        sys.modules, "openai", SimpleNamespace(OpenAI=lambda api_key: client)
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    receipt = submit_openai_batch(
+        input_path, run_id="run-1", stage="semantic_generation"
+    )
+
+    assert observed["purpose"] == "batch"
+    assert observed["content"] == input_path.read_bytes()
+    assert observed["batch"] == {
+        "input_file_id": "file-input",
+        "endpoint": "/v1/responses",
+        "completion_window": "24h",
+        "metadata": {"run_id": "run-1", "stage": "semantic_generation"},
+    }
+    assert receipt["input_file_id"] == "file-input"
+    assert receipt["metadata"] == {
+        "run_id": "run-1",
+        "stage": "semantic_generation",
+    }
 
 
 def test_openai_collection_unions_output_and_error_files(

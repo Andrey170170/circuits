@@ -10,11 +10,10 @@ import os
 import pickle
 import shutil
 import uuid
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
@@ -390,7 +389,7 @@ def _validate_vector(
 ) -> None:
     if not isinstance(value, (list, tuple)) or len(value) != len(applicable):
         raise ValueError(f"{field} width does not match candidate count")
-    for index, (item, is_applicable) in enumerate(zip(value, applicable, strict=True)):
+    for index, (item, is_applicable) in enumerate(zip(value, applicable)):
         if not is_applicable:
             if item is not None:
                 raise ValueError(f"{field}[{index}] must be null when inapplicable")
@@ -466,9 +465,7 @@ def validate_candidate_union_trace(trace: CandidateUnionTrace) -> int:
                 raise ValueError(f"{frame_name} selection mask is invalid")
             if any(
                 was_selected and not is_applicable
-                for was_selected, is_applicable in zip(
-                    selected, applicable, strict=True
-                )
+                for was_selected, is_applicable in zip(selected, applicable)
             ):
                 raise ValueError(f"{frame_name} selected an inapplicable candidate")
             for field in value_fields:
@@ -507,7 +504,7 @@ def save_candidate_union_artifact(
         canonical_manifest.update(
             {
                 "schema_version": CANDIDATE_UNION_ARTIFACT_SCHEMA_VERSION,
-                "created_at": datetime.now(UTC).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "data_file": DATA_FILENAME,
                 "data_sha256": payload_sha256,
                 "data_size_bytes": data_path.stat().st_size,

@@ -1,8 +1,9 @@
-"""Reconstruct cluster-level attribution profiles from frozen compact traces."""
+"""Build cluster profiles from frozen evidence and authenticated source-token axes."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,105 @@ def _source_tokens(tokenizer: Any, token_ids: list[int]) -> list[str]:
     ]
 
 
+def _align_source_vector(values: Sequence[float], token_count: int) -> list[float]:
+    aligned = list(values)
+    if len(aligned) < token_count:
+        aligned = [0.0] * (token_count - len(aligned)) + aligned
+    elif len(aligned) > token_count:
+        aligned = aligned[-token_count:]
+    return aligned
+
+
+def _frozen_fixed_union_profile(
+    exemplar: Mapping[str, Any], *, token_count: int
+) -> tuple[list[float], int] | None:
+    summary = exemplar.get("fixed_union_input_summary")
+    if summary is None:
+        return None
+    if token_count < 1:
+        raise ValueError("authenticated source-token axis is empty")
+    if not isinstance(summary, Mapping) or set(summary) != {
+        "schema_version",
+        "source",
+        "representation",
+        "member_basis_count",
+        "member_occurrence_count",
+        "signed_sum_by_source_token",
+        "mean_by_member_occurrence",
+        "support_occurrence_count_by_source_token",
+    }:
+        raise ValueError("malformed frozen fixed-union input summary")
+    if (
+        summary["schema_version"] != "adag.bonafide.fixed-union-input-summary.v1"
+        or summary["source"] != "observed_candidate_fixed_union_refinement"
+        or summary["representation"]
+        not in {"raw_input_attribution", "paper_normalized_input_attribution"}
+    ):
+        raise ValueError("frozen fixed-union input summary identity drift")
+    means = summary["mean_by_member_occurrence"]
+    sums = summary["signed_sum_by_source_token"]
+    counts = summary["support_occurrence_count_by_source_token"]
+    if (
+        not isinstance(means, list)
+        or not isinstance(sums, list)
+        or not isinstance(counts, list)
+        or not means
+        or len(sums) != len(means)
+        or len(counts) != len(means)
+    ):
+        raise ValueError("malformed frozen fixed-union input vectors")
+    if (
+        isinstance(summary["member_basis_count"], bool)
+        or not isinstance(summary["member_basis_count"], int)
+        or isinstance(summary["member_occurrence_count"], bool)
+        or not isinstance(summary["member_occurrence_count"], int)
+    ):
+        raise TypeError("malformed frozen fixed-union support totals")
+    member_count = summary["member_basis_count"]
+    occurrence_count = summary["member_occurrence_count"]
+    if member_count <= 0 or occurrence_count <= 0:
+        raise ValueError("frozen fixed-union input summary has no member support")
+    values: list[float] = []
+    any_support = False
+    for mean, signed_sum, count_value in zip(means, sums, counts, strict=True):
+        if isinstance(count_value, bool) or not isinstance(count_value, int):
+            raise TypeError("malformed frozen fixed-union support count")
+        if count_value < 0:
+            raise ValueError("negative frozen fixed-union support count")
+        if count_value == 0:
+            if mean is not None or signed_sum is not None:
+                raise ValueError(
+                    "unsupported frozen fixed-union coordinate is not missing"
+                )
+            values.append(0.0)
+            continue
+        any_support = True
+        if mean is None or signed_sum is None:
+            raise ValueError("supported frozen fixed-union coordinate is missing")
+        if (
+            isinstance(mean, bool)
+            or not isinstance(mean, (int, float))
+            or isinstance(signed_sum, bool)
+            or not isinstance(signed_sum, (int, float))
+        ):
+            raise TypeError("invalid frozen fixed-union input value")
+        value = float(mean)
+        total = float(signed_sum)
+        if not math.isfinite(value) or not math.isfinite(total):
+            raise ValueError("nonfinite frozen fixed-union input value")
+        if not math.isclose(value, total / count_value, rel_tol=1e-12, abs_tol=1e-15):
+            raise ValueError("frozen fixed-union input mean is inconsistent")
+        values.append(value)
+    if not any_support:
+        raise ValueError("frozen fixed-union input summary has no coordinate support")
+    if not any(value != 0.0 for value in values):
+        raise ValueError("frozen fixed-union input summary is all zero")
+    aligned = _align_source_vector(values, token_count)
+    if not any(value != 0.0 for value in aligned):
+        raise ValueError("aligned frozen fixed-union input summary is all zero")
+    return aligned, member_count
+
+
 def build_cluster_profile(
     exemplar: dict[str, Any],
     *,
@@ -71,6 +171,20 @@ def build_cluster_profile(
 
     data = artifact.circuit_data
     token_ids = [int(value) for value in data.cis[0]]
+    frozen = _frozen_fixed_union_profile(exemplar, token_count=len(token_ids))
+    if frozen is not None:
+        activations, matched_signed = frozen
+        return ClusterProfile(
+            trace_unit_id=str(exemplar["trace_unit_id"]),
+            family_partition=str(exemplar["family_partition"]),
+            source_manifest_sha256=str(exemplar["artifact_manifest_sha256"]),
+            matched_signed_basis_count=matched_signed,
+            record=ActivationRecord(
+                tokens=_source_tokens(source_tokenizer, token_ids),
+                token_ids=token_ids,
+                activations=activations,
+            ),
+        )
     maps: list[list[float]] = []
     matched_signed = 0
     for row in data.df_node.itertuples(index=False):
@@ -87,10 +201,7 @@ def build_cluster_profile(
         if not signs:
             continue
         values = [float(value) for value in attr_map]
-        if len(values) < len(token_ids):
-            values = [0.0] * (len(token_ids) - len(values)) + values
-        elif len(values) > len(token_ids):
-            values = values[-len(token_ids) :]
+        values = _align_source_vector(values, len(token_ids))
         if not all(math.isfinite(value) for value in values):
             raise ValueError(
                 f"invalid attr_map for trace {exemplar['trace_unit_id']} and basis {key}"

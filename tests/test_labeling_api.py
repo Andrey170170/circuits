@@ -1,7 +1,16 @@
 from __future__ import annotations
 
-from circuits.labeling.api import anthropic_usage, openai_usage, parse_json_output
+import asyncio
+import json
+
+from circuits.labeling.api import (
+    FakeBackend,
+    anthropic_usage,
+    openai_usage,
+    parse_json_output,
+)
 from circuits.labeling.batch import anthropic_batch_request, openai_batch_line
+from circuits.labeling.config import ModelRoleConfig
 from circuits.labeling.schema import ChatMessage, GenerationRequest
 
 
@@ -71,6 +80,76 @@ def test_width_one_parser_requires_explicit_limit_and_status_fields() -> None:
         )[1]
         == "invalid_json"
     )
+
+
+def test_hybrid_parser_requires_exact_candidate_and_summary_schemas() -> None:
+    candidate_version = "bonafide-hybrid-candidate-cluster-candidate-v1"
+    assert (
+        parse_json_output(
+            '{"description":"x"}', "candidate_generation", candidate_version
+        )[1]
+        == "invalid_json"
+    )
+    candidate = (
+        '{"description":"x","localized_evidence":"local",'
+        '"candidate_comparison_evidence":"top5","limitations":"exploratory"}'
+    )
+    assert parse_json_output(candidate, "candidate_generation", candidate_version)[
+        1
+    ] == ("success")
+    summary_version = "bonafide-hybrid-candidate-cluster-summary-v1"
+    summary = (
+        '{"label":"feature","rationale":"r","confidence":0.5,'
+        '"candidate_comparison_evidence":"top5","limitations":"l",'
+        '"status":"provisional_label"}'
+    )
+    assert parse_json_output(summary, "cluster_summary", summary_version)[1] == (
+        "success"
+    )
+    invalid = json.loads(summary)
+    invalid["unexpected"] = "field"
+    assert (
+        parse_json_output(json.dumps(invalid), "cluster_summary", summary_version)[1]
+        == "invalid_json"
+    )
+
+
+def test_fake_backend_emits_strict_hybrid_candidate_schema() -> None:
+    request = _request("fake").model_copy(
+        update={
+            "prompt_template_version": (
+                "bonafide-hybrid-candidate-cluster-candidate-v1"
+            )
+        }
+    )
+    backend = FakeBackend(
+        ModelRoleConfig(provider="fake", model="fake", max_output_tokens=100)
+    )
+    result = asyncio.run(backend.generate(request))
+    assert result.parse_status == "success"
+    assert set(result.parsed or {}) == {
+        "description",
+        "localized_evidence",
+        "candidate_comparison_evidence",
+        "limitations",
+    }
+    summary_request = request.model_copy(
+        update={
+            "stage": "cluster_summary",
+            "sample_index": None,
+            "prompt_template_version": "bonafide-hybrid-candidate-cluster-summary-v1",
+        }
+    )
+    summary_result = asyncio.run(backend.generate(summary_request))
+    assert summary_result.parse_status == "success"
+    assert set(summary_result.parsed or {}) == {
+        "label",
+        "rationale",
+        "confidence",
+        "candidate_comparison_evidence",
+        "limitations",
+        "status",
+    }
 
 
 def test_openai_batch_line_targets_responses() -> None:

@@ -220,7 +220,7 @@ def test_paired_prompts_share_width_evidence_and_keep_candidate_arm_separate(
         assert "cluster_candidate_signature" not in width_payload
         assert width["message_payload"]["expected_output_json_schema"]["properties"][
             "exploratory_candidate_description"
-        ] == {"const": "not_available"}
+        ] == {"type": "string", "const": "not_available"}
         assert "candidate_model_rank_slots" in candidate_payload
         assert "cluster_candidate_signature" in candidate_payload
         candidate_user_message = candidate["message_payload"]["messages"][1]["content"]

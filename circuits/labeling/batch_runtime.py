@@ -17,6 +17,7 @@ from circuits.labeling.batch import (
     submit_openai_batch,
 )
 from circuits.labeling.config import LabelingRecipe
+from circuits.labeling.cost_guard import load_pre_submit_cost_plan
 from circuits.labeling.io import atomic_write_bytes, atomic_write_json
 from circuits.labeling.runtime import (
     load_run_manifest,
@@ -79,6 +80,11 @@ def submit_native_batch(run_root: Path, stage: str) -> dict[str, Any]:
         )
     manifest = load_run_manifest(run_root)
     recipe = LabelingRecipe.model_validate(manifest["recipe"])
+    cost_plan = (
+        load_pre_submit_cost_plan(run_root=run_root, stage=stage)
+        if recipe.prompt_policy == "hybrid_candidate_v1"
+        else None
+    )
     prepared_path = run_root / "provider_batches" / stage / "prepared.json"
     prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
     expected = prepared.pop("manifest_sha256", None)
@@ -106,6 +112,9 @@ def submit_native_batch(run_root: Path, stage: str) -> dict[str, Any]:
             "stage": stage,
             "prepared_manifest_sha256": expected,
             "submitted_at": datetime.now(UTC).isoformat(),
+            "cost_plan_sha256": (
+                None if cost_plan is None else cost_plan["plan_sha256"]
+            ),
         }
     )
     submission["manifest_sha256"] = canonical_sha256(submission)

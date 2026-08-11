@@ -141,8 +141,9 @@ def score_run(
 ) -> dict[str, int]:
     manifest = load_run_manifest(run_root)
     recipe = LabelingRecipe.model_validate(manifest["recipe"])
-    if phase == "summary_selection" and recipe.prompt_policy != "width_one_v2":
-        raise ValueError("summary_selection is defined only for width_one_v2 runs")
+    rich_policy = recipe.prompt_policy in {"width_one_v2", "hybrid_candidate_v1"}
+    if phase == "summary_selection" and not rich_policy:
+        raise ValueError("summary_selection requires an evidence-rich prompt policy")
     selected = {
         state: [
             int(cluster_id)
@@ -152,7 +153,7 @@ def score_run(
         for state, values in manifest["selected_clusters"].items()
         if states is None or state in states
     }
-    if phase == "summary_audit" and recipe.prompt_policy == "width_one_v2":
+    if phase == "summary_audit" and rich_policy:
         missing_selection = [
             run_root
             / "scores"
@@ -171,7 +172,7 @@ def score_run(
         ]
         if missing_selection:
             raise ValueError(
-                "width_one_v2 summary_audit requires completed summary_selection; "
+                f"{recipe.prompt_policy} summary_audit requires completed summary_selection; "
                 f"missing {missing_selection[0]}"
             )
     partition = (
@@ -229,7 +230,7 @@ def score_run(
                 skipped_inputs: list[dict[str, Any]] = []
                 if candidate_outputs is not None:
                     scoreable_candidates = candidate_outputs
-                    if recipe.prompt_policy == "width_one_v2":
+                    if rich_policy:
                         scoreable_candidates = []
                         for request_id, text, parsed in candidate_outputs:
                             if _is_insufficient_evidence(text=text):
@@ -250,7 +251,7 @@ def score_run(
                 else:
                     assert summary_outputs is not None
                     scoreable_summaries = summary_outputs
-                    if recipe.prompt_policy == "width_one_v2":
+                    if rich_policy:
                         scoreable_summaries = []
                         for item in summary_outputs:
                             if _is_insufficient_evidence(
@@ -296,10 +297,7 @@ def score_run(
                     }
                     for item, score in zip(texts, scored, strict=True)
                 ]
-                if (
-                    phase == "candidate_selection"
-                    and recipe.prompt_policy == "width_one_v2"
-                ):
+                if phase == "candidate_selection" and rich_policy:
                     assert candidate_outputs is not None
                     by_request = {
                         request_id: parsed
