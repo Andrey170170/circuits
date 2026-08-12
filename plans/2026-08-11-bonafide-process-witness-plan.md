@@ -1,8 +1,9 @@
 # BonaFide process-witness discovery plan
 
 Status: **central protocol; the architecture and historical-reconstruction choice are accepted.
-Step-0 input inventories are frozen in version 1, the bounded T5 smoke is authorized, and broad
-generation plus production tracing remain gated.**
+Step-0 input inventories are frozen in version 1 and the bounded T5 landmark gate passed. The
+Thinking-specific broad-generation lane is being frozen; production tracing remains gated by
+target-context resource tests and the graph-blind region inventory.**
 
 This is the governing plan for the new process-witness campaign. Where it conflicts with
 `docs/ADAG_BONAFIDE_NAIVE_PILOT.md` or `docs/TRACING_CORPUS_PLAN.md`, this plan governs the new
@@ -308,9 +309,27 @@ method; it is not provisionally fixed at 20 arbitrary response positions.
 
 Generate deterministic attempts for every required slot and retain every raw attempt. Broad
 eligibility may use only frozen requirements such as natural termination, nondegeneration, and a
-resource-derived length cap; do not select broad responses by correctness, faithfulness, or
-perceived interestingness. Freeze a maximum-attempt/yield failure rule before generation so prompts
-with poor mechanical yield cannot be handled ad hoc.
+valid Thinking/final-answer serialization; do not select broad responses by correctness,
+faithfulness, perceived interestingness, or an attractive response length. Freeze a
+maximum-attempt/yield failure rule before generation so prompts with poor mechanical yield cannot
+be handled ad hoc.
+
+The initial draft described a resource-derived **completion-token cap**. The Step-0 landmark run
+showed that this is not the right scientific resource variable: T5 cost is determined by the exact
+teacher-forced context at a selected target (rendered prompt plus preceding assistant tokens), not
+by total completion length alone. A response-only cutoff would also alter the broad corpus sharply:
+only 22 of the 43 historical outright Thinking completions are at or below 4,096 tokens. The raw
+generation campaign therefore retains the released historical `max_tokens=32768` envelope and
+every predeclared attempt. Mechanical response selection requires natural termination and valid,
+nondegenerate serialization but does not impose a traceability cutoff on the whole response.
+
+After graph-blind region annotation converts spans to candidate target positions, freeze a
+**total target-context token gate** and apply it to those positions. The first valid resource tier
+is the largest total context demonstrated by the Step-0 landmark run; larger tiers require their
+own strict-T5 resource trace before use. If a prompt's rendered prefix already exceeds a passing
+tier, its targets are not silently admitted or its completion selectively replaced: either a new
+resource tier must pass or a new corpus version must predeclare the prompt-cell exclusion and
+rebalance rule.
 
 ### 0E. Technical and freeze gates
 
@@ -332,12 +351,21 @@ The version-1 input freeze is materialized by
 `d00aa083474d34fdaf0936df5705d00a9192705dbab9e7a9629f95aaf9effc34`). It contains all 48
 outright prompt cells, the 47/1 fit-reserve split, 186 deterministic new broad request slots, the
 three historical dense reasoning replays, process ledgers, token identities, and the historical
-conversation/decoding evidence. Its status remains `inputs_frozen_resource_gate_pending`: the T5
-smoke must still establish the broad completion-token cap and full resource plan before generation
-or the complete Step-0 execution bundle can freeze. The bounded source and strict-T5 smoke
+conversation/decoding evidence. Its original status is `inputs_frozen_resource_gate_pending`. The
+subsequent strict-T5 landmark run passed at total input-context lengths through 1,268 tokens. It
+establishes a first traceable context tier, not a response-length cap and not permission to
+extrapolate to the longest broad prompt. The bounded source and strict-T5 smoke
 manifests have SHA-256 identities
 `e5b85c3463d8a325b31e515dd6c2c6150f883d1cddfec1eb92a6e81e42ac5e94` and
 `d125da744b0ad25f2e907424bc30ee67b6b93c693b3ac4010f8256915eb41259`, respectively.
+
+The four Collatz landmarks at response positions 103, 130, 580, and 1,079 all completed with valid
+content-addressed artifacts. The three scaling positions used 319, 769, and 1,268 total input
+tokens; their T5 trace times were 53.4, 98.0, and 229.2 seconds, and their peak reserved CUDA
+memory was 16.1, 29.5, and 49.0 GB on an 80-GB A100. The last retained 36.1 GB of device headroom.
+These measurements support the 1,268-token context tier only. Broad historical-format prompt
+prefixes range from 175 to 2,631 tokens, so at least one additional long-prompt resource gate is
+required before every frozen prompt cell can contribute atlas-fit targets.
 
 ## Step 1: build and freeze the atlas
 
