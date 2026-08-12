@@ -9,7 +9,7 @@ import pickle
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -178,6 +178,8 @@ class TopKPositionTrace:
 PROBE_SCHEMA_VERSION = "adag.teacher-forced-probe.v1"
 PROBE_OCCURRENCE_SCHEMA_VERSION = "adag.selected-neuron-occurrences.v1"
 PROBE_FEATURE_BASIS_SCHEMA_VERSION = "adag.selected-neuron-feature-basis.v1"
+TEACHER_FORCED_TOKEN_IDENTITY_SCHEMA_VERSION = "adag.teacher-forced-token-identity.v1"
+TOKEN_ID_HASH_ENCODING = "sha256_utf8_canonical_json_integer_array_v1"
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -502,6 +504,8 @@ class TeacherForcedInput:
     assistant_prefix_token_count: int
     response_token_count: int
     included_response_token_count: int
+    assistant_prefix_ids_sha256: str
+    response_ids_sha256: str
     selected_response_positions: list[int]
     target_prediction_positions: list[int]
     target_token_ids: list[int]
@@ -515,6 +519,17 @@ class TokenizedTeacherForcedResponse:
     assistant_prefix_ids: list[int]
     response_ids: list[int]
     assistant_suffix_ids: list[int]
+
+
+TeacherForcedSerializationMode = Literal[
+    "assistant_turn",
+    "historical_thinking_continuation",
+]
+
+DEFAULT_TEACHER_FORCED_SERIALIZATION: TeacherForcedSerializationMode = "assistant_turn"
+HISTORICAL_THINKING_CONTINUATION_SERIALIZATION: TeacherForcedSerializationMode = (
+    "historical_thinking_continuation"
+)
 
 
 def _stable_text_hash(value: str | None) -> str | None:
@@ -541,6 +556,99 @@ def _apply_chat_template_ids(
             raise ValueError("teacher-forced tracing requires a single chat input")
         ids = ids[0]
     return [int(token_id) for token_id in ids]
+
+
+def _tokenize_text_without_special_tokens(
+    tokenizer: PreTrainedTokenizer,
+    text: str,
+) -> list[int]:
+    """Tokenize one already-rendered chat string without adding wrappers."""
+
+    encoded = tokenizer(
+        text,
+        add_special_tokens=False,
+        return_attention_mask=False,
+    )
+    try:
+        ids = encoded["input_ids"]
+    except (KeyError, TypeError) as error:
+        raise TypeError(
+            "tokenizer did not return input_ids for rendered chat"
+        ) from error
+    if isinstance(ids, torch.Tensor):
+        ids = ids.tolist()
+    if ids and isinstance(ids[0], list):
+        if len(ids) != 1:
+            raise ValueError("teacher-forced tracing requires a single chat input")
+        ids = ids[0]
+    return [int(token_id) for token_id in ids]
+
+
+def tokenize_historical_thinking_continuation(
+    tokenizer: PreTrainedTokenizer,
+    prompt: str,
+    response: str,
+    *,
+    system_prompt: str,
+) -> TokenizedTeacherForcedResponse:
+    """Tokenize a historical Qwen Thinking CoT as a raw generation continuation.
+
+    BonaFide rendered the system and user messages with
+    ``add_generation_prompt=True`` and ``enable_thinking=True``, then let the
+    backend continue that exact string.  Treating the recovered CoT as an
+    assistant message is not equivalent: a chat template may trim its content
+    or add an end-of-turn suffix.  This explicit mode instead renders the
+    historical generation prefix as text, appends the frozen CoT body verbatim,
+    and tokenizes the combined string once.
+
+    The separately tokenized prefix must remain an exact token prefix of the
+    combined string.  If the tokenizer merges across that boundary, response-
+    relative positions would be ambiguous and tracing fails closed.
+    """
+
+    if not isinstance(system_prompt, str) or not system_prompt:
+        raise ValueError(
+            "historical thinking continuation requires a non-empty system_prompt"
+        )
+    if not response:
+        raise ValueError("response contains no text")
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+    rendered_prefix = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=False,
+        enable_thinking=True,
+        chat_template=get_chat_template(tokenizer),
+    )
+    if not isinstance(rendered_prefix, str):
+        raise TypeError(
+            "historical thinking chat template did not return rendered text"
+        )
+
+    prefix_ids = _tokenize_text_without_special_tokens(tokenizer, rendered_prefix)
+    combined_ids = _tokenize_text_without_special_tokens(
+        tokenizer, rendered_prefix + response
+    )
+    if not prefix_ids:
+        raise ValueError("chat template produced an empty assistant prefix")
+    if combined_ids[: len(prefix_ids)] != prefix_ids:
+        raise ValueError(
+            "historical continuation does not preserve an exact tokenized "
+            "assistant-prefix boundary"
+        )
+    response_ids = combined_ids[len(prefix_ids) :]
+    if not response_ids:
+        raise ValueError("response contains no tokens after the generation prefix")
+
+    return TokenizedTeacherForcedResponse(
+        assistant_prefix_ids=prefix_ids,
+        response_ids=response_ids,
+        assistant_suffix_ids=[],
+    )
 
 
 def tokenize_teacher_forced_response(
@@ -611,6 +719,9 @@ def prepare_teacher_forced_input(
     target_response_positions: list[int],
     *,
     system_prompt: str | None = None,
+    serialization_mode: TeacherForcedSerializationMode = (
+        DEFAULT_TEACHER_FORCED_SERIALIZATION
+    ),
 ) -> TeacherForcedInput:
     """Tokenize a frozen response and align response-relative trace targets.
 
@@ -630,12 +741,24 @@ def prepare_teacher_forced_input(
     if target_response_positions[0] < 0:
         raise ValueError("target_response_positions cannot contain negative positions")
 
-    tokenized = tokenize_teacher_forced_response(
-        tokenizer,
-        prompt,
-        response,
-        system_prompt=system_prompt,
-    )
+    if serialization_mode == DEFAULT_TEACHER_FORCED_SERIALIZATION:
+        tokenized = tokenize_teacher_forced_response(
+            tokenizer,
+            prompt,
+            response,
+            system_prompt=system_prompt,
+        )
+    elif serialization_mode == HISTORICAL_THINKING_CONTINUATION_SERIALIZATION:
+        tokenized = tokenize_historical_thinking_continuation(
+            tokenizer,
+            prompt,
+            response,
+            system_prompt=system_prompt,
+        )
+    else:
+        raise ValueError(
+            f"unsupported teacher-forced serialization mode: {serialization_mode!r}"
+        )
     prefix_ids = tokenized.assistant_prefix_ids
     response_ids = tokenized.response_ids
     if target_response_positions[-1] >= len(response_ids):
@@ -661,6 +784,8 @@ def prepare_teacher_forced_input(
         assistant_prefix_token_count=len(prefix_ids),
         response_token_count=len(response_ids),
         included_response_token_count=included_response_count,
+        assistant_prefix_ids_sha256=_stable_json_hash(prefix_ids),
+        response_ids_sha256=_stable_json_hash(response_ids),
         selected_response_positions=list(target_response_positions),
         target_prediction_positions=target_prediction_positions,
         target_token_ids=target_token_ids,
@@ -1292,6 +1417,9 @@ def trace_teacher_forced_candidates(
     trace_family_id: str = TOPK_TRACE_FAMILY_ID,
     label: str = "teacher_forced_topk",
     system_prompt: str | None = None,
+    serialization_mode: TeacherForcedSerializationMode = (
+        DEFAULT_TEACHER_FORCED_SERIALIZATION
+    ),
     ignore_bos: bool = False,
     instrumentation: TraceInstrumentation | None = None,
     frozen_topology: FrozenGraphTopology | None = None,
@@ -1330,6 +1458,7 @@ def trace_teacher_forced_candidates(
             response,
             [target_response_position],
             system_prompt=system_prompt,
+            serialization_mode=serialization_mode,
         )
     with instrumentation_stage(instrumentation, "candidate_scoring"):
         position_logits = _teacher_forced_position_logits(model, prepared)
@@ -1430,6 +1559,13 @@ def trace_teacher_forced_candidates(
         "response_sha256": _stable_text_hash(response),
         "system_prompt": system_prompt,
         "system_prompt_sha256": _stable_text_hash(system_prompt),
+        "teacher_forced_serialization_mode": serialization_mode,
+        "teacher_forced_token_identity": {
+            "schema_version": TEACHER_FORCED_TOKEN_IDENTITY_SCHEMA_VERSION,
+            "hash_encoding": TOKEN_ID_HASH_ENCODING,
+            "assistant_prefix_ids_sha256": prepared.assistant_prefix_ids_sha256,
+            "response_ids_sha256": prepared.response_ids_sha256,
+        },
         "assistant_prefix_token_count": prepared.assistant_prefix_token_count,
         "response_token_count": prepared.response_token_count,
         "included_response_token_count": prepared.included_response_token_count,

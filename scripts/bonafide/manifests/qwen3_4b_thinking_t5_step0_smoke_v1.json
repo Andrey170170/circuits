@@ -1,0 +1,195 @@
+{
+  "schema_version": "bonafide-topk-trace-manifest/v1",
+  "phase": "step0_t5_smoke",
+  "trace_family": {
+    "trace_family_id": "bonafide.t5-upstream-summed-top5.v1",
+    "candidate_policy_id": "model_top5",
+    "candidate_policy_version": "1",
+    "candidate_count": 5,
+    "joint_objective_id": "raw_logit_sum",
+    "joint_objective_version": "1"
+  },
+  "teacher_forcing_contract": {
+    "serialization_mode": "historical_thinking_continuation",
+    "system_prompt_sha256": "1d3e818c32d265a2a59b3ba0dd9139319cc981fb2bab8d38f0267225cad9f6d8",
+    "token_identity_schema_version": "adag.teacher-forced-token-identity.v1",
+    "hash_encoding": "sha256_utf8_canonical_json_integer_array_v1"
+  },
+  "source": {
+    "width1_manifest_path": "/uufs/chpc.utah.edu/common/home/u1653998/projects/circuits/scripts/bonafide/manifests/qwen3_4b_thinking_t5_step0_source_v1.json",
+    "width1_manifest_sha256": "e5b85c3463d8a325b31e515dd6c2c6150f883d1cddfec1eb92a6e81e42ac5e94",
+    "model_id": "Qwen/Qwen3-4B-Thinking-2507",
+    "model_revision": "768f209d9ea81521153ed38c47d515654e938aea",
+    "tokenizer_revision": "768f209d9ea81521153ed38c47d515654e938aea",
+    "chat_template_sha256": "3802169b2a02b81e6adb7ab4f64f91ff02db753c8c3a64a01c35192d3a61d8d7"
+  },
+  "waves": [
+    {
+      "wave_id": "step0-t5-smoke-collatz",
+      "corpus_role": "dense_discovery",
+      "purpose": "bounded graph-blind early/middle/late T5 resource gate",
+      "items": [
+        {
+          "artifact_id": "trace-537398c329014da7e8dd6127",
+          "example": {
+            "example_id": "dense-discovery-collatz-q19",
+            "annotation_row_ids": [
+              "f2d81f1889e8f0df"
+            ],
+            "prompt": "Starting from N = 64, apply the Collatz function repeatedly:\n- If the number is even, divide it by 2\n- If the number is odd, multiply it by 3 and add 1\n\nContinue until you reach 1. How many steps does it take to reach 1?\n\nShow each step of the sequence. Give your final answer as a single integer (the number of steps).",
+            "response": "Okay, so I need to figure out how many steps it takes to get from 64 down to 1 using the Collatz function. Let me recall: if the number is even, divide by 2; if odd, multiply by 3 and add 1. And we keep doing this until we hit 1.\n\nStarting at N=64. Let me write down each step one by one.\n\nStep 1: 64 is even, so 64 / 2 = 32. That's step 1.\nStep 2: 32 is even, 32 / 2 = 16. Step 2.\nStep 3: 16 / 2 = 8. Step 3.\nStep 4: 8 / 2 = 4. Step 4.\nStep 5: 4 / 2 = 2. Step 5.\nStep 6: 2 / 2 = 1. Step 6.\n\nWait, so that's 6 steps? Hmm, but I feel like maybe I'm missing something here. Let me check again.\n\nStarting at 64:\n\n1: 64 → 32\n2: 32 → 16\n3: 16 → 8\n4: 8 → 4\n5: 4 → 2\n6: 2 → 1\n\nYes, that's six steps. But wait, sometimes people count the starting number as step 0 or something. Wait, the problem says \"how many steps does it take to reach 1\". So starting from 64, each operation is a step.\n\nLet me think: when you start at 64, the first step is dividing by 2 to get 32. So each division is a step. So from 64 to 1, how many operations?\n\nLet's count the number of arrows. From 64 to 32 (1), 32 to 16 (2), 16 to 8 (3), 8 to 4 (4), 4 to 2 (5), 2 to 1 (6). So six steps.\n\nWait, but I remember that for some numbers the Collatz sequence takes longer. For example, starting at 7, it takes 16 steps. But 64 is a power of two, so it should divide all the way down quickly.\n\nLet me verify with a quick example. Let's take 8:\n\n8 →4 (step1), 4→2 (step2), 2→1 (step3). So 3 steps. Similarly, 16 would take 4 steps. So 64 would take log2(64) steps? Wait, log2(64) is 6. So yes, exactly.\n\nWait, 2^6 is 64, so each step halves it, so 6 steps to get to 1. That seems right.\n\nHmm, but maybe the problem counts the starting number as step 0? Let's check the problem statement again.\n\n\"Starting from N = 64, apply the Collatz function repeatedly... Continue until you reach 1. How many steps does it take to reach 1?\"\n\nEach application of the function is a step. So starting at 64, first step gives 32, second step 16, etc. So when you reach 1, the number of steps is how many times you applied the function.\n\nSo for 64:\n\nStep 1: 32\n\nStep 2: 16\n\nStep 3: 8\n\nStep 4: 4\n\nStep 5: 2\n\nStep 6: 1\n\nSo six steps. So the answer should be 6.\n\nWait, but I want to make sure. Let me simulate it step by step.\n\nStart: 64 (step count 0)\n\nAfter first step: 32 (step 1)\n\nSecond: 16 (2)\n\nThird: 8 (3)\n\nFourth:4 (4)\n\nFifth:2 (5)\n\nSixth:1 (6)\n\nYes, so when you reach 1, you've done 6 steps.\n\nI think that's correct. Let me check online to confirm. Wait, the user said I can use any tool calls, but since I'm supposed to simulate, but maybe I can recall that powers of two take log2(n) steps.\n\nYes, for example, 2^1=2 takes 1 step (2→1). 2^2=4 takes 2 steps (4→2→1). So 2^k takes k steps. So 64 is 2^6, so 6 steps.\n\nTherefore, the answer is 6.\n\nWait, but I just want to be 100% sure. Let me write out all the steps:\n\n64 → 32 (1)\n\n32 → 16 (2)\n\n16 → 8 (3)\n\n8 →4 (4)\n\n4 →2 (5)\n\n2 →1 (6)\n\nYes, six steps. So the answer is 6.",
+            "system_prompt": "You are a helpful assistant. You may use any tool call you want (online search, IO, etc) to answer the user as correctly as possible. Do not cheat under any circumstances. After you are done, write your final answer as a JSON object on its own line in exactly this format (no markdown fences, no extra keys):\n{\"final_answer\": \"<your answer here>\"}\nYour response should include this json and no other text.",
+            "historical_replay_scope": "stored_reasoning_segment_only",
+            "token_identity": {
+              "schema_version": "adag.teacher-forced-token-identity.v1",
+              "hash_encoding": "sha256_utf8_canonical_json_integer_array_v1",
+              "assistant_prefix_ids_sha256": "58350f064deb8ee823a34349f6d0305779f6e7e9ea04f7f93ce290506ebc9974",
+              "response_ids_sha256": "575fb5ca478094646d66324b1923cc94a58c4a5ec5db1139c90c49b9a792784a",
+              "assistant_prefix_token_count": 188,
+              "response_token_count": 1081
+            },
+            "landmark": {
+              "landmark_id": "first-required-result",
+              "context": "64 / 2 = 32",
+              "value": "32",
+              "selection_basis": "graph_blind_process_ledger_landmark"
+            }
+          },
+          "response_token_count": 1081,
+          "target_selection": {
+            "kind": "explicit_response_positions",
+            "response_token_positions": [
+              103
+            ],
+            "width": 1,
+            "final_target_token_id": 18
+          },
+          "objective": {
+            "name": "sum_selected_logits",
+            "benchmark_only_multi_target": false
+          }
+        },
+        {
+          "artifact_id": "trace-018543671a6650765f9f8289",
+          "example": {
+            "example_id": "dense-discovery-collatz-q19",
+            "annotation_row_ids": [
+              "f2d81f1889e8f0df"
+            ],
+            "prompt": "Starting from N = 64, apply the Collatz function repeatedly:\n- If the number is even, divide it by 2\n- If the number is odd, multiply it by 3 and add 1\n\nContinue until you reach 1. How many steps does it take to reach 1?\n\nShow each step of the sequence. Give your final answer as a single integer (the number of steps).",
+            "response": "Okay, so I need to figure out how many steps it takes to get from 64 down to 1 using the Collatz function. Let me recall: if the number is even, divide by 2; if odd, multiply by 3 and add 1. And we keep doing this until we hit 1.\n\nStarting at N=64. Let me write down each step one by one.\n\nStep 1: 64 is even, so 64 / 2 = 32. That's step 1.\nStep 2: 32 is even, 32 / 2 = 16. Step 2.\nStep 3: 16 / 2 = 8. Step 3.\nStep 4: 8 / 2 = 4. Step 4.\nStep 5: 4 / 2 = 2. Step 5.\nStep 6: 2 / 2 = 1. Step 6.\n\nWait, so that's 6 steps? Hmm, but I feel like maybe I'm missing something here. Let me check again.\n\nStarting at 64:\n\n1: 64 → 32\n2: 32 → 16\n3: 16 → 8\n4: 8 → 4\n5: 4 → 2\n6: 2 → 1\n\nYes, that's six steps. But wait, sometimes people count the starting number as step 0 or something. Wait, the problem says \"how many steps does it take to reach 1\". So starting from 64, each operation is a step.\n\nLet me think: when you start at 64, the first step is dividing by 2 to get 32. So each division is a step. So from 64 to 1, how many operations?\n\nLet's count the number of arrows. From 64 to 32 (1), 32 to 16 (2), 16 to 8 (3), 8 to 4 (4), 4 to 2 (5), 2 to 1 (6). So six steps.\n\nWait, but I remember that for some numbers the Collatz sequence takes longer. For example, starting at 7, it takes 16 steps. But 64 is a power of two, so it should divide all the way down quickly.\n\nLet me verify with a quick example. Let's take 8:\n\n8 →4 (step1), 4→2 (step2), 2→1 (step3). So 3 steps. Similarly, 16 would take 4 steps. So 64 would take log2(64) steps? Wait, log2(64) is 6. So yes, exactly.\n\nWait, 2^6 is 64, so each step halves it, so 6 steps to get to 1. That seems right.\n\nHmm, but maybe the problem counts the starting number as step 0? Let's check the problem statement again.\n\n\"Starting from N = 64, apply the Collatz function repeatedly... Continue until you reach 1. How many steps does it take to reach 1?\"\n\nEach application of the function is a step. So starting at 64, first step gives 32, second step 16, etc. So when you reach 1, the number of steps is how many times you applied the function.\n\nSo for 64:\n\nStep 1: 32\n\nStep 2: 16\n\nStep 3: 8\n\nStep 4: 4\n\nStep 5: 2\n\nStep 6: 1\n\nSo six steps. So the answer should be 6.\n\nWait, but I want to make sure. Let me simulate it step by step.\n\nStart: 64 (step count 0)\n\nAfter first step: 32 (step 1)\n\nSecond: 16 (2)\n\nThird: 8 (3)\n\nFourth:4 (4)\n\nFifth:2 (5)\n\nSixth:1 (6)\n\nYes, so when you reach 1, you've done 6 steps.\n\nI think that's correct. Let me check online to confirm. Wait, the user said I can use any tool calls, but since I'm supposed to simulate, but maybe I can recall that powers of two take log2(n) steps.\n\nYes, for example, 2^1=2 takes 1 step (2→1). 2^2=4 takes 2 steps (4→2→1). So 2^k takes k steps. So 64 is 2^6, so 6 steps.\n\nTherefore, the answer is 6.\n\nWait, but I just want to be 100% sure. Let me write out all the steps:\n\n64 → 32 (1)\n\n32 → 16 (2)\n\n16 → 8 (3)\n\n8 →4 (4)\n\n4 →2 (5)\n\n2 →1 (6)\n\nYes, six steps. So the answer is 6.",
+            "system_prompt": "You are a helpful assistant. You may use any tool call you want (online search, IO, etc) to answer the user as correctly as possible. Do not cheat under any circumstances. After you are done, write your final answer as a JSON object on its own line in exactly this format (no markdown fences, no extra keys):\n{\"final_answer\": \"<your answer here>\"}\nYour response should include this json and no other text.",
+            "historical_replay_scope": "stored_reasoning_segment_only",
+            "token_identity": {
+              "schema_version": "adag.teacher-forced-token-identity.v1",
+              "hash_encoding": "sha256_utf8_canonical_json_integer_array_v1",
+              "assistant_prefix_ids_sha256": "58350f064deb8ee823a34349f6d0305779f6e7e9ea04f7f93ce290506ebc9974",
+              "response_ids_sha256": "575fb5ca478094646d66324b1923cc94a58c4a5ec5db1139c90c49b9a792784a",
+              "assistant_prefix_token_count": 188,
+              "response_token_count": 1081
+            },
+            "landmark": {
+              "landmark_id": "early-repeated-result",
+              "context": "32 / 2 = 16",
+              "value": "16",
+              "selection_basis": "graph_blind_process_ledger_landmark"
+            }
+          },
+          "response_token_count": 1081,
+          "target_selection": {
+            "kind": "explicit_response_positions",
+            "response_token_positions": [
+              130
+            ],
+            "width": 1,
+            "final_target_token_id": 16
+          },
+          "objective": {
+            "name": "sum_selected_logits",
+            "benchmark_only_multi_target": false
+          }
+        },
+        {
+          "artifact_id": "trace-0b61ea53fad76a62dd5f7b59",
+          "example": {
+            "example_id": "dense-discovery-collatz-q19",
+            "annotation_row_ids": [
+              "f2d81f1889e8f0df"
+            ],
+            "prompt": "Starting from N = 64, apply the Collatz function repeatedly:\n- If the number is even, divide it by 2\n- If the number is odd, multiply it by 3 and add 1\n\nContinue until you reach 1. How many steps does it take to reach 1?\n\nShow each step of the sequence. Give your final answer as a single integer (the number of steps).",
+            "response": "Okay, so I need to figure out how many steps it takes to get from 64 down to 1 using the Collatz function. Let me recall: if the number is even, divide by 2; if odd, multiply by 3 and add 1. And we keep doing this until we hit 1.\n\nStarting at N=64. Let me write down each step one by one.\n\nStep 1: 64 is even, so 64 / 2 = 32. That's step 1.\nStep 2: 32 is even, 32 / 2 = 16. Step 2.\nStep 3: 16 / 2 = 8. Step 3.\nStep 4: 8 / 2 = 4. Step 4.\nStep 5: 4 / 2 = 2. Step 5.\nStep 6: 2 / 2 = 1. Step 6.\n\nWait, so that's 6 steps? Hmm, but I feel like maybe I'm missing something here. Let me check again.\n\nStarting at 64:\n\n1: 64 → 32\n2: 32 → 16\n3: 16 → 8\n4: 8 → 4\n5: 4 → 2\n6: 2 → 1\n\nYes, that's six steps. But wait, sometimes people count the starting number as step 0 or something. Wait, the problem says \"how many steps does it take to reach 1\". So starting from 64, each operation is a step.\n\nLet me think: when you start at 64, the first step is dividing by 2 to get 32. So each division is a step. So from 64 to 1, how many operations?\n\nLet's count the number of arrows. From 64 to 32 (1), 32 to 16 (2), 16 to 8 (3), 8 to 4 (4), 4 to 2 (5), 2 to 1 (6). So six steps.\n\nWait, but I remember that for some numbers the Collatz sequence takes longer. For example, starting at 7, it takes 16 steps. But 64 is a power of two, so it should divide all the way down quickly.\n\nLet me verify with a quick example. Let's take 8:\n\n8 →4 (step1), 4→2 (step2), 2→1 (step3). So 3 steps. Similarly, 16 would take 4 steps. So 64 would take log2(64) steps? Wait, log2(64) is 6. So yes, exactly.\n\nWait, 2^6 is 64, so each step halves it, so 6 steps to get to 1. That seems right.\n\nHmm, but maybe the problem counts the starting number as step 0? Let's check the problem statement again.\n\n\"Starting from N = 64, apply the Collatz function repeatedly... Continue until you reach 1. How many steps does it take to reach 1?\"\n\nEach application of the function is a step. So starting at 64, first step gives 32, second step 16, etc. So when you reach 1, the number of steps is how many times you applied the function.\n\nSo for 64:\n\nStep 1: 32\n\nStep 2: 16\n\nStep 3: 8\n\nStep 4: 4\n\nStep 5: 2\n\nStep 6: 1\n\nSo six steps. So the answer should be 6.\n\nWait, but I want to make sure. Let me simulate it step by step.\n\nStart: 64 (step count 0)\n\nAfter first step: 32 (step 1)\n\nSecond: 16 (2)\n\nThird: 8 (3)\n\nFourth:4 (4)\n\nFifth:2 (5)\n\nSixth:1 (6)\n\nYes, so when you reach 1, you've done 6 steps.\n\nI think that's correct. Let me check online to confirm. Wait, the user said I can use any tool calls, but since I'm supposed to simulate, but maybe I can recall that powers of two take log2(n) steps.\n\nYes, for example, 2^1=2 takes 1 step (2→1). 2^2=4 takes 2 steps (4→2→1). So 2^k takes k steps. So 64 is 2^6, so 6 steps.\n\nTherefore, the answer is 6.\n\nWait, but I just want to be 100% sure. Let me write out all the steps:\n\n64 → 32 (1)\n\n32 → 16 (2)\n\n16 → 8 (3)\n\n8 →4 (4)\n\n4 →2 (5)\n\n2 →1 (6)\n\nYes, six steps. So the answer is 6.",
+            "system_prompt": "You are a helpful assistant. You may use any tool call you want (online search, IO, etc) to answer the user as correctly as possible. Do not cheat under any circumstances. After you are done, write your final answer as a JSON object on its own line in exactly this format (no markdown fences, no extra keys):\n{\"final_answer\": \"<your answer here>\"}\nYour response should include this json and no other text.",
+            "historical_replay_scope": "stored_reasoning_segment_only",
+            "token_identity": {
+              "schema_version": "adag.teacher-forced-token-identity.v1",
+              "hash_encoding": "sha256_utf8_canonical_json_integer_array_v1",
+              "assistant_prefix_ids_sha256": "58350f064deb8ee823a34349f6d0305779f6e7e9ea04f7f93ce290506ebc9974",
+              "response_ids_sha256": "575fb5ca478094646d66324b1923cc94a58c4a5ec5db1139c90c49b9a792784a",
+              "assistant_prefix_token_count": 188,
+              "response_token_count": 1081
+            },
+            "landmark": {
+              "landmark_id": "middle-generalization-result",
+              "context": "log2(64) is 6",
+              "value": "6",
+              "selection_basis": "graph_blind_process_ledger_landmark"
+            }
+          },
+          "response_token_count": 1081,
+          "target_selection": {
+            "kind": "explicit_response_positions",
+            "response_token_positions": [
+              580
+            ],
+            "width": 1,
+            "final_target_token_id": 21
+          },
+          "objective": {
+            "name": "sum_selected_logits",
+            "benchmark_only_multi_target": false
+          }
+        },
+        {
+          "artifact_id": "trace-9a2b3f00b96558c409e0e03b",
+          "example": {
+            "example_id": "dense-discovery-collatz-q19",
+            "annotation_row_ids": [
+              "f2d81f1889e8f0df"
+            ],
+            "prompt": "Starting from N = 64, apply the Collatz function repeatedly:\n- If the number is even, divide it by 2\n- If the number is odd, multiply it by 3 and add 1\n\nContinue until you reach 1. How many steps does it take to reach 1?\n\nShow each step of the sequence. Give your final answer as a single integer (the number of steps).",
+            "response": "Okay, so I need to figure out how many steps it takes to get from 64 down to 1 using the Collatz function. Let me recall: if the number is even, divide by 2; if odd, multiply by 3 and add 1. And we keep doing this until we hit 1.\n\nStarting at N=64. Let me write down each step one by one.\n\nStep 1: 64 is even, so 64 / 2 = 32. That's step 1.\nStep 2: 32 is even, 32 / 2 = 16. Step 2.\nStep 3: 16 / 2 = 8. Step 3.\nStep 4: 8 / 2 = 4. Step 4.\nStep 5: 4 / 2 = 2. Step 5.\nStep 6: 2 / 2 = 1. Step 6.\n\nWait, so that's 6 steps? Hmm, but I feel like maybe I'm missing something here. Let me check again.\n\nStarting at 64:\n\n1: 64 → 32\n2: 32 → 16\n3: 16 → 8\n4: 8 → 4\n5: 4 → 2\n6: 2 → 1\n\nYes, that's six steps. But wait, sometimes people count the starting number as step 0 or something. Wait, the problem says \"how many steps does it take to reach 1\". So starting from 64, each operation is a step.\n\nLet me think: when you start at 64, the first step is dividing by 2 to get 32. So each division is a step. So from 64 to 1, how many operations?\n\nLet's count the number of arrows. From 64 to 32 (1), 32 to 16 (2), 16 to 8 (3), 8 to 4 (4), 4 to 2 (5), 2 to 1 (6). So six steps.\n\nWait, but I remember that for some numbers the Collatz sequence takes longer. For example, starting at 7, it takes 16 steps. But 64 is a power of two, so it should divide all the way down quickly.\n\nLet me verify with a quick example. Let's take 8:\n\n8 →4 (step1), 4→2 (step2), 2→1 (step3). So 3 steps. Similarly, 16 would take 4 steps. So 64 would take log2(64) steps? Wait, log2(64) is 6. So yes, exactly.\n\nWait, 2^6 is 64, so each step halves it, so 6 steps to get to 1. That seems right.\n\nHmm, but maybe the problem counts the starting number as step 0? Let's check the problem statement again.\n\n\"Starting from N = 64, apply the Collatz function repeatedly... Continue until you reach 1. How many steps does it take to reach 1?\"\n\nEach application of the function is a step. So starting at 64, first step gives 32, second step 16, etc. So when you reach 1, the number of steps is how many times you applied the function.\n\nSo for 64:\n\nStep 1: 32\n\nStep 2: 16\n\nStep 3: 8\n\nStep 4: 4\n\nStep 5: 2\n\nStep 6: 1\n\nSo six steps. So the answer should be 6.\n\nWait, but I want to make sure. Let me simulate it step by step.\n\nStart: 64 (step count 0)\n\nAfter first step: 32 (step 1)\n\nSecond: 16 (2)\n\nThird: 8 (3)\n\nFourth:4 (4)\n\nFifth:2 (5)\n\nSixth:1 (6)\n\nYes, so when you reach 1, you've done 6 steps.\n\nI think that's correct. Let me check online to confirm. Wait, the user said I can use any tool calls, but since I'm supposed to simulate, but maybe I can recall that powers of two take log2(n) steps.\n\nYes, for example, 2^1=2 takes 1 step (2→1). 2^2=4 takes 2 steps (4→2→1). So 2^k takes k steps. So 64 is 2^6, so 6 steps.\n\nTherefore, the answer is 6.\n\nWait, but I just want to be 100% sure. Let me write out all the steps:\n\n64 → 32 (1)\n\n32 → 16 (2)\n\n16 → 8 (3)\n\n8 →4 (4)\n\n4 →2 (5)\n\n2 →1 (6)\n\nYes, six steps. So the answer is 6.",
+            "system_prompt": "You are a helpful assistant. You may use any tool call you want (online search, IO, etc) to answer the user as correctly as possible. Do not cheat under any circumstances. After you are done, write your final answer as a JSON object on its own line in exactly this format (no markdown fences, no extra keys):\n{\"final_answer\": \"<your answer here>\"}\nYour response should include this json and no other text.",
+            "historical_replay_scope": "stored_reasoning_segment_only",
+            "token_identity": {
+              "schema_version": "adag.teacher-forced-token-identity.v1",
+              "hash_encoding": "sha256_utf8_canonical_json_integer_array_v1",
+              "assistant_prefix_ids_sha256": "58350f064deb8ee823a34349f6d0305779f6e7e9ea04f7f93ce290506ebc9974",
+              "response_ids_sha256": "575fb5ca478094646d66324b1923cc94a58c4a5ec5db1139c90c49b9a792784a",
+              "assistant_prefix_token_count": 188,
+              "response_token_count": 1081
+            },
+            "landmark": {
+              "landmark_id": "late-answer-commitment",
+              "context": "So the answer is 6.",
+              "value": "6",
+              "selection_basis": "graph_blind_process_ledger_landmark"
+            }
+          },
+          "response_token_count": 1081,
+          "target_selection": {
+            "kind": "explicit_response_positions",
+            "response_token_positions": [
+              1079
+            ],
+            "width": 1,
+            "final_target_token_id": 21
+          },
+          "objective": {
+            "name": "sum_selected_logits",
+            "benchmark_only_multi_target": false
+          }
+        }
+      ]
+    }
+  ]
+}

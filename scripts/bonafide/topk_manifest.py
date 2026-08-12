@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -21,8 +22,11 @@ DISCOVERY_ONLY_PHASES = {
     "c0_candidate_reference",
     "c1_policy_resource",
     "c2_scientific_utility",
+    "step0_t5_smoke",
 }
 MODEL_TOP5_PLUS_OBSERVED_COUNT_RULE = "5_if_observed_in_model_top5_else_6"
+STEP0_T5_SMOKE_PHASE = "step0_t5_smoke"
+HISTORICAL_THINKING_SERIALIZATION_MODE = "historical_thinking_continuation"
 
 
 def candidate_count_bounds(
@@ -127,7 +131,48 @@ def validate_topk_manifest(manifest: Mapping[str, Any]) -> None:
     allowed_phases = {*DISCOVERY_ONLY_PHASES, "matched_corpus"}
     if phase not in allowed_phases:
         raise ValueError(f"unsupported top-k manifest phase: {phase!r}")
-    validate_trace_family(manifest.get("trace_family"))
+    trace_family = validate_trace_family(manifest.get("trace_family"))
+    if phase == STEP0_T5_SMOKE_PHASE:
+        expected = {
+            "candidate_policy_id": "model_top5",
+            "candidate_count": 5,
+            "joint_objective_id": "raw_logit_sum",
+        }
+        for field, expected_value in expected.items():
+            if trace_family.get(field) != expected_value:
+                raise ValueError(
+                    "step0_t5_smoke requires strict upstream T5 semantics: "
+                    f"trace_family.{field}={expected_value!r}"
+                )
+        teacher_forcing_contract = manifest.get("teacher_forcing_contract")
+        if not isinstance(teacher_forcing_contract, Mapping):
+            raise ValueError(
+                "step0_t5_smoke requires a teacher_forcing_contract object"
+            )
+        if (
+            teacher_forcing_contract.get("serialization_mode")
+            != HISTORICAL_THINKING_SERIALIZATION_MODE
+        ):
+            raise ValueError(
+                "step0_t5_smoke requires historical thinking continuation serialization"
+            )
+        if (
+            teacher_forcing_contract.get("token_identity_schema_version")
+            != "adag.teacher-forced-token-identity.v1"
+        ):
+            raise ValueError(
+                "step0_t5_smoke token identity schema version is unsupported"
+            )
+        if (
+            teacher_forcing_contract.get("hash_encoding")
+            != "sha256_utf8_canonical_json_integer_array_v1"
+        ):
+            raise ValueError("step0_t5_smoke token hash encoding is unsupported")
+        system_hash = teacher_forcing_contract.get("system_prompt_sha256")
+        if not isinstance(system_hash, str) or not SHA256.fullmatch(system_hash):
+            raise ValueError(
+                "step0_t5_smoke system_prompt_sha256 must be a SHA-256 digest"
+            )
 
     source = manifest.get("source")
     if not isinstance(source, Mapping):
@@ -195,6 +240,40 @@ def validate_topk_manifest(manifest: Mapping[str, Any]) -> None:
             for field in ("example_id", "prompt", "response"):
                 if not isinstance(example.get(field), str) or not example[field]:
                     raise ValueError(f"top-k work item example.{field} is required")
+            if phase == STEP0_T5_SMOKE_PHASE:
+                system_prompt = example.get("system_prompt")
+                if not isinstance(system_prompt, str) or not system_prompt:
+                    raise ValueError(
+                        "step0_t5_smoke example.system_prompt must be non-empty"
+                    )
+                if (
+                    hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
+                    != manifest["teacher_forcing_contract"]["system_prompt_sha256"]
+                ):
+                    raise ValueError(
+                        "step0_t5_smoke example system prompt hash disagrees with "
+                        "teacher_forcing_contract"
+                    )
+                token_identity = example.get("token_identity")
+                if not isinstance(token_identity, Mapping):
+                    raise ValueError(
+                        "step0_t5_smoke example.token_identity must be an object"
+                    )
+                for field in (
+                    "assistant_prefix_ids_sha256",
+                    "response_ids_sha256",
+                ):
+                    value = token_identity.get(field)
+                    if not isinstance(value, str) or not SHA256.fullmatch(value):
+                        raise ValueError(
+                            f"example.token_identity.{field} must be a SHA-256 digest"
+                        )
+                if token_identity.get("response_token_count") != item.get(
+                    "response_token_count"
+                ):
+                    raise ValueError(
+                        "example token identity response count disagrees with item"
+                    )
             specified_token_id = item.get("specified_candidate_token_id")
             if manifest["trace_family"]["candidate_policy_id"] == "specified_token":
                 if (

@@ -1,7 +1,8 @@
 # BonaFide process-witness discovery plan
 
-Status: **central draft protocol; the overall architecture is accepted, Step 0 remains open, and no
-new generation or tracing run is authorized.**
+Status: **central protocol; the architecture and historical-reconstruction choice are accepted.
+Step-0 input inventories are frozen in version 1, the bounded T5 smoke is authorized, and broad
+generation plus production tracing remain gated.**
 
 This is the governing plan for the new process-witness campaign. Where it conflicts with
 `docs/ADAG_BONAFIDE_NAIVE_PILOT.md` or `docs/TRACING_CORPUS_PLAN.md`, this plan governs the new
@@ -204,12 +205,22 @@ Freeze:
 - human region annotations, token-target conversion policy, and surface-reference selectors;
 - exclusion and failure rules.
 
-For Thinking-model completions, the authoritative response is the exact serialized assistant
-token sequence captured by generation, including thinking delimiters and the final-answer segment.
-Do not reconstruct a trace input by concatenating a parsed `cot` column with a parsed answer when
-raw completion token IDs are available. Before freezing the historical dense cases, either recover
-their original assistant serialization or document and validate the reconstruction rule; otherwise
-the original-inference-context claim remains unproven.
+For newly generated Thinking-model completions, the authoritative response is the exact serialized
+assistant token sequence captured by generation, including thinking delimiters and the final-answer
+segment. Do not reconstruct those inputs from parsed columns when raw completion token IDs exist.
+
+The three published historical dense cases are a documented exception. The public CSV retained
+the interior CoT and parsed answer but discarded raw assistant serialization, token IDs, row-level
+system provenance, seed, finish reason, and runtime manifest. The released BonaFide generator's
+initial commit nevertheless recovers a strong intended conversation contract: the exact answer-only
+system prompt, Qwen Thinking generation prefix, and decoding defaults. Version 1 therefore freezes
+these cases as **historical reasoning-segment reconstructions**, not byte-identical recovered runs.
+It renders the released system/user generation prefix ending in `<think>\n`, appends the stored CoT
+body as its raw continuation, derives and hashes the token IDs, and traces only those CoT tokens.
+Unknown closing-tag/JSON material follows the reasoning and cannot causally affect earlier
+autoregressive CoT predictions. Final-answer/delimiter tracing is excluded for these historical
+cases. Remaining uncertainty about an unpreserved row-level system message, leading stripped
+whitespace, and the exact historical revision remains attached to every artifact and claim.
 
 Generation/tracing consistency is necessary but does not recover missing historical provenance.
 For newly generated responses, trace the exact system/user prefix and assistant token sequence used
@@ -315,6 +326,18 @@ Run only bounded, disposable checks before freezing:
 Step 0 freezes a selection bundle containing the model identity, process ledger, broad generation
 corpus, dense discovery/reserve roles, T5 configuration, corpus weights, code revision, resource
 plan, failure policy, and content hashes. Changes after that point require a new version.
+
+The version-1 input freeze is materialized by
+`scripts/bonafide/manifests/qwen3_4b_thinking_process_witness_step0_v1.json` (SHA-256
+`d00aa083474d34fdaf0936df5705d00a9192705dbab9e7a9629f95aaf9effc34`). It contains all 48
+outright prompt cells, the 47/1 fit-reserve split, 186 deterministic new broad request slots, the
+three historical dense reasoning replays, process ledgers, token identities, and the historical
+conversation/decoding evidence. Its status remains `inputs_frozen_resource_gate_pending`: the T5
+smoke must still establish the broad completion-token cap and full resource plan before generation
+or the complete Step-0 execution bundle can freeze. The bounded source and strict-T5 smoke
+manifests have SHA-256 identities
+`e5b85c3463d8a325b31e515dd6c2c6150f883d1cddfec1eb92a6e81e42ac5e94` and
+`d125da744b0ad25f2e907424bc30ee67b6b93c693b3ac4010f8256915eb41259`, respectively.
 
 ## Step 1: build and freeze the atlas
 
@@ -521,17 +544,16 @@ atlas, and raw-neuron basis. It is not evidence that the internal computation di
 
 ## Immediate next actions
 
-1. Accept or revise the proposed Qwen Thinking primary, exact conversation contract, and three dense
-   roles.
-2. Recover and validate the authoritative serialized assistant tokens for the historical dense
-   cases; regenerate them under the new contract if recovery fails.
-3. Freeze the broad generation manifest and cost envelope, then seek separate authorization for the
-   generation-only run.
+1. Run and audit the authorized strict-T5 Step-0 smoke on the frozen Collatz reconstruction.
+2. Use its measured resource envelope to freeze the broad completion-token cap and complete
+   workload estimate.
+3. Review the already frozen 186-slot broad request inventory, then seek separate authorization for
+   the generation-only run.
 4. Build the deterministic process ledgers and token-aware region-annotation page.
 5. Paint and review process and surface-reference regions, derive token targets, and freeze the
    hashed three-class annotation manifest and `Q_process` tiers.
-6. Implement and validate a strict upstream T5 teacher-forced runner distinct from CU5, then run the
-   bounded Step-0 smoke/resource gate.
+6. Complete strict upstream-T5 parity and historical-tokenization validation before accepting any
+   smoke artifact; T5 remains distinct from CU5.
 7. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
    states on small synthetic or smoke-test artifacts.
 8. Freeze the versioned selection and execution bundle; only then seek authorization for a

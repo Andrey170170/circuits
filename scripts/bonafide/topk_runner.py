@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import os
 import signal
@@ -40,6 +41,7 @@ from scripts.bonafide.runner import (
     wave_stop_reason,
 )
 from scripts.bonafide.topk_manifest import (
+    STEP0_T5_SMOKE_PHASE,
     candidate_count_bounds,
     candidate_selection_limit,
     validate_topk_manifest,
@@ -67,6 +69,7 @@ def topk_runtime_artifact_identity(
     source_manifest_sha256: str,
     topk_manifest_sha256: str,
     wave_id: str,
+    teacher_forced_serialization_mode: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Bind a top-k unit to its source target and complete executable contract."""
 
@@ -85,6 +88,10 @@ def topk_runtime_artifact_identity(
         "code_revision": dict(code_revision),
         "runtime_environment": dict(runtime_environment),
     }
+    if teacher_forced_serialization_mode is not None:
+        identity["teacher_forced_serialization_mode"] = (
+            teacher_forced_serialization_mode
+        )
     digest = _sha256(identity)
     identity["sha256"] = digest
     return f"topk-trace-{digest[:24]}", identity
@@ -137,6 +144,92 @@ def _candidate_profile_diagnostics(frame, candidate_count: int) -> dict[str, Any
             for index in range(candidate_count)
         ],
     }
+
+
+def _stable_text_sha256(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _serialization_mode_for_example(
+    example: Mapping[str, Any], explicit_mode: str | None
+) -> str:
+    if explicit_mode is not None:
+        return explicit_mode
+    value = example.get("teacher_forced_serialization_mode", "assistant_turn")
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            "example.teacher_forced_serialization_mode must be a non-empty string"
+        )
+    return value
+
+
+def _teacher_forcing_contract(
+    manifest: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    value = manifest.get("teacher_forcing_contract")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("teacher_forcing_contract must be an object")
+    return value
+
+
+def validate_runtime_serialization_contract(
+    trace,
+    item: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    *,
+    serialization_mode: str,
+) -> None:
+    """Bind a live trace to the frozen historical prompt/tokenization contract."""
+
+    metadata = trace.circuit_data.trace_metadata
+    example = item["example"]
+    system_prompt = example.get("system_prompt")
+    should_validate = (
+        manifest.get("phase") == STEP0_T5_SMOKE_PHASE
+        or system_prompt is not None
+        or "teacher_forced_serialization_mode" in example
+        or _teacher_forcing_contract(manifest) is not None
+    )
+    if not should_validate:
+        return
+    if metadata.get("system_prompt") != system_prompt:
+        raise ValueError("runtime top-k system prompt disagrees with frozen example")
+    if metadata.get("system_prompt_sha256") != _stable_text_sha256(system_prompt):
+        raise ValueError(
+            "runtime top-k system prompt hash disagrees with frozen example"
+        )
+    if metadata.get("teacher_forced_serialization_mode") != serialization_mode:
+        raise ValueError(
+            "runtime top-k teacher-forced serialization mode disagrees with "
+            "frozen example"
+        )
+
+    contract = _teacher_forcing_contract(manifest)
+    if contract is None:
+        return
+    token_identity = example.get("token_identity")
+    if not isinstance(token_identity, Mapping):
+        raise ValueError("frozen example lacks token_identity")
+    runtime_identity = metadata.get("teacher_forced_token_identity")
+    if not isinstance(runtime_identity, Mapping):
+        raise ValueError("runtime top-k trace lacks teacher-forced token identity")
+    expected_identity = {
+        "schema_version": contract.get("token_identity_schema_version"),
+        "hash_encoding": contract.get("hash_encoding"),
+        "assistant_prefix_ids_sha256": token_identity.get(
+            "assistant_prefix_ids_sha256"
+        ),
+        "response_ids_sha256": token_identity.get("response_ids_sha256"),
+    }
+    for field, expected in expected_identity.items():
+        if runtime_identity.get(field) != expected:
+            raise ValueError(
+                f"runtime top-k {field} disagrees with frozen tokenization contract"
+            )
 
 
 def _verify_source_manifest(manifest: Mapping[str, Any], repo_root: Path) -> str:
@@ -208,6 +301,7 @@ def run_topk_wave(
     _model_bundle=None,
     _code_revision: Mapping[str, Any] | None = None,
     _runtime_environment: Mapping[str, Any] | None = None,
+    teacher_forced_serialization_mode: str | None = None,
 ) -> list[dict[str, Any]]:
     """Run or dry-run one immutable top-k trace-family wave."""
 
@@ -258,6 +352,7 @@ def run_topk_wave(
             source_manifest_sha256=source_manifest_sha256,
             topk_manifest_sha256=topk_manifest_sha256,
             wave_id=wave_id,
+            teacher_forced_serialization_mode=(teacher_forced_serialization_mode),
         )
         path = family_root / wave_id / artifact_id
         base = {
@@ -334,6 +429,18 @@ def run_topk_wave(
             joint_objective_id=trace_family["joint_objective_id"],
             trace_family_id=trace_family["trace_family_id"],
             label=warmup_item["example"]["example_id"],
+            system_prompt=warmup_item["example"].get("system_prompt"),
+            serialization_mode=_serialization_mode_for_example(
+                warmup_item["example"], teacher_forced_serialization_mode
+            ),
+        )
+        validate_runtime_serialization_contract(
+            warmup_trace,
+            warmup_item,
+            manifest,
+            serialization_mode=_serialization_mode_for_example(
+                warmup_item["example"], teacher_forced_serialization_mode
+            ),
         )
         if _model_config_sha256(model) != warmup_config_before:
             raise RuntimeError(
@@ -399,6 +506,10 @@ def run_topk_wave(
                     joint_objective_id=trace_family["joint_objective_id"],
                     trace_family_id=trace_family["trace_family_id"],
                     label=example["example_id"],
+                    system_prompt=example.get("system_prompt"),
+                    serialization_mode=_serialization_mode_for_example(
+                        example, teacher_forced_serialization_mode
+                    ),
                     instrumentation=instrumentation,
                 )
                 if _model_config_sha256(model) != config_before:
@@ -407,6 +518,14 @@ def run_topk_wave(
                         "resident model reuse is unsafe"
                     )
                 validate_runtime_topk_trace_against_item(trace, item, trace_family)
+                validate_runtime_serialization_contract(
+                    trace,
+                    item,
+                    manifest,
+                    serialization_mode=_serialization_mode_for_example(
+                        example, teacher_forced_serialization_mode
+                    ),
+                )
                 if trace.circuit_data.model_id != config["model"]["model_id"]:
                     raise ValueError("runtime top-k model ID disagrees with run config")
                 if (

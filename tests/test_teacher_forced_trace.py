@@ -30,6 +30,7 @@ from circuits.tracing.trace import (
     CircuitData,
     TopKPositionTrace,
     prepare_teacher_forced_input,
+    tokenize_historical_thinking_continuation,
     trace_teacher_forced_candidates,
     trace_teacher_forced_response,
 )
@@ -77,6 +78,45 @@ class FakeModel:
         return SimpleNamespace(logits=logits)
 
 
+class FakeHistoricalThinkingTokenizer:
+    name_or_path = "fake/qwen-thinking"
+    chat_template = "fake-qwen-thinking-template-v1"
+
+    def __init__(self):
+        self.template_calls = []
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.template_calls.append((messages, kwargs))
+        assert kwargs == {
+            "add_generation_prompt": True,
+            "tokenize": False,
+            "enable_thinking": True,
+            "chat_template": self.chat_template,
+        }
+        assert [message["role"] for message in messages] == ["system", "user"]
+        return "<system>system<user>question<assistant><think>\n"
+
+    def __call__(self, text, *, add_special_tokens, return_attention_mask):
+        assert add_special_tokens is False
+        assert return_attention_mask is False
+        return {"input_ids": [ord(character) for character in text]}
+
+    def decode(self, token_ids):
+        return chr(token_ids[0])
+
+
+class FakeMergingHistoricalTokenizer(FakeHistoricalThinkingTokenizer):
+    def __call__(self, text, *, add_special_tokens, return_attention_mask):
+        encoded = super().__call__(
+            text,
+            add_special_tokens=add_special_tokens,
+            return_attention_mask=return_attention_mask,
+        )
+        if text.endswith("body"):
+            encoded["input_ids"][0] += 1
+        return encoded
+
+
 def test_prepare_teacher_forced_input_uses_exact_template_boundary_and_truncates():
     prepared = prepare_teacher_forced_input(
         FakeChatTokenizer(),
@@ -93,6 +133,55 @@ def test_prepare_teacher_forced_input_uses_exact_template_boundary_and_truncates
     assert prepared.target_token_ids == [78, 30]
     assert prepared.target_prediction_positions == [4, 6]
     assert prepared.attention_mask == [1] * 8
+
+
+def test_prepare_historical_thinking_continuation_preserves_raw_body_boundary():
+    tokenizer = FakeHistoricalThinkingTokenizer()
+    prefix = "<system>system<user>question<assistant><think>\n"
+
+    tokenized = tokenize_historical_thinking_continuation(
+        tokenizer,
+        "question",
+        "body",
+        system_prompt="system",
+    )
+    prepared = prepare_teacher_forced_input(
+        tokenizer,
+        "question",
+        "body",
+        [0, 3],
+        system_prompt="system",
+        serialization_mode="historical_thinking_continuation",
+    )
+
+    assert tokenized.assistant_prefix_ids == [ord(character) for character in prefix]
+    assert tokenized.response_ids == [ord(character) for character in "body"]
+    assert tokenized.assistant_suffix_ids == []
+    assert prepared.assistant_prefix_token_count == len(prefix)
+    assert prepared.response_token_count == 4
+    assert prepared.input_ids == [
+        *[ord(character) for character in prefix],
+        *[ord(character) for character in "body"],
+    ]
+    assert prepared.target_prediction_positions == [len(prefix) - 1, len(prefix) + 2]
+    assert prepared.target_token_ids == [ord("b"), ord("y")]
+    assert prepared.assistant_prefix_ids_sha256 == (
+        "2b24048e4a63f8a95d5e8816ab4d642a671353b0250bcd9d0021954dc267bf90"
+    )
+    assert prepared.response_ids_sha256 == (
+        "e1e0c33bb3fb36bc1936454c93a6fed40de00afd599998d60bdcf572534e3f05"
+    )
+    assert all(call[1]["enable_thinking"] is True for call in tokenizer.template_calls)
+
+
+def test_historical_thinking_continuation_rejects_token_boundary_merge():
+    with pytest.raises(ValueError, match="exact tokenized assistant-prefix boundary"):
+        tokenize_historical_thinking_continuation(
+            FakeMergingHistoricalTokenizer(),
+            "question",
+            "body",
+            system_prompt="system",
+        )
 
 
 @pytest.mark.parametrize(
@@ -179,6 +268,12 @@ def test_trace_teacher_forced_candidates_uses_distinct_candidate_axis(monkeypatc
     import circuits.tracing.trace as trace_module
 
     captured = {}
+    real_prepare = trace_module.prepare_teacher_forced_input
+
+    def capture_serialization_mode(*args, **kwargs):
+        captured["serialization_mode"] = kwargs["serialization_mode"]
+        kwargs["serialization_mode"] = "assistant_turn"
+        return real_prepare(*args, **kwargs)
 
     def fake_clja(**kwargs):
         captured.update(kwargs)
@@ -188,6 +283,11 @@ def test_trace_teacher_forced_candidates_uses_distinct_candidate_axis(monkeypatc
         trace_module,
         "get_all_pairs_cl_ja_effects_with_attributions",
         fake_clja,
+    )
+    monkeypatch.setattr(
+        trace_module,
+        "prepare_teacher_forced_input",
+        capture_serialization_mode,
     )
     monkeypatch.setattr(
         trace_module,
@@ -228,6 +328,7 @@ def test_trace_teacher_forced_candidates_uses_distinct_candidate_axis(monkeypatc
         candidate_policy_id="observed_plus_top4_alternatives",
         candidate_count=5,
         label="row-1",
+        serialization_mode="historical_thinking_continuation",
     )
 
     axis = captured["candidate_axis"]
@@ -245,6 +346,21 @@ def test_trace_teacher_forced_candidates_uses_distinct_candidate_axis(monkeypatc
     assert result.circuit_data.trace_metadata["trace_mode"] == (
         "teacher_forced_topk_position"
     )
+    assert captured["serialization_mode"] == "historical_thinking_continuation"
+    assert result.circuit_data.trace_metadata["teacher_forced_serialization_mode"] == (
+        "historical_thinking_continuation"
+    )
+    token_identity = result.circuit_data.trace_metadata["teacher_forced_token_identity"]
+    assert token_identity == {
+        "schema_version": "adag.teacher-forced-token-identity.v1",
+        "hash_encoding": "sha256_utf8_canonical_json_integer_array_v1",
+        "assistant_prefix_ids_sha256": (
+            "b689ace503f68b6585d71863aec65f208055830150f32c7b51e3c1b14ee95397"
+        ),
+        "response_ids_sha256": (
+            "92cdccdf9a1c2777b48399456d9a67fe0ba793d7404a9b4800b663b8f2361403"
+        ),
+    }
     contract = result.circuit_data.trace_metadata["candidate_trace_contract"]
     assert contract == result.contract_dict()
     assert contract["candidate_count"] == 5
