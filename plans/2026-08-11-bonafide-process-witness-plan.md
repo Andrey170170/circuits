@@ -572,17 +572,48 @@ atlas, and raw-neuron basis. It is not evidence that the internal computation di
 
 ## Immediate next actions
 
-1. Run and audit the authorized strict-T5 Step-0 smoke on the frozen Collatz reconstruction.
-2. Use its measured resource envelope to freeze the broad completion-token cap and complete
-   workload estimate.
-3. Review the already frozen 186-slot broad request inventory, then seek separate authorization for
-   the generation-only run.
+### 2026-08-12 execution checkpoint
+
+Strict T5 parity and historical Thinking-continuation tokenization are validated. The four-position
+scaling wave completed and its compact artifacts passed integrity checks. At target context lengths
+319, 769, and 1,268 tokens, peak reserved GPU memory was respectively 16.10, 29.52, and 48.98 GB;
+the 1,268-token trace took 229 seconds on one A100. Resource admission is therefore a gate on the
+exact prompt-plus-response-prefix context of each annotated target, not a completion-length screen.
+Generation remains blind to that later target-context gate.
+
+The Thinking broad-generation lane is frozen at 47 fit prompts, 186 logical response slots, and
+three predeclared draws per slot (558 physical requests), using the recovered historical system
+message and Qwen Thinking template. Non-scientific smoke job 1790394 completed on a healthy L40S:
+four rows, 9,921 completion tokens, four immutable attempt records, natural EOS for every response,
+captured and aligned token IDs/logprobs, and a finalized content-addressed run manifest. The exact
+source commit is `7c1c39db7427f384262b99b68c299aadf350584a`; the source-tree hash is
+`a36065ad539bb98d11edbb3e0a66b038db8ab832378048f9166cb0284fc438e1`.
+
+The smoke exposed one production blocker. The longest graph prompt contains a task-native two-key
+JSON instruction, while the recovered historical system message requires exactly `final_answer`.
+That response followed the system schema and was rejected by the current v1 mechanical selector.
+Do not submit the 558-request production campaign from protocol v1/request bundle v2. Resolve the
+instruction conflict explicitly in a new protocol and request-bundle version; do not mutate v1/v2.
+The leading proposal is to accept either the exact nonempty system schema or the exact nonempty
+prompt-declared schema, while continuing to ignore correctness, faithfulness, interestingness, and
+response length. This proposal must be frozen and smoke-tested before production.
+
+The configured H100 route is also not currently usable: the allocated grn008 accelerator reported
+`GPU Recovery Action: Reboot`, uncorrectable ECC errors, and a remapped uncorrectable row. The lane
+now fails closed on GPU health. A healthy L40S passed the smoke, but changing the production GPU
+profile is a provenance-bearing runtime decision and remains unfrozen.
+
+1. Freeze a conflict-aware mechanical answer-suffix rule in generation protocol v2 and derive a
+   new content-addressed request bundle; retain all three predeclared draws and all raw outputs.
+2. Repeat the four-request graph/short-prompt smoke and require a complete manifest plus mechanical
+   admissibility under the new rule.
+3. Freeze the production GPU choice: wait for a healthy H100 allocation or explicitly version the
+   campaign for L40S. Only then submit broad generation.
 4. Build the deterministic process ledgers and token-aware region-annotation page.
-5. Paint and review process and surface-reference regions, derive token targets, and freeze the
-   hashed three-class annotation manifest and `Q_process` tiers.
-6. Complete strict upstream-T5 parity and historical-tokenization validation before accepting any
-   smoke artifact; T5 remains distinct from CU5.
-7. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
+5. Paint and review process and surface-reference regions, derive token targets, apply the exact
+   T5 target-context resource gate, and freeze the hashed three-class annotation manifest and
+   `Q_process` tiers.
+6. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
    states on small synthetic or smoke-test artifacts.
-8. Freeze the versioned selection and execution bundle; only then seek authorization for a
-   production atlas and dense-trace campaign.
+7. Freeze the atlas selection/execution bundle; only then submit the production atlas and dense
+   trace campaigns.
