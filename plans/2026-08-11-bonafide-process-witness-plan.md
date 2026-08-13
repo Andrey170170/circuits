@@ -1,10 +1,11 @@
 # BonaFide process-witness discovery plan
 
 Status: **central protocol; the architecture and historical-reconstruction choice are accepted.
-Step-0 input inventories are frozen in version 1 and the bounded T5 landmark gate passed. The
-Thinking-specific broad-generation lane and its L40S runtime are frozen in protocol version 2,
-and the live smoke gate passed. Production tracing remains gated by target-context resource tests
-and the graph-blind region inventory.**
+Step-0 input inventories are frozen in version 1, the bounded T5 landmark gate passed, and the
+balanced 188-response atlas-response cohort is frozen as
+`qwen3-thinking-process-witness-atlas-responses-backfilled-v2`. The cohort is not yet a fitted
+atlas: production tracing remains gated by graph-blind region annotation, response balancing,
+and target-context resource tests.**
 
 This is the governing plan for the new process-witness campaign. Where it conflicts with
 `docs/ADAG_BONAFIDE_NAIVE_PILOT.md` or `docs/TRACING_CORPUS_PLAN.md`, this plan governs the new
@@ -628,20 +629,74 @@ attempts. First-admissible selection succeeds for 182 of 186 logical slots: atte
 175 slots, index 1 supplies six, and index 2 supplies one. Four slots fail closed because all three
 attempts contain the frozen immediate-block repetition witness. Three failures belong to the same
 `complex` string-decoding prompt (leaving one of its four slots), and one belongs to a `graph`
-prompt (leaving three of its four slots). The selector CLI also needs a non-semantic engineering
-fix to raise Python's CSV field-size limit before it can process the long-response production CSV.
-Do not publish an imbalanced 182-slot atlas cohort or generate ad hoc retries. Freeze a new cohort
-policy/version after explicitly choosing between a mechanically defined backfill and a
-prompt-balanced exclusion/reduction rule.
+prompt (leaving three of its four slots). The selector's Python CSV field-size limit was raised and
+covered by regression tests without changing protocol-v2 admissibility.
 
-1. Fix and test the selector's CSV field-size handling without changing protocol-v2 admissibility.
-2. Freeze a versioned resolution for the four failed slots; do not choose it by answer correctness,
-   faithfulness, interestingness, or traceability.
-3. Build the deterministic process ledgers and token-aware region-annotation page.
-4. Paint and review process and surface-reference regions, derive token targets, apply the exact
+### 2026-08-13 atlas-response cohort freeze
+
+The four failed slots were resolved by a separately versioned, prompt-pooled staged backfill. This
+is an explicitly adaptive, mechanically conditioned repair of the prompt-balanced cohort; it is
+not part of the original fixed-three-draw protocol-v2 sample and must not be described as an
+unconditional or equal-effort sample from model generations. The backfill used the identical model
+revision, historical system/chat template, decoding parameters, serialization contracts,
+protocol-v2 admissibility predicate, and L40S runtime. It did not use correctness, faithfulness,
+interestingness, answer content, response length, or traceability to select responses.
+
+The complete candidate universe was frozen before execution in `candidate-plan.json`: 128 ordered
+candidates for the deficient `complex` prompt in stages of eight, and eight ordered candidates for
+the deficient `graph` prompt in stages of four. Each started stage was generated in full. Sampling
+stopped only after a completed stage satisfied the prompt-level deficits of three and one,
+respectively; hard-cap exhaustion would have failed the 188-response freeze closed. Candidate-plan
+file SHA-256 is `5816779ee5daabd84045aefa2500d9afbe7f7bff77b1f63bc30fe5c59f081a6b`
+and canonical SHA-256 is
+`5ce09f3303d1c2258e3db0c56f7c9c8627d51ace0e0582da35c0f90e9ab79b67`.
+
+Three generation stages completed on healthy L40S accelerators:
+
+- job `1795117`: 12 attempts (eight complex and four graph), output SHA-256
+  `ee160aa774346afe497cf6ddc194f219c68a0c501723d424f1cb8673ac2cd0d2`;
+- job `1795254`: eight complex attempts, output SHA-256
+  `7debcd0dde5d9aa78519fb8260d484c09fa413bdc5720b91bc363fab18184632`;
+- job `1795307`: eight complex attempts, output SHA-256
+  `186f121dbcf3ca9e991ff0e063021b2575841192e7f4b4adada91ae3a276ec2c`.
+
+All 28 generated backfill attempts and their content-addressed records remain retained. The frozen
+ordering selected graph candidate 0 and complex candidates 8, 11, and 20, then assigned the three
+complex responses to the missing logical slots in original Step-0 slot order. The 182 original
+first-admissible selections were not reopened or replaced.
+
+The downstream response corpus is frozen read-only at:
+
+```text
+/scratch/rai/vast1/u1653998/bonafide/campaigns/qwen3-4b-thinking-2507-process-witness-broad-v1/cohorts/atlas-responses-backfilled-v2
+```
+
+Its cohort ID is `qwen3-thinking-process-witness-atlas-responses-backfilled-v2`. Manifest SHA-256
+is `d4cbb862333b62d5ae108fdc2d02aab8ab47f4b729438d80f1b880f21d1d76f6`; index SHA-256 is
+`c13cdf45a28b350ade8ec578ec4adc0eac740ecc5dec1f32869439ae7c5d9cbc`. Independent validation
+verified all 377 payload files and hashes, 188 unique response records, 47 prompt hashes with
+exactly four responses each, and 186 unique generated completion IDs. The exact source split is:
+
+- 182 original protocol-v2 mechanically selected full assistant serializations;
+- four prompt-pooled mechanically selected backfill full assistant serializations;
+- two historical dense reasoning-segment reconstructions.
+
+The historical dense records retain `trace_scope=reasoning_only`; they are not normalized or
+represented as recovered full assistant responses. The generated 186 records retain exact raw
+assistant text plus links to their authoritative generation records. The response cohort is now a
+frozen input to annotation and tracing, but the atlas-fit target set, `Q_process`, target-context
+tiers, cluster state, and labels remain unfrozen.
+
+The first frozen cohort directory (`atlas-responses-backfilled-v1`, manifest SHA-256
+`aa233d0121f69729656564d93f727f2a94bf252a3609483eef4b9224d83095e3`) remains preserved but is
+superseded. Version 2 adds exact freeze-implementation identities and source-run bindings; only
+version 2 is admitted downstream.
+
+1. Build the deterministic process ledgers and token-aware region-annotation page.
+2. Paint and review process and surface-reference regions, derive token targets, apply the exact
    T5 target-context resource gate, and freeze the hashed three-class annotation manifest and
    `Q_process` tiers.
-5. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
+3. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
    states on small synthetic or smoke-test artifacts.
-6. Freeze the atlas selection/execution bundle; only then submit the production atlas and dense
+4. Freeze the atlas selection/execution bundle; only then submit the production atlas and dense
    trace campaigns.
