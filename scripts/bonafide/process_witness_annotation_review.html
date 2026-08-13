@@ -3,213 +3,951 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Process-witness annotation review</title>
+  <title>Process-witness token painter</title>
   <style>
-    :root { color-scheme: light; font: 15px/1.45 system-ui, sans-serif; }
-    body { margin: 0; background: #f5f3ee; color: #252521; }
-    header { padding: 1rem 1.4rem; background: #25342d; color: #fff; }
-    header h1 { margin: 0 0 .25rem; font-size: 1.2rem; }
-    header p { margin: 0; color: #dce7e0; }
-    main { display: grid; grid-template-columns: minmax(16rem, 23rem) 1fr; gap: 1rem; padding: 1rem; }
-    section { background: #fff; border: 1px solid #d8d3c8; border-radius: .55rem; padding: 1rem; }
-    label { display: block; margin: .65rem 0 .2rem; font-weight: 650; }
-    input, select, button, textarea { font: inherit; }
-    select, input[type=file], textarea { width: 100%; box-sizing: border-box; }
-    button { padding: .38rem .65rem; cursor: pointer; }
-    .buttons { display: flex; flex-wrap: wrap; gap: .45rem; margin: .75rem 0; }
-    .meta { color: #615e56; font-size: .88rem; overflow-wrap: anywhere; }
-    #context { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 46vh; overflow: auto; padding: .8rem; background: #faf9f6; border: 1px solid #ddd8ce; }
-    mark { background: #ffd86a; padding: .05rem .1rem; }
-    table { border-collapse: collapse; width: 100%; margin-top: .8rem; font-size: .87rem; }
-    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid #e3dfd7; padding: .4rem; }
-    tr { cursor: pointer; }
-    tr[aria-selected=true] { background: #eef4ef; }
-    .status-accepted { color: #176437; }
-    .status-rejected { color: #9a2924; }
-    .status-ambiguous { color: #805a00; }
-    @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+    :root {
+      color-scheme: dark;
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #0b0d0f;
+      --surface: #111519;
+      --surface-raised: #171c21;
+      --surface-hover: #1e252b;
+      --border: #30383f;
+      --border-strong: #52606a;
+      --text: #f1f4f5;
+      --muted: #98a4ab;
+      --faint: #667179;
+      --accent: #6ee7b7;
+      --danger: #fb7185;
+      --focus: #93c5fd;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden; }
+    button, input, select { font: inherit; color: inherit; }
+    button, select, input[type="search"] {
+      border: 1px solid var(--border);
+      background: var(--surface-raised);
+      border-radius: 7px;
+    }
+    button { min-height: 34px; padding: 0 11px; cursor: pointer; }
+    button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--border-strong); }
+    button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+    button:disabled { color: var(--faint); cursor: not-allowed; }
+    .topbar {
+      height: 58px;
+      display: grid;
+      grid-template-columns: auto minmax(260px, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      background: #0f1215;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; white-space: nowrap; }
+    .brand strong { font-size: 14px; letter-spacing: .01em; }
+    .nav-group, .actions, .search-group { display: flex; align-items: center; gap: 7px; }
+    .search-group { max-width: 720px; justify-self: center; width: 100%; }
+    #responseSearch { width: 100%; height: 36px; padding: 0 12px; }
+    .progress { min-width: 92px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: center; }
+    .load-menu { position: relative; }
+    .load-menu summary {
+      list-style: none; cursor: pointer; height: 36px; padding: 0 12px;
+      display: flex; align-items: center; border: 1px solid var(--border);
+      border-radius: 7px; background: var(--surface-raised);
+    }
+    .load-menu summary::-webkit-details-marker { display: none; }
+    .load-panel {
+      position: absolute; top: 44px; right: 0; z-index: 10; width: 330px;
+      background: #151a1f; border: 1px solid var(--border-strong); border-radius: var(--radius);
+      padding: 14px; box-shadow: 0 20px 70px #000c;
+    }
+    .load-panel label { display: block; font-weight: 650; margin: 4px 0; }
+    .load-panel input[type="file"] { width: 100%; color: var(--muted); margin: 2px 0 12px; }
+    .load-panel p { color: var(--muted); font-size: 12px; margin: 5px 0 10px; }
+    .workspace {
+      height: calc(100vh - 58px);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 282px;
+    }
+    .document-shell { min-width: 0; display: flex; flex-direction: column; }
+    .context-bar {
+      background: #0f1215;
+      border-bottom: 1px solid var(--border);
+      padding: 11px 22px;
+    }
+    .context-head { display: flex; gap: 14px; align-items: baseline; min-width: 0; }
+    #responseTitle { font-size: 14px; font-weight: 700; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #taskSummary { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .review-control { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+    #axisReviewStatus { color: var(--muted); font-size: 12px; }
+    #axisReviewStatus[data-reviewed="true"] { color: #86efac; }
+    #identityLine { color: var(--faint); font-size: 10px; margin-top: 7px; overflow-wrap: anywhere; }
+    .prompt-disclosure { margin-top: 7px; }
+    .prompt-disclosure summary { color: var(--muted); cursor: pointer; width: max-content; font-size: 12px; }
+    #promptText {
+      max-height: 190px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+      color: #d8dee2; background: #0b0e11; border-left: 2px solid #34404a;
+      padding: 9px 11px; margin: 8px 0 2px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .document-scroll { flex: 1; overflow: auto; padding: 30px clamp(22px, 5vw, 76px) 70px; }
+    .document-frame { max-width: 1120px; margin: 0 auto; }
+    .document-caption { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .document-caption h2 { font-size: 12px; color: var(--muted); margin: 0; text-transform: uppercase; letter-spacing: .11em; }
+    #axisCaption { color: var(--muted); font-size: 12px; }
+    #tokenCanvas {
+      min-height: 340px;
+      border: 1px solid #44505a;
+      border-radius: 12px;
+      background: #0f1215;
+      padding: clamp(18px, 3vw, 36px);
+      font: 15px/1.75 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      user-select: none;
+      cursor: crosshair;
+      box-shadow: inset 0 1px 0 #ffffff0a, 0 16px 50px #0005;
+      touch-action: pan-y;
+    }
+    .token {
+      border-radius: 3px;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+      transition: background-color 60ms linear, box-shadow 60ms linear;
+    }
+    .token.machine { box-shadow: inset 0 -1px 0 var(--token-color); }
+    .token.manual { box-shadow: inset 0 0 0 1px var(--token-color); }
+    .token.erased { box-shadow: inset 0 -2px 0 #9aa4aa80; }
+    .token.conflict {
+      background: #9f3f43a8 !important;
+      box-shadow: inset 0 -2px 0 #fbbf24, inset 0 2px 0 #fb7185;
+    }
+    .token.overlap-fragment { display: inline-block; min-width: 4px; height: 1.15em; vertical-align: -.18em; border-left: 2px dotted #94a3b8; }
+    .token.pending { outline: 2px solid #fff; outline-offset: 1px; }
+    .empty-state {
+      min-height: 420px; border: 1px dashed #3c474f; border-radius: 12px;
+      display: grid; place-items: center; color: var(--muted); text-align: center; padding: 40px;
+    }
+    .empty-state strong { display: block; color: var(--text); font-size: 18px; margin-bottom: 7px; }
+    .palette {
+      background: #0f1215;
+      border-left: 1px solid var(--border);
+      padding: 18px 16px;
+      overflow: auto;
+    }
+    .palette h2 { margin: 0 0 15px; font-size: 14px; }
+    .field-label { display: block; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; margin-bottom: 6px; }
+    #axisSelect { width: 100%; height: 38px; padding: 0 10px; margin-bottom: 18px; }
+    #brushes { display: grid; gap: 7px; }
+    .brush {
+      width: 100%; min-height: 40px; display: grid; grid-template-columns: 18px 1fr auto;
+      gap: 9px; align-items: center; text-align: left; padding: 6px 9px;
+      background: transparent; border-color: transparent;
+    }
+    .brush[aria-pressed="true"] { background: #242b31; border-color: #596670; }
+    .swatch { width: 16px; height: 16px; border-radius: 4px; border: 2px solid currentColor; }
+    .brush-name { overflow-wrap: anywhere; }
+    .brush-count { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .palette-tools { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 14px; display: grid; gap: 7px; }
+    .tool-brush { justify-content: flex-start; display: flex; align-items: center; gap: 9px; }
+    .tool-brush[aria-pressed="true"] { border-color: #cbd5e1; background: #273039; }
+    .legend { border-top: 1px solid var(--border); margin-top: 18px; padding-top: 14px; color: var(--muted); font-size: 11px; display: grid; gap: 7px; }
+    .legend-row { display: flex; align-items: center; gap: 8px; }
+    .legend-chip { width: 24px; height: 13px; border-radius: 3px; background: #22c55e55; }
+    .legend-chip.manual { background: #22c55eb0; box-shadow: inset 0 0 0 1px #22c55e; }
+    .legend-chip.conflict { background: #9f3f43; box-shadow: inset 0 -2px 0 #fbbf24; }
+    .statusbar {
+      position: fixed; bottom: 0; left: 0; right: 282px; height: 28px;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 18px; background: #0a0d0f; border-top: 1px solid #252d33;
+      color: var(--muted); font-size: 11px; pointer-events: none;
+    }
+    #message[data-kind="error"] { color: #fda4af; }
+    #message[data-kind="success"] { color: #86efac; }
+    @media (max-width: 860px) {
+      body { overflow: auto; }
+      .topbar { height: auto; min-height: 58px; grid-template-columns: 1fr auto; padding: 10px 12px; }
+      .brand { display: none; }
+      .search-group { grid-column: 1; }
+      .actions { grid-column: 2; }
+      .workspace { height: auto; min-height: calc(100vh - 58px); grid-template-columns: 1fr; }
+      .palette { border-left: 0; border-top: 1px solid var(--border); max-height: none; }
+      .document-scroll { min-height: 60vh; padding: 20px 12px 50px; }
+      .statusbar { right: 0; }
+    }
+    @media (max-width: 600px) {
+      .topbar { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+      .search-group, .actions { grid-column: 1; min-width: 0; }
+      .actions { justify-content: flex-end; }
+      .progress { min-width: 48px; }
+      #previousResponse, #nextResponse { padding: 0 8px; }
+      .context-bar { padding-inline: 14px; }
+      .context-head { display: block; }
+      #taskSummary { display: block; margin-top: 3px; }
+    }
   </style>
 </head>
 <body>
-<header>
-  <h1>Graph-blind annotation review</h1>
-  <p>Suggestions are unreviewed hypotheses. This page loads only local annotation JSON files and exports decisions locally.</p>
-</header>
-<main>
-  <section>
-    <label for="files">Annotation record JSON files</label>
-    <input id="files" type="file" accept="application/json,.json" multiple>
-    <label for="reviewImport">Resume review JSONL</label>
-    <input id="reviewImport" type="file" accept="application/x-ndjson,.jsonl">
-    <label for="response">Response</label>
-    <select id="response"></select>
-    <label for="axis">Axis</label>
-    <select id="axis"><option value="">All axes</option></select>
-    <label for="value">Value contains</label>
-    <input id="value" type="search" placeholder="e.g. division">
-    <div class="buttons">
-      <button id="export" type="button">Export decisions JSONL</button>
-      <button id="clear" type="button">Clear local decisions</button>
+  <header class="topbar">
+    <div class="brand">
+      <strong>Process witness annotator</strong>
     </div>
-    <p id="counts" class="meta">Load one or more files from the frozen records directory.</p>
-    <p id="messages" class="meta" role="status"></p>
-    <p class="meta">Review status is stored in browser memory until exported. The frozen automatic draft is never modified.</p>
-  </section>
-  <section>
-    <div id="recordMeta" class="meta"></div>
-    <details><summary>Prompt and task metadata</summary><pre id="promptContext"></pre></details>
-    <h2 id="suggestionTitle">Select a suggestion</h2>
-    <div id="context" tabindex="0"></div>
-    <div class="buttons">
-      <button data-decision="accepted" type="button">Accept</button>
-      <button data-decision="rejected" type="button">Reject</button>
-      <button data-decision="ambiguous" type="button">Ambiguous</button>
-      <button data-decision="unreviewed" type="button">Reset</button>
+    <div class="search-group" role="search">
+      <button id="previousResponse" type="button">Previous</button>
+      <input id="responseSearch" type="search" placeholder="Search response ID, prompt, task, or source…" aria-label="Search responses">
+      <button id="nextResponse" type="button">Next</button>
+      <span id="progress" class="progress">0 / 0</span>
     </div>
-    <label for="note">Decision note</label>
-    <textarea id="note" rows="2" placeholder="Optional; saved when a decision button is pressed"></textarea>
-    <h3>Add a missed span</h3>
-    <p class="meta">Select text in the context panel, then choose an axis and value. This adds an append-only manual event to the export; it never alters the automatic draft.</p>
-    <label for="manualAxis">Axis</label>
-    <select id="manualAxis">
-      <option>domain</option><option>operation</option><option>process_role</option><option>discourse_role</option><option>representation</option><option>surface_form</option>
-    </select>
-    <label for="manualValue">Ontology value</label>
-    <select id="manualValue"></select>
-    <button id="addSpan" type="button">Add selected span</button>
-    <div class="buttons">
-      <button id="previousPage" type="button">Previous 200</button>
-      <button id="nextPage" type="button">Next 200</button>
-      <span id="pageMeta" class="meta"></span>
+    <div class="actions">
+      <button id="undo" type="button" disabled>Undo</button>
+      <details class="load-menu" id="loadMenu">
+        <summary>Load data</summary>
+        <div class="load-panel">
+          <label for="bundleInput">Workstation bundle or draft records</label>
+          <input id="bundleInput" type="file" accept="application/json,.json" multiple>
+          <p>Select one compact <code>workstation-bundle.json</code>, or a small set of draft records.</p>
+          <label for="directoryInput">Complete annotation directory</label>
+          <input id="directoryInput" type="file" accept="application/json,.json" webkitdirectory multiple>
+          <p>Select the artifact directory once; non-record JSON files are ignored.</p>
+          <label for="reviewInput">Resume painted review</label>
+          <input id="reviewInput" type="file" accept="application/json,.json,application/x-ndjson,.jsonl">
+        </div>
+      </details>
+      <button id="export" type="button">Export</button>
     </div>
-    <table>
-      <thead><tr><th>Status</th><th>Axis</th><th>Value</th><th>Match</th><th>Rule</th></tr></thead>
-      <tbody id="suggestions"></tbody>
-    </table>
-  </section>
-</main>
+  </header>
+
+  <main class="workspace">
+    <section class="document-shell" aria-label="Response annotation document">
+      <div class="context-bar">
+        <div class="context-head">
+          <h1 id="responseTitle">No response loaded</h1>
+          <span id="taskSummary"></span>
+          <div class="review-control">
+            <span id="axisReviewStatus" data-reviewed="false">Axis unreviewed</span>
+            <button id="toggleAxisReview" type="button" disabled>Mark axis reviewed</button>
+          </div>
+        </div>
+        <div id="identityLine">No annotation identity loaded</div>
+        <details class="prompt-disclosure">
+          <summary>Prompt and task context</summary>
+          <pre id="promptText">Load an annotation workstation bundle or directory to begin.</pre>
+        </details>
+      </div>
+      <div class="document-scroll" id="documentScroll">
+        <div class="document-frame">
+          <div class="document-caption">
+            <h2>Assistant response · exact model tokens</h2>
+            <span id="axisCaption">No axis selected</span>
+          </div>
+          <div id="tokenCanvas" aria-label="Exact response tokens. Choose a brush, then click or drag to annotate.">
+            <div class="empty-state"><div><strong>No annotation data loaded</strong>Use “Load data” to choose one compact bundle or an annotation directory.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="palette" aria-label="Annotation palette">
+      <h2>Palette</h2>
+      <label class="field-label" for="axisSelect">General type</label>
+      <select id="axisSelect" disabled><option>No axes loaded</option></select>
+      <span class="field-label">Token brush</span>
+      <div id="brushes"><p style="color:var(--muted)">Load data to see ontology values.</p></div>
+      <div class="palette-tools">
+        <button id="eraser" class="tool-brush" type="button" aria-pressed="false" disabled>
+          <span>Clear label</span>
+        </button>
+        <button id="revert" class="tool-brush" type="button" aria-pressed="false" disabled>
+          <span>Revert to machine</span>
+        </button>
+      </div>
+      <div class="legend">
+        <div class="legend-row"><span class="legend-chip"></span>Machine suggestion</div>
+        <div class="legend-row"><span class="legend-chip manual"></span>Manual override</div>
+        <div class="legend-row"><span class="legend-chip conflict"></span>Machine conflict</div>
+        <div>One token has at most one effective value within this general type. Other general types remain independent.</div>
+      </div>
+    </aside>
+  </main>
+  <footer class="statusbar">
+    <span id="message" role="status">Ready to load local data. Nothing is uploaded.</span>
+    <span id="brushStatus">No brush selected</span>
+  </footer>
+
 <script>
 "use strict";
-const UI_VERSION = "process-witness-annotation-review.v2";
-const PAGE_SIZE = 200;
-const state = { documents: [], selected: null, events: [], latest: new Map(), eventIds: new Set(), page: 0, setIdentity: null };
-const el = id => document.getElementById(id);
-const codePoints = text => Array.from(text);
-const cpSlice = (text, start, end) => codePoints(text).slice(start, end).join("");
-const decisionKey = (responseId, suggestionId) => `${responseId}\u0000${suggestionId}`;
-function selectedDocument() { return state.documents[Number(el("response").value)] || null; }
-function latestDecision(doc, suggestion) { return state.latest.get(decisionKey(doc.response_id, suggestion.suggestion_id)) || {decision:"unreviewed",note:""}; }
-function clearSelection() {
-  state.selected = null;
-  el("context").replaceChildren(); delete el("context").dataset.contextStart; delete el("context").dataset.responseId;
-  el("suggestionTitle").textContent = "Select a suggestion"; el("note").value = "";
+const UI_VERSION = "process-witness-token-painter.v4";
+const BUNDLE_SCHEMA = "adag.process-witness.annotation-workstation-bundle.v1";
+const DRAFT_SCHEMA = "adag.process-witness.annotation-draft.v1";
+const EXPORT_SCHEMA = "adag.process-witness.annotation-paint-export.v1";
+const EVENT_SCHEMA = "adag.process-witness.annotation-token-override.v1";
+const AXIS_EVENT_SCHEMA = "adag.process-witness.annotation-axis-status.v1";
+const SESSION_ID = crypto.randomUUID();
+const COLORS = ["#22c55e","#f59e0b","#38bdf8","#f97316","#a78bfa","#ec4899","#14b8a6","#eab308","#60a5fa","#ef4444","#84cc16","#c084fc","#06b6d4","#fb7185","#10b981","#facc15","#818cf8","#f472b6"];
+const state = {
+  documents: [], current: 0, axis: null, brush: null, events: [], eventIds: new Set(),
+  manual: new Map(), axisStatus: new Map(), undoStack: [], identity: null,
+  bundleSha256: null, reviewUiSha256: null, gesture: null
+};
+const el = function(id) { return document.getElementById(id); };
+const cp = function(text) { return Array.from(text); };
+const cpSlice = function(text, start, end) { return cp(text).slice(start, end).join(""); };
+const manualKey = function(responseId, axis, position) { return responseId + "\u0000" + axis + "\u0000" + position; };
+const axisKey = function(responseId, axis) { return responseId + "\u0000" + axis; };
+const currentDocument = function() { return state.documents[state.current] || null; };
+const colorFor = function(axis, value) {
+  const axes = Object.keys(state.identity ? state.identity.ontology.axes : {});
+  const values = state.identity ? state.identity.ontology.axes[axis].values : [];
+  const offset = Math.max(0, axes.indexOf(axis)) * 5;
+  return COLORS[(Math.max(0, values.indexOf(value)) + offset) % COLORS.length];
+};
+function setMessage(text, kind) {
+  el("message").textContent = text;
+  el("message").dataset.kind = kind || "";
 }
-function filteredSuggestions(doc) {
-  const axis=el("axis").value, value=el("value").value.trim().toLowerCase();
-  return doc.suggestions.filter(s => (!axis || s.axis===axis) && (!value || s.value.toLowerCase().includes(value)));
+async function sha256Hex(text) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map(function(value) { return value.toString(16).padStart(2, "0"); }).join("");
 }
-function populateManualValues(doc) {
-  const axes=doc ? doc.ontology.axes : {};
-  const axis=el("manualAxis"); axis.replaceChildren(...Object.keys(axes).sort().map(value=>new Option(value,value)));
-  populateValueOptions(doc);
+function normalizeCompactDocument(document, root) {
+  const tokens = document.tokenization.tokens.map(function(token, position) {
+    if (!Array.isArray(token) || token.length !== 3 || !Number.isInteger(token[0]) || !Number.isInteger(token[1]) || !Number.isInteger(token[2])) throw new Error("Invalid compact token record for " + document.response_id);
+    return { position: position, token_id: token[0], character_span: [token[1], token[2]], text: cpSlice(document.text, token[1], token[2]) };
+  });
+  const machine = new Map();
+  Object.entries(document.machine_layers || {}).forEach(function(entry) {
+    const axis = entry[0], runs = entry[1];
+    if (!root.ontology.axes[axis]) throw new Error("Machine layer uses unknown axis " + axis);
+    let previousEnd = 0;
+    runs.forEach(function(run) {
+      if (!Array.isArray(run) || run.length !== 3 || !Number.isInteger(run[0]) || !Number.isInteger(run[1]) || run[0] < previousEnd || run[0] >= run[1] || run[1] > document.tokenization.token_count) throw new Error("Invalid or unordered machine-layer run for " + document.response_id + " / " + axis);
+      const values = Array.isArray(run[2]) ? run[2] : [run[2]];
+      if (!values.length || new Set(values).size !== values.length || values.some(function(value) { return !root.ontology.axes[axis].values.includes(value); })) throw new Error("Machine layer value is outside the ontology for " + document.response_id);
+      if (Array.isArray(run[2]) && JSON.stringify(values) !== JSON.stringify(Array.from(values).sort())) throw new Error("Machine conflict values are not canonically ordered for " + document.response_id);
+      previousEnd = run[1];
+      for (let position = run[0]; position < run[1]; position += 1) {
+        machine.set(manualKey(document.response_id, axis, position), Array.isArray(run[2]) ? {status:"conflict",values:run[2]} : {status:"value",value:run[2]});
+      }
+    });
+  });
+  return Object.assign({}, document, {
+    schema_version: DRAFT_SCHEMA,
+    annotation_set_id: root.annotation_set_id,
+    cohort_id: root.cohort_id,
+    ontology: root.ontology,
+    review_ui: root.review_ui,
+    coordinate_system: root.coordinate_system,
+    tokenization: Object.assign({}, document.tokenization, {tokens:tokens}),
+    _machine: machine,
+    _loadedRecordSha256: document.source_annotation_record_sha256
+  });
 }
-function populateValueOptions(doc) {
-  const values=doc?.ontology.axes[el("manualAxis").value]?.values || [];
-  const select=el("manualValue"); select.replaceChildren(...values.map(value=>new Option(value,value)));
+function normalizeDraftDocument(document) {
+  const machineSets = new Map();
+  (document.suggestions || []).forEach(function(suggestion) {
+    const span = suggestion.token_span;
+    for (let position = span.start; position < span.end; position += 1) {
+      const key = manualKey(document.response_id, suggestion.axis, position);
+      if (!machineSets.has(key)) machineSets.set(key, new Set());
+      machineSets.get(key).add(suggestion.value);
+    }
+  });
+  const machine = new Map();
+  machineSets.forEach(function(values, key) {
+    const list = Array.from(values).sort();
+    const axis = key.split("\u0000")[1];
+    const supportsCompound = axis === "surface_form" && document.ontology.axes.surface_form.values.includes("compound_surface");
+    machine.set(key, list.length === 1 ? {status:"value",value:list[0]} : supportsCompound ? {status:"value",value:"compound_surface"} : {status:"conflict",values:list});
+  });
+  document._machine = machine;
+  return document;
 }
-function setContext(doc, suggestion) {
-  clearSelection(); state.selected=suggestion;
-  const box=el("context"), [start,end]=suggestion.character_span, radius=700;
-  const contextStart=Math.max(0,start-radius), contextEnd=Math.min(codePoints(doc.text).length,end+radius);
-  box.dataset.contextStart=String(contextStart); box.dataset.responseId=doc.response_id;
-  box.append(document.createTextNode(cpSlice(doc.text,contextStart,start)));
-  const mark=document.createElement("mark"); mark.textContent=cpSlice(doc.text,start,end); box.append(mark);
-  box.append(document.createTextNode(cpSlice(doc.text,end,contextEnd)));
-  el("suggestionTitle").textContent=`${suggestion.axis} / ${suggestion.value}`;
-  el("note").value=latestDecision(doc,suggestion).note || "";
+async function validateDocument(document) {
+  if (document.schema_version !== DRAFT_SCHEMA || !document.response_id || !document.annotation_set_id || !document.ontology || !document.text_sha256) throw new Error("Unsupported or incomplete annotation record");
+  if (!document.coordinate_system || document.coordinate_system.character_span_unit !== "Unicode_code_point") throw new Error("Unsupported character coordinate system");
+  if (!/^[0-9a-f]{64}$/.test(document.ontology.sha256 || "")) throw new Error("Missing ontology SHA-256");
+  if (!document.review_ui || document.review_ui.version !== UI_VERSION || !/^[0-9a-f]{64}$/.test(document.review_ui.sha256 || "")) throw new Error("Annotation record is not bound to this review UI version");
+  if (!/^[0-9a-f]{64}$/.test(document._loadedRecordSha256 || "")) throw new Error("Missing source annotation-record SHA-256");
+  if (await sha256Hex(document.text) !== document.text_sha256) throw new Error("Response text SHA-256 mismatch for " + document.response_id);
+  if (!document.task_context || await sha256Hex(document.task_context.prompt || "") !== document.prompt_sha256) throw new Error("Prompt SHA-256 mismatch for " + document.response_id);
+  if (document.tokenization.token_count !== document.tokenization.tokens.length) throw new Error("Token count mismatch for " + document.response_id);
+  if (await sha256Hex(JSON.stringify(document.tokenization.tokens.map(function(token){return token.token_id;}))) !== document.tokenization.input_ids_sha256) throw new Error("Token-ID SHA-256 mismatch for " + document.response_id);
+  if (await sha256Hex(JSON.stringify(document.tokenization.tokens.map(function(token){return token.character_span;}))) !== document.tokenization.offset_mapping_sha256) throw new Error("Token-offset SHA-256 mismatch for " + document.response_id);
+  let coveredEnd = 0;
+  document.tokenization.tokens.forEach(function(token, position) {
+    if (token.position !== position || token.character_span[0] > coveredEnd || token.character_span[1] < token.character_span[0]) throw new Error("Token offsets leave a text gap for " + document.response_id);
+    if (cpSlice(document.text, token.character_span[0], token.character_span[1]) !== token.text) throw new Error("Token text mismatch for " + document.response_id);
+    coveredEnd = Math.max(coveredEnd, token.character_span[1]);
+  });
+  if (coveredEnd !== cp(document.text).length) throw new Error("Tokens do not cover the complete response " + document.response_id);
 }
-function contextSelection() {
-  const doc=selectedDocument(), selection=window.getSelection(), box=el("context");
-  if (!doc || box.dataset.responseId!==doc.response_id || !selection || selection.rangeCount!==1 || selection.isCollapsed) return null;
-  const range=selection.getRangeAt(0); if (!box.contains(range.commonAncestorContainer)) return null;
-  const before=range.cloneRange(); before.selectNodeContents(box); before.setEnd(range.startContainer,range.startOffset);
-  const start=Number(box.dataset.contextStart)+codePoints(before.toString()).length;
-  const selectedText=range.toString(), end=start+codePoints(selectedText).length, exact=cpSlice(doc.text,start,end);
-  if (!exact || exact!==selectedText) return null;
-  return {doc,start,end,text:exact};
+function establishIdentity(documents) {
+  const identities = new Set(documents.map(function(document) {
+    return document.annotation_set_id + "\u0000" + document.cohort_id + "\u0000" + document.ontology.sha256;
+  }));
+  if (identities.size !== 1) throw new Error("Mixed annotation sets, cohorts, or ontologies are not allowed");
+  const ids = new Set();
+  documents.forEach(function(document) {
+    if (ids.has(document.response_id)) throw new Error("Duplicate response " + document.response_id);
+    ids.add(document.response_id);
+  });
+  documents.sort(function(a, b) { return a.response_id.localeCompare(b.response_id); });
+  const first = documents[0];
+  state.identity = {annotation_set_id:first.annotation_set_id,cohort_id:first.cohort_id,ontology:first.ontology,coordinate_system:first.coordinate_system};
 }
-function tokenSpan(doc,start,end) {
-  const positions=doc.tokenization.tokens.filter(t=>t.character_span[1]>start && t.character_span[0]<end).map(t=>t.position);
-  if (!positions.length) throw new Error("Selected text overlaps no authoritative tokens");
-  return {start:positions[0],end:positions.at(-1)+1};
+async function loadFiles(fileList) {
+  try {
+    let documents = [];
+    let bundleSha = null;
+    let reviewUiSha = null;
+    const bundles = [], drafts = [];
+    for (const file of Array.from(fileList)) {
+      if (!file.name.toLowerCase().endsWith(".json")) continue;
+      const raw = await file.text();
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch (error) { continue; }
+      if (parsed.schema_version === BUNDLE_SCHEMA) {
+        bundles.push({parsed:parsed,raw:raw});
+      } else if (parsed.schema_version === DRAFT_SCHEMA) {
+        parsed._loadedRecordSha256 = await sha256Hex(raw);
+        drafts.push(normalizeDraftDocument(parsed));
+      }
+    }
+    if (bundles.length > 1) throw new Error("Directory contains more than one workstation bundle");
+    if (bundles.length === 1) {
+      const bundle = bundles[0].parsed;
+      if (bundle.responses !== bundle.documents.length || !bundle.documents.length) throw new Error("Workstation bundle document count mismatch");
+      if (!bundle.review_ui || bundle.review_ui.version !== UI_VERSION || !/^[0-9a-f]{64}$/.test(bundle.review_ui.sha256 || "")) throw new Error("Workstation bundle is not bound to this review UI version");
+      bundleSha = await sha256Hex(bundles[0].raw);
+      reviewUiSha = bundle.review_ui.sha256;
+      documents = bundle.documents.map(function(document) { return normalizeCompactDocument(document, bundle); });
+    } else {
+      documents = drafts;
+      const uiIdentities = new Set(documents.map(function(document){return document.review_ui && document.review_ui.version + "\u0000" + document.review_ui.sha256;}));
+      if (uiIdentities.size !== 1 || !documents[0].review_ui || documents[0].review_ui.version !== UI_VERSION) throw new Error("Draft records lack one consistent review UI identity");
+      reviewUiSha = documents[0].review_ui.sha256;
+    }
+    if (!documents.length) throw new Error("No annotation draft records or workstation bundle found");
+    await Promise.all(documents.map(validateDocument));
+    establishIdentity(documents);
+    state.documents = documents;
+    state.current = 0;
+    state.bundleSha256 = bundleSha;
+    state.reviewUiSha256 = reviewUiSha;
+    state.events = [];
+    state.eventIds.clear();
+    state.manual.clear();
+    state.axisStatus.clear();
+    state.undoStack = [];
+    configureOntology();
+    const restored = loadLocalEvents();
+    renderAll();
+    el("loadMenu").open = false;
+    if (!restored) setMessage("Loaded " + documents.length + " validated responses.", "success");
+  } catch (error) {
+    setMessage("Load failed: " + error.message, "error");
+  }
 }
-function appendEvent(event) {
-  if (!event.event_id) event.event_id=crypto.randomUUID();
+function configureOntology() {
+  const axes = Object.keys(state.identity.ontology.axes);
+  el("axisSelect").replaceChildren.apply(el("axisSelect"), axes.map(function(axis) { return new Option(axis.replaceAll("_", " "), axis); }));
+  el("axisSelect").disabled = false;
+  state.axis = axes[0] || null;
+  state.brush = null;
+  el("eraser").disabled = false;
+  el("revert").disabled = false;
+  renderPalette();
+}
+function machineState(document, axis, position) {
+  return document._machine.get(manualKey(document.response_id, axis, position)) || {status:"unlabeled"};
+}
+function effectiveState(document, axis, position) {
+  const manual = state.manual.get(manualKey(document.response_id, axis, position));
+  if (manual) {
+    if (manual.operation === "erase") return {status:"erased",source:"manual"};
+    return {status:"value",value:manual.value,source:"manual"};
+  }
+  const machine = machineState(document, axis, position);
+  return Object.assign({source:"machine"}, machine);
+}
+function validateEvent(event) {
+  if (!event || typeof event !== "object" || !event.event_id) throw new Error("Review event lacks an event ID");
+  if (event.annotation_set_id !== state.identity.annotation_set_id || event.cohort_id !== state.identity.cohort_id || event.ontology_sha256 !== state.identity.ontology.sha256) throw new Error("Review event identity does not match loaded annotation set");
+  if (event.ui_version !== UI_VERSION || event.review_ui_sha256 !== state.reviewUiSha256) throw new Error("Review event UI identity mismatch");
+  if (typeof event.session_id !== "string" || !event.session_id || !Number.isFinite(Date.parse(event.recorded_at))) throw new Error("Review event lacks valid session/timestamp provenance");
+  const document = state.documents.find(function(item) { return item.response_id === event.response_id; });
+  if (!document) throw new Error("Review event references an unloaded response");
+  if (event.source_annotation_text_sha256 !== document.text_sha256) throw new Error("Review event response-text identity mismatch");
+  if (event.source_annotation_record_sha256 !== document._loadedRecordSha256) throw new Error("Review event source-record identity mismatch");
+  if (event.source_workstation_bundle_sha256 !== state.bundleSha256) throw new Error("Review event workstation-bundle identity mismatch");
+  if (!state.identity.ontology.axes[event.axis]) throw new Error("Review event references an unknown axis");
+  if (event.coordinate_unit !== "authoritative_response_token_index" || event.coordinate_interval !== "zero_based_half_open") throw new Error("Review event coordinate contract mismatch");
+  if (event.event_type === "axis_review_status") {
+    if (event.schema_version !== AXIS_EVENT_SCHEMA || !["reviewed","reopened"].includes(event.status)) throw new Error("Invalid axis-status event");
+    return {event:event,document:document};
+  }
+  if (event.schema_version !== EVENT_SCHEMA || event.event_type !== "token_override") throw new Error("Invalid token-override event schema/type");
+  const span = event.token_span;
+  if (!span || !Number.isInteger(span.start) || !Number.isInteger(span.end) || span.start < 0 || span.end > document.tokenization.token_count || span.start >= span.end) throw new Error("Review event has invalid token span");
+  const expectedCharacterSpan = tokenCharacterSpan(document, span.start, span.end);
+  if (!Array.isArray(event.character_span) || event.character_span.length !== 2 || event.character_span[0] !== expectedCharacterSpan[0] || event.character_span[1] !== expectedCharacterSpan[1]) throw new Error("Review event character span does not match its token span");
+  if (event.text !== cpSlice(document.text, expectedCharacterSpan[0], expectedCharacterSpan[1])) throw new Error("Review event text does not match its token span");
+  if (event.operation === "paint" && !state.identity.ontology.axes[event.axis].values.includes(event.value)) throw new Error("Review event value is outside the ontology");
+  if (!["paint","erase","revert_to_machine"].includes(event.operation)) throw new Error("Unknown review operation");
+  if (event.operation !== "paint" && event.value !== null) throw new Error("Non-paint review events must have a null value");
+  return {event:event,document:document};
+}
+function applyValidatedEvent(validated) {
+  const event = validated.event, document = validated.document;
   if (state.eventIds.has(event.event_id)) return false;
-  state.eventIds.add(event.event_id); state.events.push(event);
-  if (event.event_type==="review_suggestion") state.latest.set(decisionKey(event.response_id,event.suggestion_id),event);
+  state.eventIds.add(event.event_id);
+  state.events.push(event);
+  if (event.event_type === "axis_review_status") {
+    state.axisStatus.set(axisKey(event.response_id,event.axis), {status:event.status,event_id:event.event_id,recorded_at:event.recorded_at});
+    return true;
+  }
+  const span = event.token_span;
+  for (let position = span.start; position < span.end; position += 1) {
+    const key = manualKey(event.response_id, event.axis, position);
+    if (event.operation === "revert_to_machine") state.manual.delete(key);
+    else state.manual.set(key, {operation:event.operation,value:event.value || null,event_id:event.event_id});
+  }
   return true;
 }
-function eventBase(doc) { return {event_id:crypto.randomUUID(),recorded_at:new Date().toISOString(),ui_version:UI_VERSION,annotation_set_id:doc.annotation_set_id,ontology_sha256:doc.ontology.sha256,cohort_id:doc.cohort_id,coordinate_unit:"Unicode_code_point",coordinate_interval:"zero_based_half_open",response_id:doc.response_id,source_annotation_text_sha256:doc.text_sha256,source_record_sha256:doc._loadedRecordSha256}; }
-function render() {
-  const doc=selectedDocument(), tbody=el("suggestions"); tbody.replaceChildren();
-  if (!doc) { el("recordMeta").textContent=""; el("promptContext").textContent=""; return; }
-  el("recordMeta").textContent=`${doc.response_id} · ${doc.response_source} · ${doc.tokenization.token_count} tokens`;
-  el("promptContext").textContent=JSON.stringify(doc.task_context,null,2);
-  const all=filteredSuggestions(doc), pages=Math.max(1,Math.ceil(all.length/PAGE_SIZE)); state.page=Math.min(state.page,pages-1);
-  const visible=all.slice(state.page*PAGE_SIZE,(state.page+1)*PAGE_SIZE);
-  for (const suggestion of visible) {
-    const tr=document.createElement("tr"); tr.setAttribute("aria-selected",String(state.selected?.suggestion_id===suggestion.suggestion_id));
-    const decision=latestDecision(doc,suggestion).decision;
-    for (const value of [decision,suggestion.axis,suggestion.value,JSON.stringify(suggestion.text),suggestion.provenance.rule_id]) { const td=document.createElement("td"); td.textContent=value; tr.append(td); }
-    tr.firstChild.className=`status-${decision}`; tr.addEventListener("click",()=>{setContext(doc,suggestion);render();}); tbody.append(tr);
-  }
-  el("pageMeta").textContent=`Page ${state.page+1}/${pages} · ${visible.length}/${all.length} filtered`;
-  el("previousPage").disabled=state.page===0; el("nextPage").disabled=state.page>=pages-1;
-  el("counts").textContent=`${state.documents.length} responses · ${state.events.length} append-only review events`;
+function applyEvent(event) { return applyValidatedEvent(validateEvent(event)); }
+function applyEventsTransactional(events) {
+  if (!Array.isArray(events)) throw new Error("Review event log must be an array");
+  const incoming = new Set();
+  const validated = events.map(function(event) {
+    if (incoming.has(event.event_id)) throw new Error("Duplicate event ID inside imported review");
+    incoming.add(event.event_id);
+    return validateEvent(event);
+  });
+  let added = 0;
+  validated.forEach(function(item) { if (applyValidatedEvent(item)) added += 1; });
+  return added;
 }
-async function sha256Hex(text) { const bytes=new TextEncoder().encode(text), digest=await crypto.subtle.digest("SHA-256",bytes); return [...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,"0")).join(""); }
-function validateDocument(doc) {
-  if (doc.schema_version!=="adag.process-witness.annotation-draft.v1" || !doc.annotation_set_id || !doc.ontology?.sha256) throw new Error("Unsupported or incomplete annotation record");
-  if (doc.coordinate_system?.character_span_unit!=="Unicode_code_point") throw new Error("Unsupported coordinate unit");
-  for (const suggestion of doc.suggestions) {
-    if (!doc.ontology.axes[suggestion.axis]?.values.includes(suggestion.value)) throw new Error(`Suggestion outside ontology: ${suggestion.suggestion_id}`);
-    const [start,end]=suggestion.character_span; if (cpSlice(doc.text,start,end)!==suggestion.text) throw new Error(`Span mismatch: ${suggestion.suggestion_id}`);
-  }
+function eventBase(document) {
+  return {
+    schema_version: EVENT_SCHEMA,
+    event_id: crypto.randomUUID(),
+    recorded_at: new Date().toISOString(),
+    ui_version: UI_VERSION,
+    review_ui_sha256: state.reviewUiSha256,
+    session_id: SESSION_ID,
+    annotation_set_id: state.identity.annotation_set_id,
+    cohort_id: state.identity.cohort_id,
+    ontology_sha256: state.identity.ontology.sha256,
+    coordinate_unit: "authoritative_response_token_index",
+    coordinate_interval: "zero_based_half_open",
+    response_id: document.response_id,
+    source_annotation_text_sha256: document.text_sha256,
+    source_annotation_record_sha256: document._loadedRecordSha256,
+    source_workstation_bundle_sha256: state.bundleSha256
+  };
 }
-el("files").addEventListener("change",async event=>{
+function tokenCharacterSpan(document, start, end) {
+  const spans = document.tokenization.tokens.slice(start,end).map(function(token) { return token.character_span; });
+  return [Math.min.apply(null,spans.map(function(span){return span[0];})),Math.max.apply(null,spans.map(function(span){return span[1];}))];
+}
+function makeEvent(document, axis, operation, value, start, end, gestureId, revertsGestureId) {
+  const characterSpan = tokenCharacterSpan(document, start, end);
+  return Object.assign(eventBase(document), {
+    event_type: "token_override",
+    gesture_id: gestureId,
+    reverts_gesture_id: revertsGestureId || null,
+    axis: axis,
+    operation: operation,
+    value: operation === "paint" ? value : null,
+    token_span: {start:start,end:end},
+    character_span: characterSpan,
+    text: cpSlice(document.text, characterSpan[0], characterSpan[1])
+  });
+}
+function axisStatusEvent(document, axis, status, reason) {
+  return Object.assign(eventBase(document), {
+    schema_version:AXIS_EVENT_SCHEMA,
+    event_type:"axis_review_status",
+    axis:axis,
+    status:status,
+    reason:reason
+  });
+}
+function autoReopenAxis(document, axis, reason) {
+  const current = state.axisStatus.get(axisKey(document.response_id,axis));
+  if (current && current.status === "reviewed") applyEvent(axisStatusEvent(document,axis,"reopened",reason));
+}
+function ranges(positions) {
+  const sorted = Array.from(new Set(positions)).sort(function(a,b) { return a-b; });
+  const output = [];
+  sorted.forEach(function(position) {
+    const last = output[output.length - 1];
+    if (last && last[1] === position) last[1] += 1;
+    else output.push([position, position + 1]);
+  });
+  return output;
+}
+function saveEvents() {
+  if (!state.identity) return;
   try {
-    const documents=[];
-    for (const file of event.target.files) { const raw=await file.text(), parsed=JSON.parse(raw); validateDocument(parsed); parsed._loadedRecordSha256=await sha256Hex(raw); documents.push(parsed); }
-    const identities=new Set(documents.map(doc=>`${doc.annotation_set_id}\u0000${doc.ontology.sha256}\u0000${doc.cohort_id}`)); if (identities.size!==1) throw new Error("Mixed annotation sets or ontologies are not allowed");
-    const responseIds=new Set(); for (const doc of documents) { if(responseIds.has(doc.response_id)) throw new Error(`Duplicate response ${doc.response_id}`); responseIds.add(doc.response_id); }
-    documents.sort((a,b)=>a.response_id.localeCompare(b.response_id)); state.documents=documents; state.setIdentity=documents[0]||null; clearSelection(); state.page=0;
-    const response=el("response"); response.replaceChildren(...documents.map((doc,index)=>new Option(doc.response_id,String(index))));
-    const axes=Object.keys(documents[0]?.ontology.axes||{}).sort(); el("axis").replaceChildren(new Option("All axes",""),...axes.map(value=>new Option(value,value))); populateManualValues(documents[0]);
-    el("messages").textContent=`Loaded ${documents.length} validated records.`; render();
-  } catch(error) { el("messages").textContent=`Load failed: ${error.message}`; }
-});
-el("reviewImport").addEventListener("change",async event=>{
-  try { const lines=(await event.target.files[0].text()).split(/\r?\n/).filter(line=>line.trim()), before=state.events.length; for(const line of lines){const row=JSON.parse(line);if(row.schema_version==="adag.process-witness.annotation-review-export.v1")continue;if(!row.event_id||!row.event_type)throw new Error("Review event lacks identity/type");appendEvent(row);} el("messages").textContent=`Imported ${state.events.length-before} new review events.`; render(); } catch(error){el("messages").textContent=`Import failed: ${error.message}`;}
-});
-for(const id of ["response","axis"]){el(id).addEventListener("change",()=>{clearSelection();state.page=0;populateManualValues(selectedDocument());render();});}
-el("value").addEventListener("input",()=>{clearSelection();state.page=0;render();});
-el("manualAxis").addEventListener("change",()=>populateValueOptions(selectedDocument()));
-el("previousPage").addEventListener("click",()=>{clearSelection();state.page=Math.max(0,state.page-1);render();});
-el("nextPage").addEventListener("click",()=>{clearSelection();state.page+=1;render();});
-document.querySelectorAll("button[data-decision]").forEach(button=>button.addEventListener("click",()=>{
-  const doc=selectedDocument(), suggestion=state.selected; if(!doc||!suggestion||el("context").dataset.responseId!==doc.response_id)return;
-  appendEvent({...eventBase(doc),schema_version:"adag.process-witness.annotation-review.v1",event_type:"review_suggestion",suggestion_id:suggestion.suggestion_id,suggestion_fingerprint:{character_span:suggestion.character_span,axis:suggestion.axis,value:suggestion.value,rule_id:suggestion.provenance.rule_id},decision:button.dataset.decision,note:el("note").value}); render();
-}));
-el("clear").addEventListener("click",()=>{if(confirm("Clear all unexported/imported review events?")){state.events=[];state.latest.clear();state.eventIds.clear();clearSelection();render();}});
-el("addSpan").addEventListener("click",()=>{
-  try { const selected=contextSelection(); if(!selected)throw new Error("Select text from the currently displayed response context"); const axis=el("manualAxis").value,value=el("manualValue").value,allowed=selected.doc.ontology.axes[axis]?.values||[]; if(!allowed.includes(value))throw new Error("Axis/value is outside the frozen ontology"); appendEvent({...eventBase(selected.doc),schema_version:"adag.process-witness.annotation-manual-event.v1",event_type:"add_span",character_span:[selected.start,selected.end],token_span:tokenSpan(selected.doc,selected.start,selected.end),text:selected.text,axis,value,review_status:"human_added",note:el("note").value}); clearSelection(); render(); } catch(error){el("messages").textContent=error.message;}
-});
-el("export").addEventListener("click",()=>{
-  const identity=state.setIdentity; if(!identity){el("messages").textContent="Load annotation records before export.";return;}
-  const header={schema_version:"adag.process-witness.annotation-review-export.v1",export_id:crypto.randomUUID(),exported_at:new Date().toISOString(),ui_version:UI_VERSION,annotation_set_id:identity.annotation_set_id,ontology_sha256:identity.ontology.sha256,cohort_id:identity.cohort_id,coordinate_unit:"Unicode_code_point",events:state.events.length};
-  const rows=[header,...state.events],blob=new Blob([rows.map(row=>JSON.stringify(row)).join("\n")+"\n"],{type:"application/x-ndjson"}),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="process-witness-review.jsonl";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-});
+    localStorage.setItem("process-witness-paint:" + state.identity.annotation_set_id, JSON.stringify({
+      annotation_set_id:state.identity.annotation_set_id,
+      cohort_id:state.identity.cohort_id,
+      ontology_sha256:state.identity.ontology.sha256,
+      source_workstation_bundle_sha256:state.bundleSha256,
+      review_ui_sha256:state.reviewUiSha256,
+      response_sources:state.documents.map(function(document) { return [document.response_id,document.text_sha256,document._loadedRecordSha256]; }),
+      events:state.events
+    }));
+  } catch (error) {
+    setMessage("Painted state is in memory; browser storage is full, so export soon.", "error");
+  }
+}
+function loadLocalEvents() {
+  try {
+    const raw = localStorage.getItem("process-witness-paint:" + state.identity.annotation_set_id);
+    if (!raw) return false;
+    const saved = JSON.parse(raw);
+    const currentSources = state.documents.map(function(document) { return [document.response_id,document.text_sha256,document._loadedRecordSha256]; });
+    if (saved.annotation_set_id !== state.identity.annotation_set_id || saved.cohort_id !== state.identity.cohort_id || saved.ontology_sha256 !== state.identity.ontology.sha256 || saved.source_workstation_bundle_sha256 !== state.bundleSha256 || saved.review_ui_sha256 !== state.reviewUiSha256 || JSON.stringify(saved.response_sources) !== JSON.stringify(currentSources)) return false;
+    const added = applyEventsTransactional(saved.events);
+    if (added) setMessage("Restored " + added + " local events.", "success");
+    return added > 0;
+  } catch (error) {
+    setMessage("Could not restore local review: " + error.message, "error");
+    return true;
+  }
+}
+function renderPalette() {
+  if (!state.identity || !state.axis) return;
+  el("axisSelect").value = state.axis;
+  const values = state.identity.ontology.axes[state.axis].values;
+  const activeDocument = currentDocument();
+  const counts = new Map();
+  if (activeDocument) {
+    for (let position = 0; position < activeDocument.tokenization.token_count; position += 1) {
+      const effective = effectiveState(activeDocument, state.axis, position);
+      if (effective.status === "value") counts.set(effective.value, (counts.get(effective.value) || 0) + 1);
+    }
+  }
+  const buttons = values.map(function(value) {
+    const button = window.document.createElement("button");
+    button.type = "button";
+    button.className = "brush";
+    button.dataset.mode = "paint";
+    button.dataset.value = value;
+    button.setAttribute("aria-pressed", String(state.brush && state.brush.mode === "paint" && state.brush.value === value));
+    button.title = "Paint " + value.replaceAll("_", " ");
+    const swatch = window.document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.color = colorFor(state.axis, value);
+    const name = window.document.createElement("span");
+    name.className = "brush-name";
+    name.textContent = value.replaceAll("_", " ");
+    const count = window.document.createElement("span");
+    count.className = "brush-count";
+    count.textContent = String(counts.get(value) || "");
+    button.append(swatch, name, count);
+    button.addEventListener("click", function() { selectBrush({mode:"paint",value:value}); });
+    return button;
+  });
+  el("brushes").replaceChildren.apply(el("brushes"), buttons);
+  el("eraser").setAttribute("aria-pressed", String(state.brush && state.brush.mode === "erase"));
+  el("revert").setAttribute("aria-pressed", String(state.brush && state.brush.mode === "revert_to_machine"));
+  const brushText = !state.brush ? "No brush selected" : state.brush.mode === "paint" ? state.axis.replaceAll("_"," ") + " / " + state.brush.value.replaceAll("_"," ") : state.brush.mode === "erase" ? state.axis.replaceAll("_"," ") + " / clear label" : state.axis.replaceAll("_"," ") + " / revert to machine";
+  el("brushStatus").textContent = brushText;
+}
+function selectBrush(brush) {
+  state.brush = brush;
+  renderPalette();
+}
+function styleToken(node, effective, pending) {
+  const overlapFragment = node.classList.contains("overlap-fragment");
+  node.className = "token";
+  if (overlapFragment) node.classList.add("overlap-fragment");
+  node.style.background = "";
+  node.style.removeProperty("--token-color");
+  if (effective.status === "conflict") node.classList.add("conflict");
+  else if (effective.status === "erased") node.classList.add("erased");
+  else if (effective.status === "value") {
+    const color = colorFor(state.axis, effective.value);
+    node.style.setProperty("--token-color", color);
+    node.style.backgroundColor = color + (effective.source === "manual" ? "b0" : "50");
+    node.classList.add(effective.source === "manual" ? "manual" : "machine");
+  }
+  if (pending) node.classList.add("pending");
+}
+function renderDocument() {
+  const activeDocument = currentDocument();
+  const canvas = el("tokenCanvas");
+  if (!activeDocument) return;
+  el("responseTitle").textContent = activeDocument.response_id;
+  const context = activeDocument.task_context || {};
+  const details = []
+    .concat(context.task_family && context.task_family !== "unknown_unreviewed" ? [context.task_family] : [])
+    .concat(context.source_types || [])
+    .concat(context.question_ids || []);
+  el("taskSummary").textContent = details.join(" · ") || activeDocument.response_source;
+  el("promptText").textContent = (context.prompt || "(prompt unavailable)") + "\n\nTask metadata\n" + JSON.stringify(Object.assign({}, context, {prompt:undefined}), null, 2);
+  el("axisCaption").textContent = state.axis ? "Showing " + state.axis.replaceAll("_"," ") : "No axis selected";
+  const axisReview = state.axisStatus.get(axisKey(activeDocument.response_id,state.axis));
+  const reviewed = axisReview && axisReview.status === "reviewed";
+  el("axisReviewStatus").textContent = reviewed ? "Axis reviewed" : "Axis unreviewed";
+  el("axisReviewStatus").dataset.reviewed = String(Boolean(reviewed));
+  el("toggleAxisReview").disabled = false;
+  el("toggleAxisReview").textContent = reviewed ? "Reopen axis" : "Mark axis reviewed";
+  el("identityLine").textContent = "set " + state.identity.annotation_set_id + " · cohort " + state.identity.cohort_id + " · bundle " + (state.bundleSha256 || "individual-record import") + " · UI " + (state.reviewUiSha256 || "unbound individual-record import");
+  const fragment = window.document.createDocumentFragment();
+  let renderedEnd = 0;
+  activeDocument.tokenization.tokens.forEach(function(token) {
+    const span = window.document.createElement("span");
+    span.className = "token";
+    span.dataset.position = String(token.position);
+    span.tabIndex = 0;
+    span.setAttribute("role","button");
+    const visibleStart = Math.max(renderedEnd, token.character_span[0]);
+    const visibleText = cpSlice(activeDocument.text, visibleStart, token.character_span[1]);
+    span.textContent = visibleText;
+    if (token.character_span[0] < renderedEnd) span.classList.add("overlap-fragment");
+    renderedEnd = Math.max(renderedEnd, token.character_span[1]);
+    const effective = effectiveState(activeDocument, state.axis, token.position);
+    styleToken(span, effective, false);
+    if (token.character_span[0] < visibleStart) span.classList.add("overlap-fragment");
+    const detail = effective.status === "value" ? effective.value + " (" + effective.source + ")" : effective.status === "conflict" ? "machine conflict: " + effective.values.join(", ") : effective.status;
+    span.setAttribute("aria-label", "Token " + token.position + ": " + JSON.stringify(token.text) + "; " + state.axis.replaceAll("_"," ") + ": " + detail);
+    span.title = "token " + token.position + " · id " + token.token_id + " · " + detail;
+    fragment.append(span);
+  });
+  canvas.replaceChildren(fragment);
+  renderPalette();
+}
+function renderNavigation() {
+  const count = state.documents.length;
+  const axes = state.identity ? Object.keys(state.identity.ontology.axes) : [];
+  const reviewedAxes = state.documents.reduce(function(total,document){return total + axes.filter(function(axis){const item=state.axisStatus.get(axisKey(document.response_id,axis));return item&&item.status==="reviewed";}).length;},0);
+  const reviewedResponses = state.documents.filter(function(document){return axes.length&&axes.every(function(axis){const item=state.axisStatus.get(axisKey(document.response_id,axis));return item&&item.status==="reviewed";});}).length;
+  el("progress").textContent = count ? (state.current + 1) + " / " + count + " · reviewed " + reviewedAxes + "/" + (count*axes.length) + " axes, " + reviewedResponses + "/" + count + " responses" : "0 / 0";
+  el("previousResponse").disabled = state.current <= 0;
+  el("nextResponse").disabled = !count || state.current >= count - 1;
+  el("undo").disabled = state.undoStack.length === 0;
+}
+function renderAll() { renderNavigation(); renderDocument(); }
+function goTo(index) {
+  if (!state.documents.length) return;
+  state.current = Math.max(0, Math.min(index, state.documents.length - 1));
+  state.gesture = null;
+  el("documentScroll").scrollTop = 0;
+  renderAll();
+}
+function searchResponse() {
+  const query = el("responseSearch").value.trim().toLowerCase();
+  if (!query) return;
+  const start = (state.current + 1) % state.documents.length;
+  for (let offset = 0; offset < state.documents.length; offset += 1) {
+    const index = (start + offset) % state.documents.length;
+    const document = state.documents[index];
+    const haystack = [document.response_id, document.response_source, document.task_context && document.task_context.prompt, JSON.stringify(document.task_context || {})].join("\n").toLowerCase();
+    if (haystack.includes(query)) {
+      goTo(index);
+      setMessage("Search matched response " + document.response_id + ".", "success");
+      return;
+    }
+  }
+  setMessage("No response matched “" + query + "”.", "error");
+}
+function previewPending(position) {
+  if (!state.gesture || state.gesture.positions.has(position)) return;
+  state.gesture.positions.add(position);
+  const node = el("tokenCanvas").querySelector('[data-position="' + position + '"]');
+  if (!node) return;
+  let effective;
+  if (state.brush.mode === "paint") effective = {status:"value",value:state.brush.value,source:"manual"};
+  else if (state.brush.mode === "erase") effective = {status:"erased",source:"manual"};
+  else effective = machineState(currentDocument(), state.axis, position);
+  styleToken(node, effective, true);
+}
+function beginGesture(event) {
+  const token = event.target.closest(".token");
+  if (!token || !state.brush || !currentDocument() || event.button !== 0) return;
+  event.preventDefault();
+  const document = currentDocument();
+  state.gesture = {
+    gestureId: crypto.randomUUID(),
+    responseId: document.response_id,
+    axis: state.axis,
+    brush: Object.assign({}, state.brush),
+    positions: new Set(),
+    previous: new Map()
+  };
+  const position = Number(token.dataset.position);
+  state.gesture.previous.set(position, state.manual.get(manualKey(document.response_id, state.axis, position)) || null);
+  state.gesture.lastPosition = position;
+  previewPending(position);
+}
+function moveGesture(event) {
+  if (!state.gesture) return;
+  const directTarget = event.target && event.target.closest ? event.target.closest(".token") : null;
+  const target = directTarget || document.elementFromPoint(event.clientX, event.clientY);
+  const token = target && target.closest ? target.closest(".token") : null;
+  if (!token || !el("tokenCanvas").contains(token)) return;
+  const position = Number(token.dataset.position);
+  const document = currentDocument();
+  const start = Math.min(state.gesture.lastPosition, position);
+  const end = Math.max(state.gesture.lastPosition, position);
+  for (let filled = start; filled <= end; filled += 1) {
+    if (!state.gesture.previous.has(filled)) state.gesture.previous.set(filled, state.manual.get(manualKey(document.response_id, state.axis, filled)) || null);
+    previewPending(filled);
+  }
+  state.gesture.lastPosition = position;
+}
+function endGesture() {
+  const gesture = state.gesture;
+  state.gesture = null;
+  if (!gesture || !gesture.positions.size) return;
+  const document = currentDocument();
+  if (!document || document.response_id !== gesture.responseId || state.axis !== gesture.axis) { renderAll(); return; }
+  autoReopenAxis(document,gesture.axis,"token_override_after_review");
+  ranges(gesture.positions).forEach(function(range) {
+    applyEvent(makeEvent(document, gesture.axis, gesture.brush.mode, gesture.brush.value || null, range[0], range[1], gesture.gestureId, null));
+  });
+  state.undoStack.push({gestureId:gesture.gestureId,responseId:gesture.responseId,axis:gesture.axis,previous:gesture.previous});
+  saveEvents();
+  renderAll();
+  setMessage("Painted " + gesture.positions.size + " token" + (gesture.positions.size === 1 ? "" : "s") + ".", "success");
+}
+function undoGesture() {
+  const undo = state.undoStack.pop();
+  if (!undo) return;
+  const document = state.documents.find(function(item) { return item.response_id === undo.responseId; });
+  if (!document) return;
+  const groups = new Map();
+  undo.previous.forEach(function(previous, position) {
+    const operation = !previous ? "revert_to_machine" : previous.operation;
+    const value = previous && previous.value;
+    const key = operation + "\u0000" + (value || "");
+    if (!groups.has(key)) groups.set(key, {operation:operation,value:value,positions:[]});
+    groups.get(key).positions.push(position);
+  });
+  const gestureId = crypto.randomUUID();
+  autoReopenAxis(document,undo.axis,"undo_after_review");
+  groups.forEach(function(group) {
+    ranges(group.positions).forEach(function(range) {
+      applyEvent(makeEvent(document, undo.axis, group.operation, group.value, range[0], range[1], gestureId, undo.gestureId));
+    });
+  });
+  saveEvents();
+  renderAll();
+  setMessage("Undo recorded as a new provenance-preserving gesture.", "success");
+}
+function resolvedRuns(document) {
+  const annotations = [];
+  Object.keys(state.identity.ontology.axes).forEach(function(axis) {
+    let run = null;
+    for (let position = 0; position <= document.tokenization.token_count; position += 1) {
+      const effective = position < document.tokenization.token_count ? effectiveState(document, axis, position) : {status:"unlabeled",source:"machine"};
+      const normalized = effective.status === "value"
+        ? {status:"labeled",value:effective.value,source:effective.source}
+        : effective.status === "conflict"
+          ? {status:"machine_conflict",values:effective.values,source:"machine"}
+          : effective.status === "erased"
+            ? {status:"explicitly_unlabeled",source:"manual"}
+            : null;
+      const signature = normalized ? JSON.stringify(normalized) : null;
+      if (run && run.signature === signature) {
+        run.end = position + 1;
+      } else {
+        if (run) {
+          const item = Object.assign({axis:axis,token_span:{start:run.start,end:run.end}}, run.value);
+          item.character_span = tokenCharacterSpan(document, run.start, run.end);
+          annotations.push(item);
+        }
+        run = normalized ? {start:position,end:position+1,signature:signature,value:normalized} : null;
+      }
+    }
+  });
+  return annotations;
+}
+function exportedAxisCoverage(document, axis) {
+  const item = state.axisStatus.get(axisKey(document.response_id,axis));
+  return item ? {status:item.status,event_id:item.event_id,recorded_at:item.recorded_at} : {status:"never_reviewed"};
+}
+function exportReview() {
+  if (!state.identity) { setMessage("Load annotation data before exporting.", "error"); return; }
+  const payload = {
+    schema_version: EXPORT_SCHEMA,
+    export_id: crypto.randomUUID(),
+    exported_at: new Date().toISOString(),
+    ui_version: UI_VERSION,
+    review_ui_sha256: state.reviewUiSha256,
+    annotation_set_id: state.identity.annotation_set_id,
+    cohort_id: state.identity.cohort_id,
+    ontology_sha256: state.identity.ontology.sha256,
+    source_workstation_bundle_sha256: state.bundleSha256,
+    coordinate_system: {token_span_unit:"authoritative_response_token_index",token_span_interval:"zero_based_half_open",character_span_unit:"Unicode_code_point",character_span_interval:"zero_based_half_open"},
+    event_log: {append_only:true,events:state.events},
+    review_coverage: state.documents.map(function(document) {
+      return {response_id:document.response_id,axes:Object.fromEntries(Object.keys(state.identity.ontology.axes).map(function(axis){return [axis,exportedAxisCoverage(document,axis)];}))};
+    }),
+    resolved_state: state.documents.map(function(document) {
+      return {response_id:document.response_id,text_sha256:document.text_sha256,source_annotation_record_sha256:document._loadedRecordSha256,token_count:document.tokenization.token_count,annotations:resolvedRuns(document)};
+    })
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2) + "\n"], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "process-witness-painted-review-" + new Date().toISOString().replaceAll(":","-") + ".json";
+  link.click();
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+  setMessage("Exported " + state.events.length + " events and resolved state for " + state.documents.length + " responses.", "success");
+}
+async function importReview(file) {
+  if (!state.identity) { setMessage("Load annotation data before resuming a review.", "error"); return; }
+  try {
+    const raw = await file.text();
+    let events;
+    const isJsonl = file.name.toLowerCase().endsWith(".jsonl") || file.name.toLowerCase().endsWith(".ndjson");
+    if (!isJsonl) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed.schema_version !== EXPORT_SCHEMA || parsed.annotation_set_id !== state.identity.annotation_set_id || parsed.cohort_id !== state.identity.cohort_id || parsed.ontology_sha256 !== state.identity.ontology.sha256 || parsed.review_ui_sha256 !== state.reviewUiSha256 || parsed.source_workstation_bundle_sha256 !== state.bundleSha256) throw new Error("Review export identity does not match the loaded workstation");
+        events = parsed.event_log.events;
+      } catch (error) {
+        if (file.name.toLowerCase().endsWith(".json")) throw error;
+      }
+    }
+    if (!events) events = raw.split(/\r?\n/).filter(function(line) { return line.trim(); }).map(function(line) { return JSON.parse(line); });
+    const added = applyEventsTransactional(events);
+    saveEvents();
+    renderAll();
+    el("loadMenu").open = false;
+    setMessage("Imported " + added + " new append-only paint events.", "success");
+  } catch (error) {
+    setMessage("Review import failed: " + error.message, "error");
+  }
+}
+el("bundleInput").addEventListener("change", function(event) { loadFiles(event.target.files); });
+el("directoryInput").addEventListener("change", function(event) { loadFiles(event.target.files); });
+el("reviewInput").addEventListener("change", function(event) { if (event.target.files[0]) importReview(event.target.files[0]); });
+el("axisSelect").addEventListener("change", function(event) { state.axis = event.target.value; state.brush = null; renderAll(); });
+el("toggleAxisReview").addEventListener("click",function(){const document=currentDocument();if(!document)return;const item=state.axisStatus.get(axisKey(document.response_id,state.axis));const status=item&&item.status==="reviewed"?"reopened":"reviewed";applyEvent(axisStatusEvent(document,state.axis,status,"explicit_human_action"));saveEvents();renderAll();setMessage(status==="reviewed"?"Axis marked reviewed.":"Axis reopened for review.","success");});
+el("eraser").addEventListener("click", function() { selectBrush({mode:"erase"}); });
+el("revert").addEventListener("click", function() { selectBrush({mode:"revert_to_machine"}); });
+el("previousResponse").addEventListener("click", function() { goTo(state.current - 1); });
+el("nextResponse").addEventListener("click", function() { goTo(state.current + 1); });
+el("responseSearch").addEventListener("keydown", function(event) { if (event.key === "Enter") searchResponse(); });
+el("undo").addEventListener("click", undoGesture);
+el("export").addEventListener("click", exportReview);
+el("tokenCanvas").addEventListener("pointerdown", beginGesture);
+el("tokenCanvas").addEventListener("keydown",function(event){if(!["Enter"," "].includes(event.key))return;const token=event.target.closest(".token");if(!token||!state.brush)return;event.preventDefault();const position=Number(token.dataset.position),document=currentDocument(),gestureId=crypto.randomUUID();autoReopenAxis(document,state.axis,"keyboard_token_override_after_review");applyEvent(makeEvent(document,state.axis,state.brush.mode,state.brush.value||null,position,position+1,gestureId,null));saveEvents();renderAll();setMessage("Painted token "+position+" from the keyboard.","success");});
+window.addEventListener("pointermove", moveGesture);
+window.addEventListener("pointerup", endGesture);
+window.addEventListener("pointercancel", function() { state.gesture = null; renderAll(); });
 </script>
 </body>
 </html>

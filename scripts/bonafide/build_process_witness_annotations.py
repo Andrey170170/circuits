@@ -13,6 +13,7 @@ from circuits.analysis.bonafide.process_annotation import (
     annotate_response,
     audit_documents,
     build_inventory,
+    build_workstation_bundle,
     canonical_sha256,
     captured_byte_level_token_offsets,
     continuation_token_offsets,
@@ -41,7 +42,7 @@ CHAT_TEMPLATE_SHA256 = (
 )
 MODEL_REVISION = "768f209d9ea81521153ed38c47d515654e938aea"
 MANIFEST_SCHEMA_VERSION = "adag.process-witness.annotation-set-manifest.v1"
-REVIEW_UI_VERSION = "process-witness-annotation-review.v2"
+REVIEW_UI_VERSION = "process-witness-token-painter.v4"
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--annotation-set-id",
-        default="process-witness-graph-blind-auto-v1",
+        required=True,
+        help="New immutable annotation-set identity; no implicit version is allowed.",
     )
     return parser.parse_args()
 
@@ -77,6 +79,19 @@ def write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
                 )
                 + "\n"
             )
+
+
+def write_compact_json(path: Path, value: Any) -> None:
+    path.write_text(
+        json.dumps(
+            value,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def load_cohort(cohort: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -246,6 +261,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     if text_sha256(get_chat_template(tokenizer)) != CHAT_TEMPLATE_SHA256:
         raise ValueError("Thinking chat-template hash drift")
     tokenizer_files = _tokenizer_file_identity(args.tokenizer)
+    review_ui_path = (
+        Path(__file__).resolve().parent / "process_witness_annotation_review.html"
+    )
+    review_ui_sha256 = file_sha256(review_ui_path)
 
     build_path = args.output.with_name(args.output.name + f".building-{os.getpid()}")
     if build_path.exists():
@@ -253,6 +272,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     records_path = build_path / "records"
     records_path.mkdir(parents=True)
     documents: list[dict[str, Any]] = []
+    document_sha256s: list[str] = []
     index_rows: list[dict[str, Any]] = []
     for cohort_row in cohort_rows:
         source_record_path = args.cohort / cohort_row["record_path"]
@@ -277,6 +297,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             cohort_id=cohort_manifest["cohort_id"],
             annotation_set_id=args.annotation_set_id,
         )
+        document["review_ui"] = {
+            "version": REVIEW_UI_VERSION,
+            "sha256": review_ui_sha256,
+        }
         output_name = f"{record['response_id']}.json"
         output_path = records_path / output_name
         write_json(output_path, document)
@@ -298,6 +322,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
         documents.append(document)
+        document_sha256s.append(document_sha256)
 
     audit = audit_documents(documents)
     if audit["status"] != "passed":
@@ -313,6 +338,15 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     write_json(build_path / "inventory.json", inventory)
     write_json(build_path / "audit.json", audit)
     write_json(build_path / "rule-inspection.json", inspection)
+    write_compact_json(
+        build_path / "workstation-bundle.json",
+        build_workstation_bundle(
+            documents,
+            source_record_sha256s=document_sha256s,
+            review_ui_version=REVIEW_UI_VERSION,
+            review_ui_sha256=review_ui_sha256,
+        ),
+    )
 
     payload_files = sorted(path for path in build_path.rglob("*") if path.is_file())
     payload = [
@@ -368,14 +402,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 Path(__file__).resolve().parents[2]
                 / "circuits/analysis/bonafide/process_annotation.py"
             ),
-            "review_ui_path": str(
-                Path(__file__).resolve().parent
-                / "process_witness_annotation_review.html"
-            ),
-            "review_ui_sha256": file_sha256(
-                Path(__file__).resolve().parent
-                / "process_witness_annotation_review.html"
-            ),
+            "review_ui_path": str(review_ui_path),
+            "review_ui_sha256": review_ui_sha256,
             "review_ui_version": REVIEW_UI_VERSION,
         },
         "counts": {

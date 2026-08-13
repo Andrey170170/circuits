@@ -8,6 +8,7 @@ import pytest
 from circuits.analysis.bonafide.process_annotation import (
     annotate_response,
     audit_documents,
+    build_workstation_bundle,
     canonical_sha256,
     captured_byte_level_token_offsets,
     continuation_token_offsets,
@@ -18,7 +19,7 @@ from circuits.analysis.bonafide.process_annotation import (
 
 ONTOLOGY_PATH = (
     Path(__file__).parents[1]
-    / "scripts/bonafide/configs/process_witness_annotation_ontology_v1.json"
+    / "scripts/bonafide/configs/process_witness_annotation_ontology_v2.json"
 )
 
 
@@ -227,12 +228,88 @@ def test_annotation_retains_unknown_status_and_exact_token_alignment() -> None:
     )
 
 
-def test_review_ui_guards_stale_context_and_paginates() -> None:
+def test_workstation_bundle_compacts_surface_conflicts_but_preserves_semantic_ones() -> (
+    None
+):
+    ontology = load_ontology(ONTOLOGY_PATH)
+    text = " 12 plus minus"
+    response = {
+        "response_id": "response-conflict",
+        "source": "fixture",
+        "trace_scope": "full_assistant_serialization",
+        "prompt_sha256": text_sha256("fixture prompt"),
+        "generation_row": {
+            "prompt": "fixture prompt",
+            "src_types_json": "[]",
+            "question_ids_json": "[]",
+            "accepted_answer_schemas_json": "[]",
+        },
+    }
+    document = annotate_response(
+        response=response,
+        text=text,
+        ids=[123],
+        offsets=[[0, len(text)]],
+        token_identity={"kind": "fixture"},
+        ontology=ontology,
+        ontology_sha256="c" * 64,
+        cohort_id="cohort-fixture",
+        annotation_set_id="annotation-fixture",
+    )
+    bundle = build_workstation_bundle(
+        [document],
+        source_record_sha256s=["d" * 64],
+        review_ui_version="process-witness-token-painter.v4",
+        review_ui_sha256="e" * 64,
+    )
+    compact = bundle["documents"][0]
+    assert bundle["schema_version"].endswith("workstation-bundle.v1")
+    assert bundle["review_ui"] == {
+        "version": "process-witness-token-painter.v4",
+        "sha256": "e" * 64,
+    }
+    assert compact["tokenization"]["tokens"] == [[123, 0, len(text)]]
+    assert compact["machine_layers"]["surface_form"] == [[0, 1, "compound_surface"]]
+    assert compact["machine_layers"]["operation"] == [
+        [0, 1, ["addition", "subtraction"]]
+    ]
+    assert ontology["token_assignment_contract"]["within_axis"].startswith(
+        "zero_or_one"
+    )
+
+
+def test_review_ui_is_token_painter_with_bound_provenance() -> None:
     html = (
         Path(__file__).parents[1]
         / "scripts/bonafide/process_witness_annotation_review.html"
     ).read_text(encoding="utf-8")
-    assert "box.dataset.responseId!==doc.response_id" in html
-    assert "const PAGE_SIZE = 200" in html
-    assert 'coordinate_unit:"Unicode_code_point"' in html
-    assert 'id="reviewImport"' in html
+    assert 'id="tokenCanvas"' in html
+    assert 'id="axisSelect"' in html
+    assert 'id="directoryInput"' in html
+    assert 'id="reviewInput"' in html
+    assert "source_workstation_bundle_sha256" in html
+    assert "source_annotation_record_sha256" in html
+    assert "source_annotation_text_sha256" in html
+    assert 'operation === "revert_to_machine"' in html
+    assert "resolved_state" in html
+    assert "state.gesture.lastPosition" in html
+    assert "compound_surface" in html
+    assert 'id="toggleAxisReview"' in html
+    assert "applyEventsTransactional" in html
+    assert "event.schema_version !== EVENT_SCHEMA" in html
+    assert 'event.coordinate_unit !== "authoritative_response_token_index"' in html
+    assert 'file.name.toLowerCase().endsWith(".jsonl")' in html
+    assert "bundles.length > 1" in html
+    assert "bundles.length === 1" in html
+    assert "review_coverage" in html
+    assert "span.tabIndex = 0" in html
+    assert 'span.setAttribute("aria-label"' in html
+    assert 'node.classList.contains("overlap-fragment")' in html
+    assert 'const UI_VERSION = "process-witness-token-painter.v4"' in html
+    builder = (
+        Path(__file__).parents[1]
+        / "scripts/bonafide/build_process_witness_annotations.py"
+    ).read_text(encoding="utf-8")
+    assert 'REVIEW_UI_VERSION = "process-witness-token-painter.v4"' in builder
+    assert '"--annotation-set-id"' in builder
+    assert "required=True" in builder

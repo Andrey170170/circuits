@@ -19,6 +19,9 @@ from typing import Any
 SCHEMA_VERSION = "adag.process-witness.annotation-draft.v1"
 INVENTORY_SCHEMA_VERSION = "adag.process-witness.annotation-inventory.v1"
 AUDIT_SCHEMA_VERSION = "adag.process-witness.annotation-audit.v1"
+WORKSTATION_BUNDLE_SCHEMA_VERSION = (
+    "adag.process-witness.annotation-workstation-bundle.v1"
+)
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -61,11 +64,22 @@ class Match:
 
 def load_ontology(path: Path) -> dict[str, Any]:
     ontology = json.loads(path.read_text(encoding="utf-8"))
-    if ontology.get("schema_version") != "adag.process-witness.annotation-ontology.v1":
+    if ontology.get("schema_version") not in {
+        "adag.process-witness.annotation-ontology.v1",
+        "adag.process-witness.annotation-ontology.v2",
+    }:
         raise ValueError("unsupported annotation ontology schema")
     axes = ontology.get("axes")
     if not isinstance(axes, dict) or not axes:
         raise ValueError("ontology axes must be a non-empty object")
+    if ontology["schema_version"].endswith(".v2"):
+        contract = ontology.get("token_assignment_contract", {})
+        if contract.get("within_axis") != (
+            "zero_or_one_effective_value_per_authoritative_response_token"
+        ):
+            raise ValueError("v2 ontology lacks the within-axis token contract")
+        if "compound_surface" not in axes.get("surface_form", {}).get("values", []):
+            raise ValueError("v2 ontology lacks compound_surface")
     rule_ids: list[str] = []
     for collection in ("regex_rules", "lexical_rules", "detectors"):
         for rule in ontology.get(collection, []):
@@ -648,6 +662,139 @@ def annotate_response(
             "status": "empty_pending_human_annotation",
             "events": [],
         },
+    }
+
+
+def compact_workstation_document(
+    document: Mapping[str, Any], *, source_record_sha256: str
+) -> dict[str, Any]:
+    """Project a verbose draft record into the graph-blind painting workstation.
+
+    The frozen draft remains authoritative.  This projection shares ontology metadata
+    at bundle level, stores exact token identities compactly, and run-length encodes the
+    effective machine layer.  Under ontology v2, overlapping surface-form values map to
+    ``compound_surface``; semantic conflicts remain sorted lists rather than receiving a
+    silent winner.
+    """
+
+    tokens = document["tokenization"]["tokens"]
+    axis_values: dict[str, list[set[str]]] = {
+        axis: [set() for _ in tokens] for axis in document["ontology"]["axes"]
+    }
+    for suggestion in document["suggestions"]:
+        start = int(suggestion["token_span"]["start"])
+        end = int(suggestion["token_span"]["end"])
+        for position in range(start, end):
+            axis_values[suggestion["axis"]][position].add(suggestion["value"])
+
+    machine_layers: dict[str, list[list[Any]]] = {}
+    for axis, values_by_token in axis_values.items():
+        runs: list[list[Any]] = []
+        run_start: int | None = None
+        run_value: str | list[str] | None = None
+        for position in range(len(values_by_token) + 1):
+            values = (
+                values_by_token[position] if position < len(values_by_token) else set()
+            )
+            value: str | list[str] | None
+            if len(values) == 1:
+                value = next(iter(values))
+            elif values:
+                if (
+                    axis == "surface_form"
+                    and "compound_surface"
+                    in document["ontology"]["axes"][axis]["values"]
+                ):
+                    value = "compound_surface"
+                else:
+                    value = sorted(values)
+            else:
+                value = None
+            if value == run_value:
+                continue
+            if run_value is not None and run_start is not None:
+                runs.append([run_start, position, run_value])
+            run_start = position if value is not None else None
+            run_value = value
+        if runs:
+            machine_layers[axis] = runs
+
+    return {
+        "response_id": document["response_id"],
+        "response_source": document["response_source"],
+        "trace_scope": document["trace_scope"],
+        "prompt_sha256": document["prompt_sha256"],
+        "task_context": document["task_context"],
+        "text_sha256": document["text_sha256"],
+        "text": document["text"],
+        "source_annotation_record_sha256": source_record_sha256,
+        "tokenization": {
+            "identity_status": document["tokenization"]["identity_status"],
+            "token_count": document["tokenization"]["token_count"],
+            "input_ids_sha256": document["tokenization"]["input_ids_sha256"],
+            "offset_mapping_sha256": document["tokenization"]["offset_mapping_sha256"],
+            "tokens": [
+                [
+                    int(token["token_id"]),
+                    int(token["character_span"][0]),
+                    int(token["character_span"][1]),
+                ]
+                for token in tokens
+            ],
+        },
+        "machine_layers": machine_layers,
+    }
+
+
+def build_workstation_bundle(
+    documents: Sequence[Mapping[str, Any]],
+    *,
+    source_record_sha256s: Sequence[str],
+    review_ui_version: str,
+    review_ui_sha256: str,
+) -> dict[str, Any]:
+    """Create one compact, self-identifying import for the painting workstation."""
+
+    if not documents:
+        raise ValueError("workstation bundle requires at least one document")
+    if len(documents) != len(source_record_sha256s):
+        raise ValueError("document/source-hash count mismatch")
+    if not review_ui_version:
+        raise ValueError("workstation bundle requires a review UI version")
+    if not re.fullmatch(r"[0-9a-f]{64}", review_ui_sha256):
+        raise ValueError("workstation bundle requires an exact review UI SHA-256")
+    first = documents[0]
+    identity = (
+        first["annotation_set_id"],
+        first["cohort_id"],
+        first["ontology"]["sha256"],
+    )
+    for document in documents[1:]:
+        if (
+            document["annotation_set_id"],
+            document["cohort_id"],
+            document["ontology"]["sha256"],
+        ) != identity:
+            raise ValueError("mixed annotation identities in workstation bundle")
+    return {
+        "schema_version": WORKSTATION_BUNDLE_SCHEMA_VERSION,
+        "status": "automatic_suggestions_unreviewed",
+        "claim_boundary": first["claim_boundary"],
+        "annotation_set_id": first["annotation_set_id"],
+        "cohort_id": first["cohort_id"],
+        "coordinate_system": first["coordinate_system"],
+        "review_ui": {
+            "version": review_ui_version,
+            "sha256": review_ui_sha256,
+        },
+        "ontology": first["ontology"],
+        "responses": len(documents),
+        "documents": [
+            compact_workstation_document(document, source_record_sha256=source_sha256)
+            for document, source_sha256 in zip(
+                documents, source_record_sha256s, strict=True
+            )
+        ],
     }
 
 

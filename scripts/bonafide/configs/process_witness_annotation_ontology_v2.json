@@ -1,0 +1,745 @@
+{
+  "schema_version": "adag.process-witness.annotation-ontology.v2",
+  "ontology_id": "process-witness-graph-blind-v2",
+  "status": "draft_for_human_review",
+  "claim_boundary": "Observable-form rules describe literal text. Semantic rules produce suggestions only and must not be treated as accepted process labels.",
+  "multi_label": true,
+  "unknown_and_ambiguous_allowed": true,
+  "review_vocabularies": {
+    "suggestion_status": [
+      "suggested_unreviewed",
+      "human_accepted",
+      "human_corrected",
+      "human_rejected",
+      "human_ambiguous",
+      "human_added"
+    ],
+    "review_decision": [
+      "accepted",
+      "corrected",
+      "rejected",
+      "ambiguous",
+      "unreviewed"
+    ],
+    "event_status": [
+      "correct",
+      "incorrect",
+      "attempted",
+      "uncertain",
+      "not_applicable",
+      "unknown"
+    ]
+  },
+  "axes": {
+    "surface_form": {
+      "kind": "observable",
+      "values": [
+        "integer_literal",
+        "decimal_literal",
+        "horizontal_whitespace",
+        "newline_whitespace",
+        "sentence_terminal",
+        "comma",
+        "colon",
+        "semicolon",
+        "quote",
+        "apostrophe",
+        "parenthesis",
+        "bracket",
+        "brace",
+        "markdown_marker",
+        "thinking_boundary",
+        "arrow",
+        "other_symbol",
+        "compound_surface"
+      ]
+    },
+    "representation": {
+      "kind": "observable_or_local_syntax",
+      "values": [
+        "operator_symbol",
+        "equality_symbol",
+        "answer_key",
+        "answer_value",
+        "numeric_relation_result_candidate"
+      ]
+    },
+    "domain": {
+      "kind": "semantic_hypothesis",
+      "values": [
+        "arithmetic",
+        "graph_or_state",
+        "symbolic_text",
+        "comparison_or_game",
+        "metacognitive"
+      ]
+    },
+    "operation": {
+      "kind": "semantic_hypothesis",
+      "values": [
+        "addition",
+        "subtraction",
+        "multiplication",
+        "division",
+        "modulo",
+        "exponentiation",
+        "equality_check",
+        "order_comparison",
+        "state_transition",
+        "lookup",
+        "encoding_or_decoding",
+        "counting",
+        "verification",
+        "correction"
+      ]
+    },
+    "process_role": {
+      "kind": "semantic_hypothesis",
+      "values": [
+        "operator_cue",
+        "input_operand",
+        "operand_candidate",
+        "intermediate_result",
+        "intermediate_result_candidate",
+        "state_value",
+        "state_value_candidate",
+        "state_update",
+        "final_result",
+        "answer_commitment",
+        "verification",
+        "verification_cue",
+        "correction",
+        "correction_cue",
+        "planning_cue",
+        "uncertainty_cue",
+        "unknown"
+      ]
+    },
+    "discourse_role": {
+      "kind": "semantic_hypothesis",
+      "values": [
+        "conclusion_cue",
+        "verification_cue",
+        "correction_cue",
+        "planning_cue",
+        "uncertainty_cue"
+      ]
+    },
+    "usage": {
+      "kind": "human_selection",
+      "values": [
+        "process_candidate",
+        "nuisance_reference",
+        "context_only",
+        "exclude",
+        "unknown"
+      ]
+    },
+    "token_position": {
+      "kind": "observable_or_reviewed_context",
+      "values": [
+        "span_onset",
+        "span_interior",
+        "span_terminal",
+        "line_initial",
+        "line_terminal",
+        "thinking_segment",
+        "final_answer_segment",
+        "unknown"
+      ]
+    },
+    "event_status": {
+      "kind": "human_semantic_judgment",
+      "values": [
+        "correct",
+        "incorrect",
+        "attempted",
+        "uncertain",
+        "not_applicable",
+        "unknown"
+      ]
+    }
+  },
+  "regex_rules": [
+    {
+      "rule_id": "surface.integer.v1",
+      "pattern": "(?<![\\w.])-?\\d+(?![\\w.]|\\.\\d)",
+      "axis": "surface_form",
+      "value": "integer_literal",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.decimal.v1",
+      "pattern": "(?<![\\w.])-?\\d+\\.\\d+(?![\\w.])",
+      "axis": "surface_form",
+      "value": "decimal_literal",
+      "interpretation": "observable_form",
+      "confidence": "high",
+      "ambiguity": [
+        "a compact numbered-list item such as 10.58 may have omitted whitespace after the period"
+      ]
+    },
+    {
+      "rule_id": "surface.horizontal-whitespace.v1",
+      "pattern": "[ \\t]+",
+      "axis": "surface_form",
+      "value": "horizontal_whitespace",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.newline.v1",
+      "pattern": "(?:\\r\\n|\\r|\\n)+",
+      "axis": "surface_form",
+      "value": "newline_whitespace",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.sentence-terminal.v1",
+      "pattern": "(?:(?<!\\d)\\.(?!\\d)|[!?])",
+      "axis": "surface_form",
+      "value": "sentence_terminal",
+      "interpretation": "observable_form",
+      "confidence": "high",
+      "ambiguity": [
+        "a period may be abbreviation punctuation"
+      ]
+    },
+    {
+      "rule_id": "surface.comma.v1",
+      "pattern": ",",
+      "axis": "surface_form",
+      "value": "comma",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.colon.v1",
+      "pattern": ":",
+      "axis": "surface_form",
+      "value": "colon",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.semicolon.v1",
+      "pattern": ";",
+      "axis": "surface_form",
+      "value": "semicolon",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.quote.v1",
+      "pattern": "\\\"",
+      "axis": "surface_form",
+      "value": "quote",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.apostrophe.v1",
+      "pattern": "'",
+      "axis": "surface_form",
+      "value": "apostrophe",
+      "interpretation": "observable_form",
+      "confidence": "high",
+      "ambiguity": [
+        "may delimit a single-quoted string rather than mark a contraction or possessive"
+      ]
+    },
+    {
+      "rule_id": "surface.parenthesis.v1",
+      "pattern": "[()]",
+      "axis": "surface_form",
+      "value": "parenthesis",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.bracket.v1",
+      "pattern": "[\\[\\]]",
+      "axis": "surface_form",
+      "value": "bracket",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.brace.v1",
+      "pattern": "[{}]",
+      "axis": "surface_form",
+      "value": "brace",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.markdown.v1",
+      "pattern": "(?:\\*\\*|__|#{1,6}(?=\\s)|```|`)",
+      "axis": "surface_form",
+      "value": "markdown_marker",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "surface.thinking-boundary.v1",
+      "pattern": "</?think>",
+      "axis": "surface_form",
+      "value": "thinking_boundary",
+      "interpretation": "observable_form",
+      "confidence": "high",
+      "ignore_case": true
+    },
+    {
+      "rule_id": "surface.arrow.v1",
+      "pattern": "(?:->|→|⇒|↔)",
+      "axis": "surface_form",
+      "value": "arrow",
+      "interpretation": "observable_form",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "representation.equality.v1",
+      "pattern": "(?:(?<![<>=!])=(?!=)|≡|≈)",
+      "axis": "representation",
+      "value": "equality_symbol",
+      "interpretation": "observable_form",
+      "confidence": "high",
+      "ambiguity": [
+        "may express assignment, congruence, or approximation rather than equality checking"
+      ]
+    },
+    {
+      "rule_id": "operation.modulo-compact.v1",
+      "pattern": "(?i)(?<![A-Za-z])mod(?=\\s*[-+]?\\d)",
+      "axis": "operation",
+      "value": "modulo",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "high",
+      "ambiguity": [
+        "may describe a premise or verification rather than an executed operation"
+      ]
+    },
+    {
+      "rule_id": "operation.superscript-square.v1",
+      "pattern": "²",
+      "axis": "operation",
+      "value": "exponentiation",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "high"
+    }
+  ],
+  "lexical_rules": [
+    {
+      "rule_id": "operation.addition-lexeme.v1",
+      "terms": [
+        "add",
+        "added",
+        "adding",
+        "addition",
+        "plus",
+        "sum",
+        "total"
+      ],
+      "axis": "operation",
+      "value": "addition",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "lexeme may describe a premise or rejected operation"
+      ]
+    },
+    {
+      "rule_id": "operation.subtraction-lexeme.v1",
+      "terms": [
+        "subtract",
+        "subtracted",
+        "subtracting",
+        "subtraction",
+        "minus",
+        "difference"
+      ],
+      "axis": "operation",
+      "value": "subtraction",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "lexeme may describe a premise or rejected operation"
+      ]
+    },
+    {
+      "rule_id": "operation.multiplication-lexeme.v1",
+      "terms": [
+        "multiply",
+        "multiplied",
+        "multiplying",
+        "multiplication",
+        "product"
+      ],
+      "axis": "operation",
+      "value": "multiplication",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "lexeme may describe a premise or rejected operation"
+      ]
+    },
+    {
+      "rule_id": "operation.division-lexeme.v1",
+      "terms": [
+        "divide",
+        "divided",
+        "dividing",
+        "division",
+        "quotient"
+      ],
+      "axis": "operation",
+      "value": "division",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "lexeme may describe a premise or rejected operation"
+      ]
+    },
+    {
+      "rule_id": "operation.modulo-lexeme.v1",
+      "terms": [
+        "modulo",
+        "remainder"
+      ],
+      "axis": "operation",
+      "value": "modulo",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "high",
+      "ambiguity": [
+        "may describe a premise or verification rather than an executed operation"
+      ]
+    },
+    {
+      "rule_id": "operation.exponentiation-lexeme.v1",
+      "terms": [
+        "exponent",
+        "exponentiate",
+        "exponentiation",
+        "power",
+        "squared",
+        "cubed"
+      ],
+      "axis": "operation",
+      "value": "exponentiation",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "power has common non-arithmetic meanings"
+      ]
+    },
+    {
+      "rule_id": "operation.comparison-lexeme.v1",
+      "terms": [
+        "smallest",
+        "largest",
+        "minimum",
+        "maximum",
+        "less than",
+        "greater than",
+        "compare",
+        "compared"
+      ],
+      "axis": "operation",
+      "value": "order_comparison",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "comparison may be quoted or discussed rather than executed"
+      ]
+    },
+    {
+      "rule_id": "operation.transition-lexeme.v1",
+      "terms": [
+        "move to",
+        "moves to",
+        "transition",
+        "transitions",
+        "next state",
+        "current state",
+        "outgoing edge",
+        "follow the edge",
+        "follow the reference"
+      ],
+      "axis": "operation",
+      "value": "state_transition",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium"
+    },
+    {
+      "rule_id": "domain.graph-state-lexeme.v1",
+      "terms": [
+        "node",
+        "edge",
+        "outgoing",
+        "incoming",
+        "graph",
+        "state",
+        "section",
+        "reference",
+        "citation_index"
+      ],
+      "axis": "domain",
+      "value": "graph_or_state",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "state and reference have non-graph meanings"
+      ]
+    },
+    {
+      "rule_id": "operation.lookup-lexeme.v1",
+      "terms": [
+        "look up",
+        "lookup",
+        "table",
+        "mapping",
+        "dictionary"
+      ],
+      "axis": "operation",
+      "value": "lookup",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "table and mapping may refer to input structure rather than an executed lookup"
+      ]
+    },
+    {
+      "rule_id": "operation.decode-lexeme.v1",
+      "terms": [
+        "decode",
+        "decoded",
+        "decoding",
+        "encode",
+        "encoded",
+        "encoding",
+        "cipher",
+        "shift the letter",
+        "substitute"
+      ],
+      "axis": "operation",
+      "value": "encoding_or_decoding",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium"
+    },
+    {
+      "rule_id": "domain.symbolic-text-lexeme.v1",
+      "terms": [
+        "string",
+        "character",
+        "letter",
+        "word",
+        "cipher",
+        "decoded string"
+      ],
+      "axis": "domain",
+      "value": "symbolic_text",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "word may be metalinguistic rather than a transformed object"
+      ]
+    },
+    {
+      "rule_id": "operation.counting-lexeme.v1",
+      "terms": [
+        "count",
+        "counted",
+        "counting",
+        "number of steps",
+        "how many"
+      ],
+      "axis": "operation",
+      "value": "counting",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium"
+    },
+    {
+      "rule_id": "process.verification-cue.v1",
+      "terms": [
+        "verify",
+        "verified",
+        "check",
+        "checking",
+        "double-check",
+        "correct"
+      ],
+      "axis": "process_role",
+      "value": "verification_cue",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "correct may be an adjective or a claim rather than actual verification"
+      ]
+    },
+    {
+      "rule_id": "operation.verification-cue.v1",
+      "terms": [
+        "verify",
+        "verified",
+        "check",
+        "checking",
+        "double-check"
+      ],
+      "axis": "operation",
+      "value": "verification",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium"
+    },
+    {
+      "rule_id": "process.correction-cue.v1",
+      "terms": [
+        "correction",
+        "mistake",
+        "error",
+        "actually",
+        "rather",
+        "I was wrong"
+      ],
+      "axis": "process_role",
+      "value": "correction_cue",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "actually and rather often serve discourse functions without correcting a computation"
+      ]
+    },
+    {
+      "rule_id": "operation.correction-cue.v1",
+      "terms": [
+        "correction",
+        "mistake",
+        "error",
+        "I was wrong"
+      ],
+      "axis": "operation",
+      "value": "correction",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium"
+    },
+    {
+      "rule_id": "process.planning-cue.v1",
+      "terms": [
+        "let's",
+        "let us",
+        "I need to",
+        "we need to",
+        "first",
+        "next",
+        "then"
+      ],
+      "axis": "process_role",
+      "value": "planning_cue",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "low",
+      "ambiguity": [
+        "first, next, and then can describe task data or temporal sequence rather than planning"
+      ]
+    },
+    {
+      "rule_id": "process.uncertainty-cue.v1",
+      "terms": [
+        "maybe",
+        "perhaps",
+        "I think",
+        "likely",
+        "probably",
+        "not sure",
+        "hmm",
+        "wait"
+      ],
+      "axis": "process_role",
+      "value": "uncertainty_cue",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium"
+    },
+    {
+      "rule_id": "discourse.conclusion-cue.v1",
+      "terms": [
+        "therefore",
+        "thus",
+        "hence",
+        "so the answer",
+        "final answer",
+        "the answer is"
+      ],
+      "axis": "discourse_role",
+      "value": "conclusion_cue",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "may introduce a tentative or repeated answer"
+      ]
+    }
+  ],
+  "detectors": [
+    {
+      "rule_id": "operation.arithmetic-symbol.v1",
+      "detector": "arithmetic_symbols",
+      "symbols": {
+        "+": "addition",
+        "-": "subtraction",
+        "*": "multiplication",
+        "×": "multiplication",
+        "/": "division",
+        "÷": "division",
+        "%": "modulo",
+        "^": "exponentiation"
+      },
+      "axis": "operation",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "local syntax looks arithmetic but may quote a premise or rejected computation"
+      ]
+    },
+    {
+      "rule_id": "representation.operator-symbol.v1",
+      "detector": "arithmetic_symbols",
+      "symbols": {
+        "+": "operator_symbol",
+        "-": "operator_symbol",
+        "*": "operator_symbol",
+        "×": "operator_symbol",
+        "/": "operator_symbol",
+        "÷": "operator_symbol",
+        "%": "operator_symbol",
+        "^": "operator_symbol"
+      },
+      "axis": "representation",
+      "interpretation": "observable_or_local_syntax",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "representation.json-answer.v1",
+      "detector": "json_answers",
+      "axis": "representation",
+      "interpretation": "observable_or_local_syntax",
+      "confidence": "high"
+    },
+    {
+      "rule_id": "process.numeric-relation-result.v1",
+      "detector": "numeric_relation_results",
+      "axis": "process_role",
+      "value": "intermediate_result_candidate",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "the relation may be a premise, assignment, transition, or incorrect computation"
+      ]
+    }
+  ],
+  "token_assignment_contract": {
+    "within_axis": "zero_or_one_effective_value_per_authoritative_response_token",
+    "across_axes": "independent_values_may_overlap_on_the_same_token",
+    "surface_compound_policy": "two_or_more_distinct_machine_surface_form_values_on_one_token_project_to_compound_surface",
+    "semantic_conflict_policy": "two_or_more_distinct_machine_values_on_any_other_axis_remain_explicit_unresolved_conflicts"
+  }
+}
+
