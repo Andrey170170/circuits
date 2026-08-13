@@ -70,3 +70,21 @@ Python compilation, and diff checks. No replacement artifact was built after the
 review began, and no trace, graph, cluster, or label output was opened. The next action is an
 interactive UI smoke test followed by a newly versioned automatic-corpus rebuild and independent
 review; only that later version may begin human annotation.
+
+## 2026-08-13 — Canonical automatic annotations and token-painting workstation
+
+The replacement `process-witness-graph-blind-auto-v5` artifact is now the canonical automatic
+draft for human review. It contains all 188 frozen responses, 842,007 authoritative response
+tokens, and 786,924 graph-blind suggestions. Independent validation reproduced every source,
+token, record, compact projection, payload, implementation, and manifest identity with zero
+errors. The compact 32.9 MB workstation bundle is the sole canonical browser input; individual
+record loading remains diagnostic.
+
+The v5 workstation implements one-response-at-a-time exact-token painting, independent axis
+layers, machine paint plus manual overrides, clear and revert-to-machine brushes, prompt/task
+context, navigation/search, append-only review events, per-response/axis completion, and
+provenance-bound export/resume. A real Chrome run loaded all 188 responses in 3.213 seconds and
+passed painting, axis switching, clear/revert/undo, review completion, export, and fresh-page
+resume with no console errors. The earlier v4 artifact is preserved but superseded because its UI
+performed quadratic Unicode slicing during bundle import. No human response/axis has yet been
+reviewed, and these machine suggestions are not accepted semantic labels or process truth.

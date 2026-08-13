@@ -803,7 +803,11 @@ append-only provenance-rich events; rules distinguish apostrophes and guard non-
 percentages; terminal JSON detection fails closed. Seven focused tests, Ruff, Python compilation,
 and diff checks pass.
 
-No replacement automatic artifact or human review is frozen at this checkpoint. The next action is
-an interactive UI smoke test, then a newly versioned full-corpus build whose manifest binds the
-final source bytes, followed by independent review. No tracing or target-bank selection may begin
-from versions 1–3.
+This checkpoint is superseded by the canonical v5 automatic draft. The read-only artifact is at
+`/scratch/general/vast/u1653998/circuits/results/process_witness/annotations/process-witness-graph-blind-auto-v5`.
+It contains 188 responses, 842,007 tokens, and 786,924 suggestions; manifest SHA-256 is
+`1385e81297e61564f68be9919ac279909b5c6034f995c08e85177b83a385ea19`, and compact workstation
+bundle SHA-256 is `8bfc493e7db0b7c62f9dd1204a698f241b8d73fec43d34634a2a4e0e1ffac299`.
+Independent artifact audit and real-bundle browser QA passed. Only the compact
+`workstation-bundle.json` is canonical for human annotation. Versions 1–4 are preserved but
+superseded; no human review or tracing has yet begun.
