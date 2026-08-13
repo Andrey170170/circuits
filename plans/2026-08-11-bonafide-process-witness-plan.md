@@ -608,8 +608,17 @@ include the final natural-EOS token `151645`; the persisted raw response intenti
 decoded `<|im_end|>` text. The smoke therefore clears broad generation for submission under
 protocol v2 and immutable request bundle v3.
 
-1. Submit and retain all 558 predeclared broad-generation draws using the frozen resumable L40S
-   lane; after completion, apply only the frozen mechanical first-admissible selection rule.
+Production broad-generation job 1791893 was submitted on 2026-08-12 and entered active decoding
+on `grn009` with a healthy L40S. It loaded all 558 frozen rows and began batch 1 of 70. Its
+provenance directory is
+`/scratch/rai/vast1/u1653998/bonafide/runs/qwen3-4b-thinking-2507-process-witness-broad-v1/1791893`,
+and its materialized output target is
+`/scratch/rai/vast1/u1653998/bonafide/campaigns/qwen3-4b-thinking-2507-process-witness-broad-v1/attempts/protocol-v2-production.csv`.
+If interrupted, resume only through the protocol-v2 launcher with `--resume`; the existing run
+config and content-addressed attempt store are authoritative and fail closed on drift.
+
+1. Monitor job 1791893, validate all 558 raw attempts and their immutable records after completion,
+   then apply only the frozen mechanical first-admissible selection rule.
 2. Build the deterministic process ledgers and token-aware region-annotation page.
 3. Paint and review process and surface-reference regions, derive token targets, apply the exact
    T5 target-context resource gate, and freeze the hashed three-class annotation manifest and
