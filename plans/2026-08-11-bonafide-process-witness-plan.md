@@ -2,8 +2,9 @@
 
 Status: **central protocol; the architecture and historical-reconstruction choice are accepted.
 Step-0 input inventories are frozen in version 1 and the bounded T5 landmark gate passed. The
-Thinking-specific broad-generation lane is being frozen; production tracing remains gated by
-target-context resource tests and the graph-blind region inventory.**
+Thinking-specific broad-generation lane and its L40S runtime are frozen in protocol version 2,
+and the live smoke gate passed. Production tracing remains gated by target-context resource tests
+and the graph-blind region inventory.**
 
 This is the governing plan for the new process-witness campaign. Where it conflicts with
 `docs/ADAG_BONAFIDE_NAIVE_PILOT.md` or `docs/TRACING_CORPUS_PLAN.md`, this plan governs the new
@@ -583,37 +584,37 @@ Generation remains blind to that later target-context gate.
 
 The Thinking broad-generation lane is frozen at 47 fit prompts, 186 logical response slots, and
 three predeclared draws per slot (558 physical requests), using the recovered historical system
-message and Qwen Thinking template. Non-scientific smoke job 1790394 completed on a healthy L40S:
-four rows, 9,921 completion tokens, four immutable attempt records, natural EOS for every response,
-captured and aligned token IDs/logprobs, and a finalized content-addressed run manifest. The exact
-source commit is `7c1c39db7427f384262b99b68c299aadf350584a`; the source-tree hash is
-`a36065ad539bb98d11edbb3e0a66b038db8ab832378048f9166cb0284fc438e1`.
+message and Qwen Thinking template. Protocol version 2 resolves the graph instruction conflict
+mechanically: a graph response may end in either its exact prompt-declared two-key JSON schema or
+the exact historical-system `final_answer` schema; complex responses remain `final_answer` only.
+The rule checks serialization and nonempty values but never correctness, faithfulness,
+interestingness, or response length. Protocol v1 and request bundles v1/v2 remain immutable.
 
-The smoke exposed one production blocker. The longest graph prompt contains a task-native two-key
-JSON instruction, while the recovered historical system message requires exactly `final_answer`.
-That response followed the system schema and was rejected by the current v1 mechanical selector.
-Do not submit the 558-request production campaign from protocol v1/request bundle v2. Resolve the
-instruction conflict explicitly in a new protocol and request-bundle version; do not mutate v1/v2.
-The leading proposal is to accept either the exact nonempty system schema or the exact nonempty
-prompt-declared schema, while continuing to ignore correctness, faithfulness, interestingness, and
-response length. This proposal must be frozen and smoke-tested before production.
+The production request bundle is immutable v3: request-grid SHA-256
+`77aab64b05cff413da1c6b450a0e02e78026f9d39775e6a96178414a9f762f81` and manifest SHA-256
+`9b96044e8b9dd7d8f19e49611388a97e706acac7f067ce6e619becaa611d4323`.
+The protocol-v2 canonical SHA-256 is
+`4e3949f33818b36a38b573a48015480bad79bace5e5699282fc489267dff07cd`.
+The L40S runtime is frozen for every physical draw in this protocol version; the launcher and batch
+script fail closed on a different GPU profile or unhealthy accelerator.
 
-The configured H100 route is also not currently usable: the allocated grn008 accelerator reported
-`GPU Recovery Action: Reboot`, uncorrectable ECC errors, and a remapped uncorrectable row. The lane
-now fails closed on GPU health. A healthy L40S passed the smoke, but changing the production GPU
-profile is a provenance-bearing runtime decision and remains unfrozen.
+Non-scientific protocol-v2 smoke job 1791871 completed on a healthy L40S at source commit
+`7a5dac95c5bf456caccb3a51acb8137bcd5a242e`: four rows, 9,921 completion tokens, four
+content-addressed attempt records, natural EOS for every response, and captured aligned token IDs
+and logprobs. Exact frozen-row joins, completion and attempt identities, prompt tokenization,
+answer-schema admissibility, run provenance, and GPU-health hashes passed. The output CSV SHA-256
+is `b91b9ef1cef5463fb404563b6772e9650e2b5f7e40c4a74611c10e31add32dc3`. Saved completion IDs
+include the final natural-EOS token `151645`; the persisted raw response intentionally omits the
+decoded `<|im_end|>` text. The smoke therefore clears broad generation for submission under
+protocol v2 and immutable request bundle v3.
 
-1. Freeze a conflict-aware mechanical answer-suffix rule in generation protocol v2 and derive a
-   new content-addressed request bundle; retain all three predeclared draws and all raw outputs.
-2. Repeat the four-request graph/short-prompt smoke and require a complete manifest plus mechanical
-   admissibility under the new rule.
-3. Freeze the production GPU choice: wait for a healthy H100 allocation or explicitly version the
-   campaign for L40S. Only then submit broad generation.
-4. Build the deterministic process ledgers and token-aware region-annotation page.
-5. Paint and review process and surface-reference regions, derive token targets, apply the exact
+1. Submit and retain all 558 predeclared broad-generation draws using the frozen resumable L40S
+   lane; after completion, apply only the frozen mechanical first-admissible selection rule.
+2. Build the deterministic process ledgers and token-aware region-annotation page.
+3. Paint and review process and surface-reference regions, derive token targets, apply the exact
    T5 target-context resource gate, and freeze the hashed three-class annotation manifest and
    `Q_process` tiers.
-6. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
+4. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
    states on small synthetic or smoke-test artifacts.
-7. Freeze the atlas selection/execution bundle; only then submit the production atlas and dense
+5. Freeze the atlas selection/execution bundle; only then submit the production atlas and dense
    trace campaigns.
