@@ -608,22 +608,40 @@ include the final natural-EOS token `151645`; the persisted raw response intenti
 decoded `<|im_end|>` text. The smoke therefore clears broad generation for submission under
 protocol v2 and immutable request bundle v3.
 
-Production broad-generation job 1791893 was submitted on 2026-08-12 and entered active decoding
-on `grn009` with a healthy L40S. It loaded all 558 frozen rows and began batch 1 of 70. Its
+Production broad-generation job 1791893 completed on 2026-08-12 with scheduler state `COMPLETED`,
+exit code 0, and elapsed time 2:08:19 on `grn009`. It generated all 558 frozen rows, containing
+2,513,759 completion tokens, on a healthy L40S. Its
 provenance directory is
 `/scratch/rai/vast1/u1653998/bonafide/runs/qwen3-4b-thinking-2507-process-witness-broad-v1/1791893`,
 and its materialized output target is
 `/scratch/rai/vast1/u1653998/bonafide/campaigns/qwen3-4b-thinking-2507-process-witness-broad-v1/attempts/protocol-v2-production.csv`.
-If interrupted, resume only through the protocol-v2 launcher with `--resume`; the existing run
-config and content-addressed attempt store are authoritative and fail closed on drift.
+The output CSV SHA-256 is
+`1c341b41fb13635ce8a9ed84a905f479966641e9e55fb8ac88c0336a2b477b7b`; its 558-record
+content-addressed attempt-store tree SHA-256 is
+`4818180508c5d60206a814d8e777f200dc5a8a205fb95ff4505377432b74e7df`.
+Independent validation recomputed every completion and attempt identity, exact CSV/store join,
+token/logprob alignment, and frozen request/protocol/source binding. One physical attempt reached
+the 32,768-token generation limit, but the other two attempts for that slot ended naturally.
 
-1. Monitor job 1791893, validate all 558 raw attempts and their immutable records after completion,
-   then apply only the frozen mechanical first-admissible selection rule.
-2. Build the deterministic process ledgers and token-aware region-annotation page.
-3. Paint and review process and surface-reference regions, derive token targets, apply the exact
+Applying the frozen protocol-v2 mechanical rule finds 526 admissible and 32 rejected physical
+attempts. First-admissible selection succeeds for 182 of 186 logical slots: attempt index 0 supplies
+175 slots, index 1 supplies six, and index 2 supplies one. Four slots fail closed because all three
+attempts contain the frozen immediate-block repetition witness. Three failures belong to the same
+`complex` string-decoding prompt (leaving one of its four slots), and one belongs to a `graph`
+prompt (leaving three of its four slots). The selector CLI also needs a non-semantic engineering
+fix to raise Python's CSV field-size limit before it can process the long-response production CSV.
+Do not publish an imbalanced 182-slot atlas cohort or generate ad hoc retries. Freeze a new cohort
+policy/version after explicitly choosing between a mechanically defined backfill and a
+prompt-balanced exclusion/reduction rule.
+
+1. Fix and test the selector's CSV field-size handling without changing protocol-v2 admissibility.
+2. Freeze a versioned resolution for the four failed slots; do not choose it by answer correctness,
+   faithfulness, interestingness, or traceability.
+3. Build the deterministic process ledgers and token-aware region-annotation page.
+4. Paint and review process and surface-reference regions, derive token targets, apply the exact
    T5 target-context resource gate, and freeze the hashed three-class annotation manifest and
    `Q_process` tiers.
-4. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
+5. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
    states on small synthetic or smoke-test artifacts.
-5. Freeze the atlas selection/execution bundle; only then submit the production atlas and dense
+6. Freeze the atlas selection/execution bundle; only then submit the production atlas and dense
    trace campaigns.
