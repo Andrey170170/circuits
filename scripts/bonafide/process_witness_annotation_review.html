@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Process-witness annotation review</title>
+  <style>
+    :root { color-scheme: light; font: 15px/1.45 system-ui, sans-serif; }
+    body { margin: 0; background: #f5f3ee; color: #252521; }
+    header { padding: 1rem 1.4rem; background: #25342d; color: #fff; }
+    header h1 { margin: 0 0 .25rem; font-size: 1.2rem; }
+    header p { margin: 0; color: #dce7e0; }
+    main { display: grid; grid-template-columns: minmax(16rem, 23rem) 1fr; gap: 1rem; padding: 1rem; }
+    section { background: #fff; border: 1px solid #d8d3c8; border-radius: .55rem; padding: 1rem; }
+    label { display: block; margin: .65rem 0 .2rem; font-weight: 650; }
+    input, select, button, textarea { font: inherit; }
+    select, input[type=file], textarea { width: 100%; box-sizing: border-box; }
+    button { padding: .38rem .65rem; cursor: pointer; }
+    .buttons { display: flex; flex-wrap: wrap; gap: .45rem; margin: .75rem 0; }
+    .meta { color: #615e56; font-size: .88rem; overflow-wrap: anywhere; }
+    #context { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 46vh; overflow: auto; padding: .8rem; background: #faf9f6; border: 1px solid #ddd8ce; }
+    mark { background: #ffd86a; padding: .05rem .1rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: .8rem; font-size: .87rem; }
+    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid #e3dfd7; padding: .4rem; }
+    tr { cursor: pointer; }
+    tr[aria-selected=true] { background: #eef4ef; }
+    .status-accepted { color: #176437; }
+    .status-rejected { color: #9a2924; }
+    .status-ambiguous { color: #805a00; }
+    @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Graph-blind annotation review</h1>
+  <p>Suggestions are unreviewed hypotheses. This page loads only local annotation JSON files and exports decisions locally.</p>
+</header>
+<main>
+  <section>
+    <label for="files">Annotation record JSON files</label>
+    <input id="files" type="file" accept="application/json,.json" multiple>
+    <label for="reviewImport">Resume review JSONL</label>
+    <input id="reviewImport" type="file" accept="application/x-ndjson,.jsonl">
+    <label for="response">Response</label>
+    <select id="response"></select>
+    <label for="axis">Axis</label>
+    <select id="axis"><option value="">All axes</option></select>
+    <label for="value">Value contains</label>
+    <input id="value" type="search" placeholder="e.g. division">
+    <div class="buttons">
+      <button id="export" type="button">Export decisions JSONL</button>
+      <button id="clear" type="button">Clear local decisions</button>
+    </div>
+    <p id="counts" class="meta">Load one or more files from the frozen records directory.</p>
+    <p id="messages" class="meta" role="status"></p>
+    <p class="meta">Review status is stored in browser memory until exported. The frozen automatic draft is never modified.</p>
+  </section>
+  <section>
+    <div id="recordMeta" class="meta"></div>
+    <details><summary>Prompt and task metadata</summary><pre id="promptContext"></pre></details>
+    <h2 id="suggestionTitle">Select a suggestion</h2>
+    <div id="context" tabindex="0"></div>
+    <div class="buttons">
+      <button data-decision="accepted" type="button">Accept</button>
+      <button data-decision="rejected" type="button">Reject</button>
+      <button data-decision="ambiguous" type="button">Ambiguous</button>
+      <button data-decision="unreviewed" type="button">Reset</button>
+    </div>
+    <label for="note">Decision note</label>
+    <textarea id="note" rows="2" placeholder="Optional; saved when a decision button is pressed"></textarea>
+    <h3>Add a missed span</h3>
+    <p class="meta">Select text in the context panel, then choose an axis and value. This adds an append-only manual event to the export; it never alters the automatic draft.</p>
+    <label for="manualAxis">Axis</label>
+    <select id="manualAxis">
+      <option>domain</option><option>operation</option><option>process_role</option><option>discourse_role</option><option>representation</option><option>surface_form</option>
+    </select>
+    <label for="manualValue">Ontology value</label>
+    <select id="manualValue"></select>
+    <button id="addSpan" type="button">Add selected span</button>
+    <div class="buttons">
+      <button id="previousPage" type="button">Previous 200</button>
+      <button id="nextPage" type="button">Next 200</button>
+      <span id="pageMeta" class="meta"></span>
+    </div>
+    <table>
+      <thead><tr><th>Status</th><th>Axis</th><th>Value</th><th>Match</th><th>Rule</th></tr></thead>
+      <tbody id="suggestions"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+"use strict";
+const UI_VERSION = "process-witness-annotation-review.v2";
+const PAGE_SIZE = 200;
+const state = { documents: [], selected: null, events: [], latest: new Map(), eventIds: new Set(), page: 0, setIdentity: null };
+const el = id => document.getElementById(id);
+const codePoints = text => Array.from(text);
+const cpSlice = (text, start, end) => codePoints(text).slice(start, end).join("");
+const decisionKey = (responseId, suggestionId) => `${responseId}\u0000${suggestionId}`;
+function selectedDocument() { return state.documents[Number(el("response").value)] || null; }
+function latestDecision(doc, suggestion) { return state.latest.get(decisionKey(doc.response_id, suggestion.suggestion_id)) || {decision:"unreviewed",note:""}; }
+function clearSelection() {
+  state.selected = null;
+  el("context").replaceChildren(); delete el("context").dataset.contextStart; delete el("context").dataset.responseId;
+  el("suggestionTitle").textContent = "Select a suggestion"; el("note").value = "";
+}
+function filteredSuggestions(doc) {
+  const axis=el("axis").value, value=el("value").value.trim().toLowerCase();
+  return doc.suggestions.filter(s => (!axis || s.axis===axis) && (!value || s.value.toLowerCase().includes(value)));
+}
+function populateManualValues(doc) {
+  const axes=doc ? doc.ontology.axes : {};
+  const axis=el("manualAxis"); axis.replaceChildren(...Object.keys(axes).sort().map(value=>new Option(value,value)));
+  populateValueOptions(doc);
+}
+function populateValueOptions(doc) {
+  const values=doc?.ontology.axes[el("manualAxis").value]?.values || [];
+  const select=el("manualValue"); select.replaceChildren(...values.map(value=>new Option(value,value)));
+}
+function setContext(doc, suggestion) {
+  clearSelection(); state.selected=suggestion;
+  const box=el("context"), [start,end]=suggestion.character_span, radius=700;
+  const contextStart=Math.max(0,start-radius), contextEnd=Math.min(codePoints(doc.text).length,end+radius);
+  box.dataset.contextStart=String(contextStart); box.dataset.responseId=doc.response_id;
+  box.append(document.createTextNode(cpSlice(doc.text,contextStart,start)));
+  const mark=document.createElement("mark"); mark.textContent=cpSlice(doc.text,start,end); box.append(mark);
+  box.append(document.createTextNode(cpSlice(doc.text,end,contextEnd)));
+  el("suggestionTitle").textContent=`${suggestion.axis} / ${suggestion.value}`;
+  el("note").value=latestDecision(doc,suggestion).note || "";
+}
+function contextSelection() {
+  const doc=selectedDocument(), selection=window.getSelection(), box=el("context");
+  if (!doc || box.dataset.responseId!==doc.response_id || !selection || selection.rangeCount!==1 || selection.isCollapsed) return null;
+  const range=selection.getRangeAt(0); if (!box.contains(range.commonAncestorContainer)) return null;
+  const before=range.cloneRange(); before.selectNodeContents(box); before.setEnd(range.startContainer,range.startOffset);
+  const start=Number(box.dataset.contextStart)+codePoints(before.toString()).length;
+  const selectedText=range.toString(), end=start+codePoints(selectedText).length, exact=cpSlice(doc.text,start,end);
+  if (!exact || exact!==selectedText) return null;
+  return {doc,start,end,text:exact};
+}
+function tokenSpan(doc,start,end) {
+  const positions=doc.tokenization.tokens.filter(t=>t.character_span[1]>start && t.character_span[0]<end).map(t=>t.position);
+  if (!positions.length) throw new Error("Selected text overlaps no authoritative tokens");
+  return {start:positions[0],end:positions.at(-1)+1};
+}
+function appendEvent(event) {
+  if (!event.event_id) event.event_id=crypto.randomUUID();
+  if (state.eventIds.has(event.event_id)) return false;
+  state.eventIds.add(event.event_id); state.events.push(event);
+  if (event.event_type==="review_suggestion") state.latest.set(decisionKey(event.response_id,event.suggestion_id),event);
+  return true;
+}
+function eventBase(doc) { return {event_id:crypto.randomUUID(),recorded_at:new Date().toISOString(),ui_version:UI_VERSION,annotation_set_id:doc.annotation_set_id,ontology_sha256:doc.ontology.sha256,cohort_id:doc.cohort_id,coordinate_unit:"Unicode_code_point",coordinate_interval:"zero_based_half_open",response_id:doc.response_id,source_annotation_text_sha256:doc.text_sha256,source_record_sha256:doc._loadedRecordSha256}; }
+function render() {
+  const doc=selectedDocument(), tbody=el("suggestions"); tbody.replaceChildren();
+  if (!doc) { el("recordMeta").textContent=""; el("promptContext").textContent=""; return; }
+  el("recordMeta").textContent=`${doc.response_id} · ${doc.response_source} · ${doc.tokenization.token_count} tokens`;
+  el("promptContext").textContent=JSON.stringify(doc.task_context,null,2);
+  const all=filteredSuggestions(doc), pages=Math.max(1,Math.ceil(all.length/PAGE_SIZE)); state.page=Math.min(state.page,pages-1);
+  const visible=all.slice(state.page*PAGE_SIZE,(state.page+1)*PAGE_SIZE);
+  for (const suggestion of visible) {
+    const tr=document.createElement("tr"); tr.setAttribute("aria-selected",String(state.selected?.suggestion_id===suggestion.suggestion_id));
+    const decision=latestDecision(doc,suggestion).decision;
+    for (const value of [decision,suggestion.axis,suggestion.value,JSON.stringify(suggestion.text),suggestion.provenance.rule_id]) { const td=document.createElement("td"); td.textContent=value; tr.append(td); }
+    tr.firstChild.className=`status-${decision}`; tr.addEventListener("click",()=>{setContext(doc,suggestion);render();}); tbody.append(tr);
+  }
+  el("pageMeta").textContent=`Page ${state.page+1}/${pages} · ${visible.length}/${all.length} filtered`;
+  el("previousPage").disabled=state.page===0; el("nextPage").disabled=state.page>=pages-1;
+  el("counts").textContent=`${state.documents.length} responses · ${state.events.length} append-only review events`;
+}
+async function sha256Hex(text) { const bytes=new TextEncoder().encode(text), digest=await crypto.subtle.digest("SHA-256",bytes); return [...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,"0")).join(""); }
+function validateDocument(doc) {
+  if (doc.schema_version!=="adag.process-witness.annotation-draft.v1" || !doc.annotation_set_id || !doc.ontology?.sha256) throw new Error("Unsupported or incomplete annotation record");
+  if (doc.coordinate_system?.character_span_unit!=="Unicode_code_point") throw new Error("Unsupported coordinate unit");
+  for (const suggestion of doc.suggestions) {
+    if (!doc.ontology.axes[suggestion.axis]?.values.includes(suggestion.value)) throw new Error(`Suggestion outside ontology: ${suggestion.suggestion_id}`);
+    const [start,end]=suggestion.character_span; if (cpSlice(doc.text,start,end)!==suggestion.text) throw new Error(`Span mismatch: ${suggestion.suggestion_id}`);
+  }
+}
+el("files").addEventListener("change",async event=>{
+  try {
+    const documents=[];
+    for (const file of event.target.files) { const raw=await file.text(), parsed=JSON.parse(raw); validateDocument(parsed); parsed._loadedRecordSha256=await sha256Hex(raw); documents.push(parsed); }
+    const identities=new Set(documents.map(doc=>`${doc.annotation_set_id}\u0000${doc.ontology.sha256}\u0000${doc.cohort_id}`)); if (identities.size!==1) throw new Error("Mixed annotation sets or ontologies are not allowed");
+    const responseIds=new Set(); for (const doc of documents) { if(responseIds.has(doc.response_id)) throw new Error(`Duplicate response ${doc.response_id}`); responseIds.add(doc.response_id); }
+    documents.sort((a,b)=>a.response_id.localeCompare(b.response_id)); state.documents=documents; state.setIdentity=documents[0]||null; clearSelection(); state.page=0;
+    const response=el("response"); response.replaceChildren(...documents.map((doc,index)=>new Option(doc.response_id,String(index))));
+    const axes=Object.keys(documents[0]?.ontology.axes||{}).sort(); el("axis").replaceChildren(new Option("All axes",""),...axes.map(value=>new Option(value,value))); populateManualValues(documents[0]);
+    el("messages").textContent=`Loaded ${documents.length} validated records.`; render();
+  } catch(error) { el("messages").textContent=`Load failed: ${error.message}`; }
+});
+el("reviewImport").addEventListener("change",async event=>{
+  try { const lines=(await event.target.files[0].text()).split(/\r?\n/).filter(line=>line.trim()), before=state.events.length; for(const line of lines){const row=JSON.parse(line);if(row.schema_version==="adag.process-witness.annotation-review-export.v1")continue;if(!row.event_id||!row.event_type)throw new Error("Review event lacks identity/type");appendEvent(row);} el("messages").textContent=`Imported ${state.events.length-before} new review events.`; render(); } catch(error){el("messages").textContent=`Import failed: ${error.message}`;}
+});
+for(const id of ["response","axis"]){el(id).addEventListener("change",()=>{clearSelection();state.page=0;populateManualValues(selectedDocument());render();});}
+el("value").addEventListener("input",()=>{clearSelection();state.page=0;render();});
+el("manualAxis").addEventListener("change",()=>populateValueOptions(selectedDocument()));
+el("previousPage").addEventListener("click",()=>{clearSelection();state.page=Math.max(0,state.page-1);render();});
+el("nextPage").addEventListener("click",()=>{clearSelection();state.page+=1;render();});
+document.querySelectorAll("button[data-decision]").forEach(button=>button.addEventListener("click",()=>{
+  const doc=selectedDocument(), suggestion=state.selected; if(!doc||!suggestion||el("context").dataset.responseId!==doc.response_id)return;
+  appendEvent({...eventBase(doc),schema_version:"adag.process-witness.annotation-review.v1",event_type:"review_suggestion",suggestion_id:suggestion.suggestion_id,suggestion_fingerprint:{character_span:suggestion.character_span,axis:suggestion.axis,value:suggestion.value,rule_id:suggestion.provenance.rule_id},decision:button.dataset.decision,note:el("note").value}); render();
+}));
+el("clear").addEventListener("click",()=>{if(confirm("Clear all unexported/imported review events?")){state.events=[];state.latest.clear();state.eventIds.clear();clearSelection();render();}});
+el("addSpan").addEventListener("click",()=>{
+  try { const selected=contextSelection(); if(!selected)throw new Error("Select text from the currently displayed response context"); const axis=el("manualAxis").value,value=el("manualValue").value,allowed=selected.doc.ontology.axes[axis]?.values||[]; if(!allowed.includes(value))throw new Error("Axis/value is outside the frozen ontology"); appendEvent({...eventBase(selected.doc),schema_version:"adag.process-witness.annotation-manual-event.v1",event_type:"add_span",character_span:[selected.start,selected.end],token_span:tokenSpan(selected.doc,selected.start,selected.end),text:selected.text,axis,value,review_status:"human_added",note:el("note").value}); clearSelection(); render(); } catch(error){el("messages").textContent=error.message;}
+});
+el("export").addEventListener("click",()=>{
+  const identity=state.setIdentity; if(!identity){el("messages").textContent="Load annotation records before export.";return;}
+  const header={schema_version:"adag.process-witness.annotation-review-export.v1",export_id:crypto.randomUUID(),exported_at:new Date().toISOString(),ui_version:UI_VERSION,annotation_set_id:identity.annotation_set_id,ontology_sha256:identity.ontology.sha256,cohort_id:identity.cohort_id,coordinate_unit:"Unicode_code_point",events:state.events.length};
+  const rows=[header,...state.events],blob=new Blob([rows.map(row=>JSON.stringify(row)).join("\n")+"\n"],{type:"application/x-ndjson"}),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="process-witness-review.jsonl";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
+</script>
+</body>
+</html>

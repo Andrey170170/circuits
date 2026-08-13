@@ -38,3 +38,35 @@ annotations, balanced trace panels, matched atlas mixtures, held-out evaluation,
 algorithmic, sampling, annotation, labeling, and composition-null noise floors. This is a proposed
 protocol adjustment pending refinement; no graph or clustering output has been opened for it.
 
+## 2026-08-13 — Polysemanticity validation accepted; first annotation pass authorized
+
+The pre-witness quality gate is now part of the central protocol. Annotation uses independent
+semantic, process-role, discourse, representation, surface, and token-position axes rather than a
+single forced class. Automatic rules provide reviewable suggestions and must be inspected against
+raw responses before scaling. Exact measurements may be refined after trace fields and coverage
+are known, but must freeze before cluster assignments, labels, semantic-composition comparisons,
+or dense witnesses are opened. T5 remains primary. The exact frozen target bank may also be traced
+with CU5 in parallel under separate, sealed artifacts for later method-development evidence; CU5
+does not itself establish that ADAG modification is necessary.
+
+## 2026-08-13 — Automatic annotation bootstrap and strict-review stop
+
+Automatic drafts through `process-witness-graph-blind-auto-v3` were built for all 188 frozen
+responses using the exact Qwen Thinking tokenizer and response-relative character spans projected
+onto verified continuation token identities. It contains 842,007 response tokens and 786,932
+overlapping suggestions. The structural audit passed. Raw per-rule inspection caught and removed
+avoidable first-pass mistakes including list bullets crossing newlines into subtraction matches,
+Markdown asterisks treated as multiplication, decimal dots treated as sentence terminators,
+backticks treated as quotes, hard-coded JSON answer keys, and missed attached-modulo and Unicode
+operator forms.
+
+Strict review then blocked human use of those artifacts. It found stale response context in the
+review UI, missing prompt/task context, underspecified ontology and review provenance, excessive
+apostrophe-as-quote and percentage-as-modulo matches, and insufficient UI scaling/resume checks.
+Versions 1–3 are preserved but superseded.
+
+The implementation checkpoint fixes those findings and passes seven focused tests plus Ruff,
+Python compilation, and diff checks. No replacement artifact was built after the fixes, no human
+review began, and no trace, graph, cluster, or label output was opened. The next action is an
+interactive UI smoke test followed by a newly versioned automatic-corpus rebuild and independent
+review; only that later version may begin human annotation.

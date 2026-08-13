@@ -4,8 +4,10 @@ Status: **central protocol; the architecture and historical-reconstruction choic
 Step-0 input inventories are frozen in version 1, the bounded T5 landmark gate passed, and the
 balanced 188-response atlas-response cohort is frozen as
 `qwen3-thinking-process-witness-atlas-responses-backfilled-v2`. The cohort is not yet a fitted
-atlas: production tracing remains gated by graph-blind region annotation, response balancing,
-and target-context resource tests.**
+atlas. Before any witness inspection, the study will test whether ADAG's global signed-neuron
+clustering and cluster labels remain meaningful under controlled semantic mixture. Production
+tracing remains gated by graph-blind annotation, response balancing, and target-context resource
+tests.**
 
 This is the governing plan for the new process-witness campaign. Where it conflicts with
 `docs/ADAG_BONAFIDE_NAIVE_PILOT.md` or `docs/TRACING_CORPUS_PLAN.md`, this plan governs the new
@@ -250,6 +252,29 @@ cluster states, or generated labels. The annotation interface must support at le
 5. explicit surface-reference regions such as punctuation, whitespace/control delimiters,
    function words, and discourse filler.
 
+The first annotation version must not collapse these judgments into one flat class. It records
+independent, reviewable axes at both event/span and token level:
+
+- semantic domain and task family;
+- operation or state transition, allowing multiple values and `unknown`;
+- process role, including input/operand, operation cue, intermediate result, state update,
+  verification/correction, and final result;
+- discourse role and answer-commitment status;
+- representation type, surface form, and serialization/syntactic role;
+- token position within an annotated event: onset, interior, terminal, or following separator;
+- correctness or attempted/ambiguous status, kept separate from semantic type;
+- suggestion source, review state, annotator revision, and ambiguity notes.
+
+Automatic annotation may classify observable form broadly but is not semantic ground truth. Use
+high-precision regular expressions, lexical rules, or another deterministic local classifier to
+suggest numbers, operators, equations, JSON structure, delimiters, punctuation, whitespace,
+answer markers, and explicit operation words. A human reviews those suggestions and supplies or
+corrects process roles and operations. Preserve both the proposal and reviewed value; permit
+`unknown`, `ambiguous`, and multi-label annotations rather than forcing complete semantic coverage.
+Audit a stratified sample of raw suggestions before accepting the first draft so avoidable token
+boundary, sign, decimal, Markdown, JSON, delimiter, and operation-word errors are corrected before
+manual review scales up.
+
 Manual selection is permitted for this exploratory study. Annotators may use the frozen task
 schema, raw prompt/completion, BonaFide annotations, and audited process ledger. Broad attempted
 computations remain eligible whether their values are correct or incorrect. Annotation may not use
@@ -369,7 +394,7 @@ These measurements support the 1,268-token context tier only. Broad historical-f
 prefixes range from 175 to 2,631 tokens, so at least one additional long-prompt resource gate is
 required before every frozen prompt cell can contribute atlas-fit targets.
 
-## Step 1: build and freeze the atlas
+## Step 1: validate atlas semantics, then build and freeze the atlas
 
 ### 1A. Trace the atlas-fit corpus
 
@@ -382,6 +407,13 @@ required before every frozen prompt cell can contribute atlas-fit targets.
 - Preserve one independent graph artifact per response position.
 - Do not merge target-local graphs in the tracing pipeline.
 - Record observed-token rank/membership at every position.
+
+Strict T5 remains the primary scientific trace family. After one graph-blind union target bank is
+frozen, an exact-target CU5 sidecar may trace the same bank in parallel under a separate manifest,
+artifact namespace, and resource plan. CU5 output is retained as method-development information
+and cannot be used to claim that ADAG needs modification, select the T5 quality endpoint, or repair
+a disappointing T5 atlas post hoc. Any T5/CU5 comparison opens only after its comparison protocol
+and the T5 cluster/label-quality measurements are frozen.
 
 The primary atlas follows upstream's uniform-over-context aggregation, but its contexts are the
 frozen `process_atlas_fit` panels rather than uniform all-token samples. Use the response-balancing
@@ -400,11 +432,27 @@ frozen prompt/response exemplar caps. Full dense traces are produced once and pr
 rather than redundantly retraced. Surface-reference traces are opened for projection and comparison
 only after the primary atlas freezes.
 
-### 1B. Fit clusters label-blind
+### 1B. Fit matched candidate atlases label-blind
 
 Construct input-attribution and output-contribution profiles using only the frozen atlas-fit
 corpus. Select normalization, cluster state, and stability settings without looking for attractive
 process labels or opening the dense reserve case.
+
+Before choosing a witness atlas, fit an equal-budget composition series from the same saved trace
+bank. The exact viable cells and counts freeze after the graph-blind annotation-yield inventory,
+but before any cluster or label output is opened. The intended progression is:
+
+1. one well-supported operation by one process role;
+2. the same operation across roles;
+3. multiple operations at one matched role;
+4. balanced arithmetic operations by roles;
+5. balanced arithmetic plus non-arithmetic process domains;
+6. a separately named surface-matched mixture sensitivity.
+
+Hold total contexts and prompt/response contribution fixed within each direct comparison. Sample
+hierarchically by prompt, response, process event, then token; adjacent subtokens from one event are
+not independent contexts. All sibling completions of one prompt stay in the same evaluation fold.
+Count prompt-level support and use prompt-held-out projection for semantic evaluation.
 
 Use a predeclared cluster-count sweep rather than assuming the paper's task-specific value transfers
 to this broader outright-task corpus. Increasing `k` is a complementary resolution choice, not a
@@ -430,10 +478,41 @@ Retain:
 - exact exemplars and their response/family provenance;
 - unseen-feature application rule.
 
-### 1C. Label and freeze
+### 1C. Label candidate states
 
 Generate cluster descriptions from discovery evidence, retain abstentions and uncertainty, and
-audit proposed labels against exact profile/graph exemplars. Then freeze:
+audit proposed labels against exact profile/graph exemplars. Candidate labels are not yet a witness
+vocabulary. Map them, blind to held-out cluster occurrences, to the frozen annotation ontology or
+abstention and test whether their specificity is supported on held-out prompts.
+
+### 1D. Pre-witness polysemanticity and label-quality gate
+
+ADAG gives each signed `(layer, neuron, polarity)` identity one global cluster assignment. More
+clusters can regroup identities but cannot give one neuron different memberships in different
+contexts. Before dense witness inspection, test whether that representation supports trustworthy
+task-conditional labels when operations, roles, and domains are mixed.
+
+Establish the natural perturbation floor first using repeated clustering seeds, independently
+sampled prompt-balanced panels with identical semantic composition, prompt-blocked resampling,
+frozen repeat traces, label/exemplar resampling, matched surface references, and prompt/event-
+blocked semantic permutations. Refine and freeze the exact metrics after trace artifacts establish
+their available occurrence/profile fields and coverage, but before opening any cluster assignments,
+generated labels, composition comparison, or dense trajectory. Candidate measurements include
+shared-neuron assignment stability, held-out semantic concentration and prediction, label
+calibration and over-specificity, prompt-level support, unassigned attribution mass, and direct
+operation/role collision audits for recurring signed neurons.
+
+Interpret the gate as follows:
+
+- **robust:** semantic mixture remains within the predeclared same-composition perturbation margin
+  and labels stay calibrated at an appropriately broad or specific ontology level;
+- **brittle:** mixture produces excess instability, semantic dilution, or systematically
+  over-specific labels, or context-dependent reuse cannot be represented by the global mapping;
+- **inconclusive:** prompt replication, top-five observed-token coverage, shared-neuron coverage, or
+  semantic/surface separation is insufficient.
+
+This gate evaluates the pruned T5 plus corpus-fitted ADAG representation. It does not establish
+intrinsic neuron monosemanticity or polysemanticity. Only after the gate may the project freeze:
 
 ```text
 signed basis -> cluster
@@ -441,7 +520,9 @@ cluster -> label/evidence bundle or abstention
 ```
 
 Do not change the cluster state because a label is disappointing, and do not relabel after viewing
-the reserve trajectory. The complete frozen object is the **atlas**.
+the dense trajectories. If the gate is brittle, first establish that modification is required and
+version a new method; CU5 or a context-conditional representation may motivate later engineering
+but is not an automatic replacement. The complete passing, frozen object is the **atlas**.
 
 ## Step 2: build dense bottleneck graph trajectories
 
@@ -692,11 +773,37 @@ The first frozen cohort directory (`atlas-responses-backfilled-v1`, manifest SHA
 superseded. Version 2 adds exact freeze-implementation identities and source-run bindings; only
 version 2 is admitted downstream.
 
-1. Build the deterministic process ledgers and token-aware region-annotation page.
-2. Paint and review process and surface-reference regions, derive token targets, apply the exact
+1. Build annotation ontology v1, deterministic suggestion rules, and the graph-blind token-aware
+   review page; inspect a stratified raw sample and correct obvious automatic-rule errors.
+2. Paint and review process and surface-reference regions, derive a balanced union target bank,
+   apply the exact
    T5 target-context resource gate, and freeze the hashed three-class annotation manifest and
    `Q_process` tiers.
-3. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
+3. Trace the union bank once with T5; optionally trace the exact bank with CU5 in a separate,
+   sealed sidecar namespace.
+4. Freeze the cluster/label-quality metrics and natural perturbation floor before opening candidate
+   atlas outputs; run the matched semantic-composition series and decide robust/brittle/inconclusive.
+5. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
    states on small synthetic or smoke-test artifacts.
-4. Freeze the atlas selection/execution bundle; only then submit the production atlas and dense
-   trace campaigns.
+6. Only after a passing method-quality gate, freeze the atlas and open dense trajectories for
+   witness discovery.
+
+### 2026-08-13 annotation implementation checkpoint
+
+Automatic bootstrap artifacts `process-witness-graph-blind-auto-v1` through `auto-v3` span all 188
+responses and 842,007 response tokens, but are superseded and inadmissible for human review. Their
+structural integrity passed; strict review nevertheless found stale UI response context, absent
+prompt/task display, incomplete ontology and provenance validation, excessive apostrophe/quote and
+percentage/modulo matches, and inadequate pagination/resume safeguards.
+
+The code checkpoint fixes those findings: documents carry prompt/task context and an expanded
+multi-axis ontology; the review UI binds selections to response identity, uses Unicode code-point
+coordinates, validates ontology values, paginates, imports prior JSONL decisions, and exports
+append-only provenance-rich events; rules distinguish apostrophes and guard non-arithmetic
+percentages; terminal JSON detection fails closed. Seven focused tests, Ruff, Python compilation,
+and diff checks pass.
+
+No replacement automatic artifact or human review is frozen at this checkpoint. The next action is
+an interactive UI smoke test, then a newly versioned full-corpus build whose manifest binds the
+final source bytes, followed by independent review. No tracing or target-bank selection may begin
+from versions 1–3.
