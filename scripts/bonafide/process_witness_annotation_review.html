@@ -280,7 +280,7 @@
 
 <script>
 "use strict";
-const UI_VERSION = "process-witness-token-painter.v4";
+const UI_VERSION = "process-witness-token-painter.v5";
 const BUNDLE_SCHEMA = "adag.process-witness.annotation-workstation-bundle.v1";
 const DRAFT_SCHEMA = "adag.process-witness.annotation-draft.v1";
 const EXPORT_SCHEMA = "adag.process-witness.annotation-paint-export.v1";
@@ -295,7 +295,13 @@ const state = {
 };
 const el = function(id) { return document.getElementById(id); };
 const cp = function(text) { return Array.from(text); };
-const cpSlice = function(text, start, end) { return cp(text).slice(start, end).join(""); };
+const documentCodepoints = function(document) {
+  if (!document._codepoints) document._codepoints = cp(document.text);
+  return document._codepoints;
+};
+const documentSlice = function(document, start, end) {
+  return documentCodepoints(document).slice(start, end).join("");
+};
 const manualKey = function(responseId, axis, position) { return responseId + "\u0000" + axis + "\u0000" + position; };
 const axisKey = function(responseId, axis) { return responseId + "\u0000" + axis; };
 const currentDocument = function() { return state.documents[state.current] || null; };
@@ -315,9 +321,10 @@ async function sha256Hex(text) {
   return Array.from(new Uint8Array(digest)).map(function(value) { return value.toString(16).padStart(2, "0"); }).join("");
 }
 function normalizeCompactDocument(document, root) {
+  const codepoints = cp(document.text);
   const tokens = document.tokenization.tokens.map(function(token, position) {
     if (!Array.isArray(token) || token.length !== 3 || !Number.isInteger(token[0]) || !Number.isInteger(token[1]) || !Number.isInteger(token[2])) throw new Error("Invalid compact token record for " + document.response_id);
-    return { position: position, token_id: token[0], character_span: [token[1], token[2]], text: cpSlice(document.text, token[1], token[2]) };
+    return { position: position, token_id: token[0], character_span: [token[1], token[2]], text: codepoints.slice(token[1], token[2]).join("") };
   });
   const machine = new Map();
   Object.entries(document.machine_layers || {}).forEach(function(entry) {
@@ -344,10 +351,12 @@ function normalizeCompactDocument(document, root) {
     coordinate_system: root.coordinate_system,
     tokenization: Object.assign({}, document.tokenization, {tokens:tokens}),
     _machine: machine,
+    _codepoints: codepoints,
     _loadedRecordSha256: document.source_annotation_record_sha256
   });
 }
 function normalizeDraftDocument(document) {
+  document._codepoints = cp(document.text);
   const machineSets = new Map();
   (document.suggestions || []).forEach(function(suggestion) {
     const span = suggestion.token_span;
@@ -381,10 +390,10 @@ async function validateDocument(document) {
   let coveredEnd = 0;
   document.tokenization.tokens.forEach(function(token, position) {
     if (token.position !== position || token.character_span[0] > coveredEnd || token.character_span[1] < token.character_span[0]) throw new Error("Token offsets leave a text gap for " + document.response_id);
-    if (cpSlice(document.text, token.character_span[0], token.character_span[1]) !== token.text) throw new Error("Token text mismatch for " + document.response_id);
+    if (documentSlice(document, token.character_span[0], token.character_span[1]) !== token.text) throw new Error("Token text mismatch for " + document.response_id);
     coveredEnd = Math.max(coveredEnd, token.character_span[1]);
   });
-  if (coveredEnd !== cp(document.text).length) throw new Error("Tokens do not cover the complete response " + document.response_id);
+  if (coveredEnd !== documentCodepoints(document).length) throw new Error("Tokens do not cover the complete response " + document.response_id);
 }
 function establishIdentity(documents) {
   const identities = new Set(documents.map(function(document) {
@@ -496,7 +505,7 @@ function validateEvent(event) {
   if (!span || !Number.isInteger(span.start) || !Number.isInteger(span.end) || span.start < 0 || span.end > document.tokenization.token_count || span.start >= span.end) throw new Error("Review event has invalid token span");
   const expectedCharacterSpan = tokenCharacterSpan(document, span.start, span.end);
   if (!Array.isArray(event.character_span) || event.character_span.length !== 2 || event.character_span[0] !== expectedCharacterSpan[0] || event.character_span[1] !== expectedCharacterSpan[1]) throw new Error("Review event character span does not match its token span");
-  if (event.text !== cpSlice(document.text, expectedCharacterSpan[0], expectedCharacterSpan[1])) throw new Error("Review event text does not match its token span");
+  if (event.text !== documentSlice(document, expectedCharacterSpan[0], expectedCharacterSpan[1])) throw new Error("Review event text does not match its token span");
   if (event.operation === "paint" && !state.identity.ontology.axes[event.axis].values.includes(event.value)) throw new Error("Review event value is outside the ontology");
   if (!["paint","erase","revert_to_machine"].includes(event.operation)) throw new Error("Unknown review operation");
   if (event.operation !== "paint" && event.value !== null) throw new Error("Non-paint review events must have a null value");
@@ -566,7 +575,7 @@ function makeEvent(document, axis, operation, value, start, end, gestureId, reve
     value: operation === "paint" ? value : null,
     token_span: {start:start,end:end},
     character_span: characterSpan,
-    text: cpSlice(document.text, characterSpan[0], characterSpan[1])
+    text: documentSlice(document, characterSpan[0], characterSpan[1])
   });
 }
 function axisStatusEvent(document, axis, status, reason) {
@@ -711,7 +720,7 @@ function renderDocument() {
     span.tabIndex = 0;
     span.setAttribute("role","button");
     const visibleStart = Math.max(renderedEnd, token.character_span[0]);
-    const visibleText = cpSlice(activeDocument.text, visibleStart, token.character_span[1]);
+    const visibleText = documentSlice(activeDocument, visibleStart, token.character_span[1]);
     span.textContent = visibleText;
     if (token.character_span[0] < renderedEnd) span.classList.add("overlap-fragment");
     renderedEnd = Math.max(renderedEnd, token.character_span[1]);

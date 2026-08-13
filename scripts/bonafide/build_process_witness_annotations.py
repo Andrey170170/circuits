@@ -42,7 +42,7 @@ CHAT_TEMPLATE_SHA256 = (
 )
 MODEL_REVISION = "768f209d9ea81521153ed38c47d515654e938aea"
 MANIFEST_SCHEMA_VERSION = "adag.process-witness.annotation-set-manifest.v1"
-REVIEW_UI_VERSION = "process-witness-token-painter.v4"
+REVIEW_UI_VERSION = "process-witness-token-painter.v5"
 
 
 def parse_args() -> argparse.Namespace:

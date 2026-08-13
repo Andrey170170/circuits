@@ -259,13 +259,13 @@ def test_workstation_bundle_compacts_surface_conflicts_but_preserves_semantic_on
     bundle = build_workstation_bundle(
         [document],
         source_record_sha256s=["d" * 64],
-        review_ui_version="process-witness-token-painter.v4",
+        review_ui_version="process-witness-token-painter.v5",
         review_ui_sha256="e" * 64,
     )
     compact = bundle["documents"][0]
     assert bundle["schema_version"].endswith("workstation-bundle.v1")
     assert bundle["review_ui"] == {
-        "version": "process-witness-token-painter.v4",
+        "version": "process-witness-token-painter.v5",
         "sha256": "e" * 64,
     }
     assert compact["tokenization"]["tokens"] == [[123, 0, len(text)]]
@@ -305,11 +305,13 @@ def test_review_ui_is_token_painter_with_bound_provenance() -> None:
     assert "span.tabIndex = 0" in html
     assert 'span.setAttribute("aria-label"' in html
     assert 'node.classList.contains("overlap-fragment")' in html
-    assert 'const UI_VERSION = "process-witness-token-painter.v4"' in html
+    assert 'const UI_VERSION = "process-witness-token-painter.v5"' in html
     builder = (
         Path(__file__).parents[1]
         / "scripts/bonafide/build_process_witness_annotations.py"
     ).read_text(encoding="utf-8")
-    assert 'REVIEW_UI_VERSION = "process-witness-token-painter.v4"' in builder
+    assert 'REVIEW_UI_VERSION = "process-witness-token-painter.v5"' in builder
+    assert "const documentCodepoints" in html
+    assert "cpSlice(document.text" not in html
     assert '"--annotation-set-id"' in builder
     assert "required=True" in builder
