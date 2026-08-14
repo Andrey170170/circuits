@@ -67,14 +67,17 @@ def load_ontology(path: Path) -> dict[str, Any]:
     """Load an ontology, resolving a hash-pinned local extension when requested."""
 
     ontology = json.loads(path.read_text(encoding="utf-8"))
-    if ontology.get("schema_version") == "adag.process-witness.annotation-ontology.v3":
+    if ontology.get("schema_version") in {
+        "adag.process-witness.annotation-ontology.v3",
+        "adag.process-witness.annotation-ontology.v4",
+    }:
         base_name = ontology.get("extends")
         base_sha256 = ontology.get("base_ontology_sha256")
         if not isinstance(base_name, str) or Path(base_name).name != base_name:
-            raise ValueError("v3 ontology extends must be a sibling file name")
+            raise ValueError("extended ontology base must be a sibling file name")
         base_path = path.parent / base_name
         if file_sha256(base_path) != base_sha256:
-            raise ValueError("v3 base ontology hash drift")
+            raise ValueError("base ontology hash drift")
         base = load_ontology(base_path)
         resolved = deepcopy(base)
         for key in (
@@ -93,7 +96,7 @@ def load_ontology(path: Path) -> dict[str, Any]:
             resolved["axes"][axis] = deepcopy(definition)
         for axis, values in ontology.get("axis_value_extensions", {}).items():
             if axis not in resolved["axes"]:
-                raise ValueError(f"v3 extends unknown axis {axis!r}")
+                raise ValueError(f"ontology extends unknown axis {axis!r}")
             existing = resolved["axes"][axis]["values"]
             existing.extend(value for value in values if value not in existing)
         disabled = set(ontology.get("disabled_rule_ids", []))
@@ -107,9 +110,10 @@ def load_ontology(path: Path) -> dict[str, Any]:
             **resolved.get("token_assignment_contract", {}),
             **ontology.get("token_assignment_contract", {}),
         }
-        resolved["machine_projection_precedence"] = deepcopy(
-            ontology.get("machine_projection_precedence", {})
-        )
+        resolved["machine_projection_precedence"] = {
+            **resolved.get("machine_projection_precedence", {}),
+            **deepcopy(ontology.get("machine_projection_precedence", {})),
+        }
         resolved["extension_provenance"] = {
             "extends": base_name,
             "base_ontology_sha256": base_sha256,
@@ -119,12 +123,13 @@ def load_ontology(path: Path) -> dict[str, Any]:
         "adag.process-witness.annotation-ontology.v1",
         "adag.process-witness.annotation-ontology.v2",
         "adag.process-witness.annotation-ontology.v3",
+        "adag.process-witness.annotation-ontology.v4",
     }:
         raise ValueError("unsupported annotation ontology schema")
     axes = ontology.get("axes")
     if not isinstance(axes, dict) or not axes:
         raise ValueError("ontology axes must be a non-empty object")
-    if ontology["schema_version"].endswith((".v2", ".v3")):
+    if ontology["schema_version"].endswith((".v2", ".v3", ".v4")):
         contract = ontology.get("token_assignment_contract", {})
         if contract.get("within_axis") != (
             "zero_or_one_effective_value_per_authoritative_response_token"
@@ -321,11 +326,7 @@ def _json_answer_matches(
 
 
 def _numeric_relation_matches(text: str, rule: Mapping[str, Any]) -> Iterator[Match]:
-    # The capture is intentionally restricted to a numeric RHS.  It may still be an
-    # assignment or quoted premise, hence hypothesis/medium rather than truth/high.
-    pattern = re.compile(r"(?:=|→|->)\s*(?P<result>-?\d+(?:\.\d+)?)")
-    for found in pattern.finditer(text):
-        start, end = found.span("result")
+    for start, end in _immediate_relation_result_spans(text):
         yield Match(
             start=start,
             end=end,
@@ -378,15 +379,26 @@ _ARITHMETIC_SYMBOL_VALUES = {
     "²": "exponentiation",
 }
 _CORRECTION_RE = re.compile(
-    r"\b(?:mistake|wrong|correction|reconsider|hold on)\b",
+    r"\b(?:mistake|wrong|correction|reconsider|hold on|"
+    r"correct(?:ing|ed)?\s+(?:myself|this|that|the\s+(?:step|calculation|result)))\b",
     re.IGNORECASE,
 )
-_VERIFICATION_RE = re.compile(
-    r"\b(?:check|verify|confirm|double-check|ensure|validate)\w*\b",
+_VERIFICATION_STRONG_RE = re.compile(
+    r"\b(?:verify|confirm|double-check|validate|makes? sense|consistent)\w*\b",
+    re.IGNORECASE,
+)
+_VERIFICATION_CHECK_RE = re.compile(
+    r"\bcheck(?:ing|ed)?\b(?=[^.?!\n]*(?:calculation|result|work|steps?|again|"
+    r"\d+\s*(?:=|→|->)))",
+    re.IGNORECASE,
+)
+_NEGATED_SENSE_RE = re.compile(
+    r"\b(?:does(?:n't| not)|do(?:n't| not)|did(?:n't| not)|not)\s+make\s+sense\b",
     re.IGNORECASE,
 )
 _UNCERTAINTY_RE = re.compile(
-    r"\b(?:wait|maybe|perhaps|likely|probably|not sure|hmm|I think|seems)\b",
+    r"\b(?:wait|maybe|perhaps|likely|probably|not sure|hmm|I think|seems|"
+    r"(?:does(?:n't| not)|do(?:n't| not)|did(?:n't| not)|not)\s+make\s+sense)\b",
     re.IGNORECASE,
 )
 _CONCLUSION_RE = re.compile(
@@ -401,13 +413,36 @@ _PLANNING_RE = re.compile(
 )
 _RESTATING_RE = re.compile(
     r"\b(?:(?:the\s+)?(?:user|problem|question|task)\s+(?:asks|wants|says|gives|"
-    r"provides|requires)|we\s+(?:are|have)\s+given|given\s+(?:that|the))\b",
+    r"provides|requires)|we\s+(?:are|have)\s+given|given\s+that)\b",
     re.IGNORECASE,
 )
-_STATE_RE = re.compile(
-    r"\b(?:state|node|edge|move(?:s|d)?\s+to|transition(?:s|ed)?|"
-    r"current\s+(?:state|node)|next\s+(?:state|node)|citation_index|"
-    r"follow(?:ing)?\s+(?:the\s+)?(?:edge|reference))\b",
+_INSTRUCTION_RE = re.compile(
+    r"(?:\b(?:problem|rules?|instructions?|task|user|question)\s+"
+    r"(?:says?|asks?|wants?|gives?|provides?|requires?)\b|\blisted\s+as\b|"
+    r"\bthe\s+(?:task|goal)\s+is\b|\b(?:objective|aim)(?:\s+is|\s*:)|"
+    r"\bthe\s+task\s+involves\b|"
+    r"\byou\s+(?:need|must|should)\b|^\s*[\"'`]+(?:move|update|follow|choose|"
+    r"return|start|stop)\b)",
+    re.IGNORECASE,
+)
+_LOOKUP_RE = re.compile(
+    r"\b(?:look(?:ing|ed)\s+(?:at|up)|consult(?:ing|ed)|"
+    r"(?:I|we)\s+(?:(?:am|are)\s+)?check(?:ing|ed)?\s+"
+    r"(?:all\s+)?(?:the\s+)?(?:references?|outgoing|edges?|list|table|mapping)|"
+    r"from\s+the\s+"
+    r"(?:references?|list|table)|(?:I|we)\s+(?:find|found)\s+the\s+"
+    r"(?:entry|reference|edge))\b",
+    re.IGNORECASE,
+)
+_LOOKUP_IMPERATIVE_RE = re.compile(r"^\s*(?:then\s+)?(?:check|find)\b", re.IGNORECASE)
+_STATE_EXECUTION_RE = re.compile(
+    r"\b(?:move(?:d)?\s+to|transition(?:ed)?\s+to|"
+    r"(?:now|current|next)\s+(?:state|node)\s+(?:is|=)|"
+    r"follow(?:ed|ing)?\s+(?:the\s+)?edge\b[^.?!\n]*\bto)\b",
+    re.IGNORECASE,
+)
+_STATE_EXECUTION_VERB_RE = re.compile(
+    r"\b(?:move(?:d)?|transition(?:ed)?|follow(?:ed|ing)?)\b",
     re.IGNORECASE,
 )
 _COMPARISON_RE = re.compile(
@@ -415,13 +450,137 @@ _COMPARISON_RE = re.compile(
     r"compare(?:d)?|choose|select)\b",
     re.IGNORECASE,
 )
-_ENCODING_RE = re.compile(
-    r"\b(?:decode|decoded|decoding|encode|encoded|encoding|cipher|"
-    r"substitute|shift the letter)\b",
+_ENCODING_ACTIVE_RE = re.compile(
+    r"\b(?:decode|decodes|decoded|decoding|encode|encodes|encoding|reverse|"
+    r"reverses|reversed|reversing|swap|swaps|swapped|swapping|substitute|"
+    r"substitutes|substituted|substituting|shift|shifts|shifted|shifting)\b",
     re.IGNORECASE,
 )
-_NUMBER_RE = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.]|\.\d)")
+_ENCODING_RESULT_RE = re.compile(
+    r"\b(?:decode|encode|reverse|swap|substitute|shift)\w*\b"
+    r"[^.?!\n]*(?:\b(?:give|gives|get|gets|yield\w*|result\w*|"
+    r"become|becomes|produce|produces|turns? into|now)\b|→|->)",
+    re.IGNORECASE,
+)
+_ENCODING_OUTPUT_RE = re.compile(
+    r"\b(?:decode|encode|reverse|swap|substitute|shift)\w*\b"
+    r"[^.?!\n]*\b(?:to|as)\s+(?:[\"'`]|[A-Z0-9])"
+)
+_ENCODING_NONEXECUTED_RE = re.compile(
+    r"\b(?:need|plan|intend|aim|want|have)\s+to\b|\b(?:will|would|should|could|"
+    r"might|may)\b|\bif\b|\b(?:task|goal|objective|instruction)\b|"
+    r"\b(?:for example|sometimes|background)\b|\b(?:is|are|was|were)\s+done\b",
+    re.IGNORECASE,
+)
+_RESULT_CUE_RE = re.compile(
+    r"\b(?:get|gets|got|give|gives|gave|yield|yields|yielded|result(?:s|ed)?|"
+    r"becomes?|compute[ds]?|calculat(?:e|es|ed|ing)|therefore|thus|hence)\b",
+    re.IGNORECASE,
+)
+_NUMBER_RE = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?!\w|\.\d)")
 _RELATION_RE = re.compile(r"(?<![<>=!])=(?!=)|→|->")
+
+
+def _immediate_relation_result_spans(text: str) -> list[tuple[int, int]]:
+    """Return conservative numeric RHS spans, never a later coefficient/value."""
+
+    output: list[tuple[int, int]] = []
+    for relation in _RELATION_RE.finditer(text):
+        result = re.match(
+            r"\s*(?P<result>-?\d+(?:\.\d+)?)(?!\w|\.\d)", text[relation.end() :]
+        )
+        if result is None:
+            continue
+        start = relation.end() + result.start("result")
+        end = relation.end() + result.end("result")
+        if re.match(r"\s*(?:[+*/%^×÷]|-(?=\s*\d))", text[end:]):
+            continue
+        clause_start = (
+            max(
+                text.rfind("\n", 0, relation.start()),
+                text.rfind(";", 0, relation.start()),
+                text.rfind(":", 0, relation.start()),
+                text.rfind(",", 0, relation.start()),
+                text.rfind("→", 0, relation.start()),
+                text.rfind("->", 0, relation.start()),
+            )
+            + 1
+        )
+        lhs = text[clause_start : relation.start()].strip()
+        context = text[max(clause_start, relation.start() - 40) : relation.start()]
+        if re.search(r"\binitial\b", context, re.IGNORECASE):
+            continue
+        if (
+            relation.group() == "="
+            and re.fullmatch(r"[A-Za-z_][\w.]*", lhs)
+            and not _RESULT_CUE_RE.search(context)
+        ):
+            continue
+        if relation.group() != "=" and not (
+            _STATE_EXECUTION_RE.search(context)
+            or re.search(r"[+*/%^×÷]", context)
+            or _RESULT_CUE_RE.search(context)
+        ):
+            continue
+        output.append((start, end))
+    return output
+
+
+_TITLE_ENTITY_RE = re.compile(r"(?:[A-Z][A-Za-z0-9_-]*)(?:\s+[A-Z][A-Za-z0-9_-]*){0,5}")
+_SCALAR_ENTITY_RE = re.compile(r"(?:[A-Za-z_][\w-]*|-?\d+(?:\.\d+)?)")
+
+
+def _arrow_endpoint_span(
+    unit: str, arrow: re.Match[str], *, side: str
+) -> tuple[int, int] | None:
+    """Capture a full title-case arrow entity, scalar, or identifier; else abstain."""
+
+    if side == "source":
+        segment = unit[: arrow.start()]
+        title = re.search(rf"(?P<value>{_TITLE_ENTITY_RE.pattern})\s*$", segment)
+        scalar = re.search(rf"(?P<value>{_SCALAR_ENTITY_RE.pattern})\s*$", segment)
+        found = title or scalar
+        return found.span("value") if found else None
+    segment = unit[arrow.end() :]
+    title = re.match(rf"\s*(?P<value>{_TITLE_ENTITY_RE.pattern})(?![\w-])", segment)
+    scalar = re.match(rf"\s*(?P<value>{_SCALAR_ENTITY_RE.pattern})(?![\w-])", segment)
+    found = title or scalar
+    if found is None:
+        return None
+    start, end = found.span("value")
+    return arrow.end() + start, arrow.end() + end
+
+
+def _is_state_entity(value: str) -> bool:
+    """Accept title-case entities or explicit identifier-shaped names only."""
+
+    return bool(
+        re.fullmatch(_TITLE_ENTITY_RE, value)
+        or re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*_[A-Za-z0-9_-]+", value)
+    )
+
+
+def _validated_state_arrows(
+    unit: str,
+) -> list[tuple[re.Match[str], tuple[int, int], tuple[int, int]]]:
+    """Return arrows with two nonnumeric entity endpoints and no formula syntax."""
+
+    without_arrows = re.sub(r"→|->", "", unit)
+    if "=" in without_arrows or re.search(r"[+*/%^×÷]", without_arrows):
+        return []
+    output: list[tuple[re.Match[str], tuple[int, int], tuple[int, int]]] = []
+    for arrow in re.finditer(r"→|->", unit):
+        source = _arrow_endpoint_span(unit, arrow, side="source")
+        destination = _arrow_endpoint_span(unit, arrow, side="destination")
+        if source is None or destination is None:
+            continue
+        if not (
+            _is_state_entity(unit[source[0] : source[1]])
+            and _is_state_entity(unit[destination[0] : destination[1]])
+        ):
+            continue
+        output.append((arrow, source, destination))
+    return output
 
 
 def _terminal_serialization_span(text: str) -> tuple[int, int] | None:
@@ -520,24 +679,57 @@ def _arithmetic_evidence(unit: str) -> tuple[set[str], list[tuple[int, int, str]
     return operations, cues
 
 
-def _unit_phase(unit: str, *, is_serialization: bool, has_event: bool) -> str:
+def _unit_phase(
+    unit: str,
+    *,
+    is_serialization: bool,
+    instruction: bool,
+    lookup: bool,
+    verification: bool,
+    has_executed_event: bool,
+) -> str:
     if is_serialization:
         return "answer_serialization"
+    if instruction:
+        return "instruction_or_task_description"
     if _CORRECTION_RE.search(unit):
         return "correction_or_reconsideration"
-    if _VERIFICATION_RE.search(unit):
-        return "verification"
     if _CONCLUSION_RE.search(unit):
         return "conclusion"
     if _UNCERTAINTY_RE.search(unit):
         return "uncertainty_or_deliberation"
-    if _PLANNING_RE.search(unit) and not has_event:
+    if _PLANNING_RE.search(unit) and not has_executed_event:
         return "planning"
-    if _RESTATING_RE.search(unit) and not has_event:
+    if lookup:
+        return "reference_lookup_or_reading"
+    if verification:
+        return "verification"
+    if _RESTATING_RE.search(unit) and not has_executed_event:
         return "orientation_or_restating"
-    if has_event:
+    if has_executed_event:
         return "working_or_derivation"
     return "unclassified_or_other"
+
+
+def _quoted_spans(text: str) -> list[tuple[int, int]]:
+    """Return paired double-quote spans for conservative instruction gating."""
+
+    output: list[tuple[int, int]] = []
+    open_start: int | None = None
+    for found in re.finditer(r'["“”]', text):
+        marker = found.group()
+        if marker == "“":
+            open_start = found.start()
+        elif marker == "”" and open_start is not None:
+            output.append((open_start, found.end()))
+            open_start = None
+        elif marker == '"':
+            if open_start is None:
+                open_start = found.start()
+            else:
+                output.append((open_start, found.end()))
+                open_start = None
+    return output
 
 
 def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[Match]:
@@ -545,32 +737,86 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
 
     serialization = _terminal_serialization_span(text)
     process_rule = rule["rule_id"]
+    conservative = rule.get("event_modality") == "conservative_v7"
+    quoted_spans = _quoted_spans(text) if conservative else []
     for start, end in _text_units(text):
         unit = text[start:end]
         is_serialization = serialization == (start, end)
         numbers = list(_NUMBER_RE.finditer(unit))
         operations, operator_cues = _arithmetic_evidence(unit)
         relations = list(_RELATION_RE.finditer(unit))
-        arrow_evidence = bool(re.search(r"→|->", unit))
-        state_evidence = bool(_STATE_RE.search(unit)) or arrow_evidence
-        comparison_evidence = bool(_COMPARISON_RE.search(unit))
-        encoding_evidence = bool(_ENCODING_RE.search(unit))
-        arithmetic_evidence = bool(operations) and (
-            len(numbers) >= 2 or bool(relations)
+        valid_state_arrows = _validated_state_arrows(unit) if conservative else []
+        arrow_evidence = (
+            bool(valid_state_arrows) if conservative else bool(re.search(r"→|->", unit))
         )
-        has_event = any(
+        quoted_imperative = any(
+            quote_start < start < quote_end
+            and re.match(
+                r"\s*(?:\d+\.\s*)?(?:move|update|follow|choose|return|start|stop)\b",
+                unit,
+                re.IGNORECASE,
+            )
+            for quote_start, quote_end in quoted_spans
+        )
+        lookup_imperative = conservative and bool(_LOOKUP_IMPERATIVE_RE.search(unit))
+        instruction = conservative and bool(
+            _INSTRUCTION_RE.search(unit) or quoted_imperative or lookup_imperative
+        )
+        lookup = conservative and not instruction and bool(_LOOKUP_RE.search(unit))
+        verification = bool(
+            _VERIFICATION_STRONG_RE.search(unit) or _VERIFICATION_CHECK_RE.search(unit)
+        ) and not (instruction or lookup or _NEGATED_SENSE_RE.search(unit))
+        result_spans = set(_immediate_relation_result_spans(unit))
+        arithmetic_syntax = bool(operations) and (len(numbers) >= 2 or bool(relations))
+        arithmetic_evidence = arithmetic_syntax and (
+            not conservative
+            or (
+                not instruction
+                and (bool(result_spans) or bool(_RESULT_CUE_RE.search(unit)))
+            )
+        )
+        state_execution = not instruction and bool(_STATE_EXECUTION_RE.search(unit))
+        state_schema = conservative and arrow_evidence and not state_execution
+        comparison_evidence = bool(_COMPARISON_RE.search(unit)) and (
+            not conservative
+            or (
+                not instruction
+                and bool(
+                    re.search(
+                        r"\b(?:is|are|choose|select|selected)\b", unit, re.IGNORECASE
+                    )
+                )
+            )
+        )
+        encoding_evidence = bool(_ENCODING_ACTIVE_RE.search(unit)) and not instruction
+        if conservative:
+            encoding_evidence = (
+                encoding_evidence
+                and bool(
+                    _ENCODING_RESULT_RE.search(unit) or _ENCODING_OUTPUT_RE.search(unit)
+                )
+                and not bool(_ENCODING_NONEXECUTED_RE.search(unit))
+            )
+        correction = bool(_CORRECTION_RE.search(unit)) and not instruction
+        has_executed_event = any(
             (
                 is_serialization,
                 arithmetic_evidence,
-                state_evidence,
+                state_execution,
                 comparison_evidence,
                 encoding_evidence,
-                bool(_VERIFICATION_RE.search(unit)),
-                bool(_CORRECTION_RE.search(unit)),
+                lookup,
+                verification,
+                correction,
             )
         )
         phase = _unit_phase(
-            unit, is_serialization=is_serialization, has_event=has_event
+            unit,
+            is_serialization=is_serialization,
+            instruction=instruction,
+            lookup=lookup,
+            verification=verification,
+            has_executed_event=has_executed_event,
         )
         yield Match(
             start,
@@ -588,17 +834,23 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
         event_value: str | None = None
         if is_serialization:
             event_value = "answer_event_candidate"
-        elif _CORRECTION_RE.search(unit):
+        elif state_schema:
+            event_value = "state_relation_or_schema_candidate"
+        elif instruction:
+            event_value = None
+        elif correction:
             event_value = "correction_event_candidate"
-        elif _VERIFICATION_RE.search(unit):
+        elif lookup:
+            event_value = "reference_lookup_event_candidate"
+        elif verification:
             event_value = "verification_event_candidate"
         elif phase == "conclusion":
             event_value = "answer_event_candidate"
-        elif arithmetic_evidence and state_evidence:
+        elif arithmetic_evidence and state_execution:
             event_value = "state_update_with_arithmetic"
         elif arithmetic_evidence:
             event_value = "arithmetic_event_candidate"
-        elif state_evidence:
+        elif state_execution:
             event_value = "state_transition_event_candidate"
         elif comparison_evidence:
             event_value = "comparison_or_selection_event_candidate"
@@ -617,7 +869,10 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
             ("candidate event span does not establish execution or correctness",),
         )
 
-        if arithmetic_evidence:
+        if event_value in {
+            "arithmetic_event_candidate",
+            "state_update_with_arithmetic",
+        }:
             operation = (
                 next(iter(operations)) if len(operations) == 1 else "mixed_arithmetic"
             )
@@ -640,7 +895,7 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
                 "semantic_hypothesis",
                 "medium",
             )
-        elif state_evidence:
+        elif event_value == "state_transition_event_candidate":
             yield Match(
                 start,
                 end,
@@ -650,7 +905,83 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
                 "semantic_hypothesis",
                 "medium",
             )
-        elif comparison_evidence:
+            for evidence in _STATE_EXECUTION_RE.finditer(unit):
+                for cue in _STATE_EXECUTION_VERB_RE.finditer(
+                    unit, evidence.start(), evidence.end()
+                ):
+                    yield Match(
+                        start + cue.start(),
+                        start + cue.end(),
+                        "operation",
+                        "state_transition",
+                        f"{process_rule}.cue.state-transition",
+                        "semantic_hypothesis",
+                        "medium",
+                    )
+        elif event_value == "state_relation_or_schema_candidate":
+            yield Match(
+                start,
+                end,
+                "event_operation",
+                "state_relation_or_schema",
+                f"{process_rule}.operation.state-relation-or-schema",
+                "semantic_hypothesis",
+                "medium",
+                ("arrow relation may be task data or schema rather than execution",),
+            )
+        elif event_value == "reference_lookup_event_candidate":
+            yield Match(
+                start,
+                end,
+                "event_operation",
+                "lookup",
+                f"{process_rule}.operation.lookup",
+                "semantic_hypothesis",
+                "medium",
+            )
+        elif event_value == "verification_event_candidate":
+            yield Match(
+                start,
+                end,
+                "event_operation",
+                "verification",
+                f"{process_rule}.operation.verification",
+                "semantic_hypothesis",
+                "medium",
+            )
+            for cue in (
+                *_VERIFICATION_STRONG_RE.finditer(unit),
+                *_VERIFICATION_CHECK_RE.finditer(unit),
+            ):
+                yield Match(
+                    start + cue.start(),
+                    start + cue.end(),
+                    "operation",
+                    "verification",
+                    f"{process_rule}.cue.verification",
+                    "semantic_hypothesis",
+                    "medium",
+                )
+                yield Match(
+                    start + cue.start(),
+                    start + cue.end(),
+                    "process_role",
+                    "verification_cue",
+                    f"{process_rule}.role.verification-cue",
+                    "semantic_hypothesis",
+                    "medium",
+                )
+        elif event_value == "correction_event_candidate":
+            yield Match(
+                start,
+                end,
+                "event_operation",
+                "correction",
+                f"{process_rule}.operation.correction",
+                "semantic_hypothesis",
+                "medium",
+            )
+        elif event_value == "comparison_or_selection_event_candidate":
             yield Match(
                 start,
                 end,
@@ -660,7 +991,7 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
                 "semantic_hypothesis",
                 "medium",
             )
-        elif encoding_evidence:
+        elif event_value == "encoding_or_decoding_event_candidate":
             yield Match(
                 start,
                 end,
@@ -670,90 +1001,112 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
                 "semantic_hypothesis",
                 "medium",
             )
-
-        for cue_start, cue_end, _ in operator_cues:
-            yield Match(
-                start + cue_start,
-                start + cue_end,
-                "process_role",
-                "operator_cue",
-                f"{process_rule}.role.operator-cue",
-                "semantic_hypothesis",
-                "medium",
-            )
-
-        result_starts: set[int] = set()
-        for relation in relations:
-            result = next(
-                (number for number in numbers if number.start() >= relation.end()), None
-            )
-            if result is not None:
-                result_starts.add(result.start())
-        if (
-            not result_starts
-            and arithmetic_evidence
-            and len(numbers) >= 3
-            and re.search(
-                r"\b(?:get|gets|got|give|gives|yield|yields|result)\b",
-                unit,
-                re.IGNORECASE,
-            )
-        ):
-            result_starts.add(numbers[-1].start())
-        for number in numbers:
-            prefix = unit[max(0, number.start() - 12) : number.start()]
-            if re.search(r"(?:step|stage|match|sentence)\s*$", prefix, re.IGNORECASE):
-                continue
-            values = ["operand_candidate"]
-            if phase == "conclusion":
-                values.append("final_result")
-            elif number.start() in result_starts:
-                values.append("intermediate_result_candidate")
-            for value in values:
+            for cue in _ENCODING_ACTIVE_RE.finditer(unit):
                 yield Match(
-                    start + number.start(),
-                    start + number.end(),
-                    "process_role",
-                    value,
-                    f"{process_rule}.role.{value}",
+                    start + cue.start(),
+                    start + cue.end(),
+                    "operation",
+                    "encoding_or_decoding",
+                    f"{process_rule}.cue.encoding",
                     "semantic_hypothesis",
-                    "high" if is_serialization else "medium",
-                    ("role is inferred from local event syntax, not correctness",),
+                    "medium",
                 )
 
-        if state_evidence:
-            arrows = list(re.finditer(r"→|->", unit))
-            for arrow in arrows:
-                source = re.search(
-                    r"(?P<value>[A-Za-z_][\w-]*|-?\d+(?:\.\d+)?)\s*$",
-                    unit[: arrow.start()],
+        if event_value in {
+            "arithmetic_event_candidate",
+            "state_update_with_arithmetic",
+        }:
+            for cue_start, cue_end, _ in operator_cues:
+                yield Match(
+                    start + cue_start,
+                    start + cue_end,
+                    "process_role",
+                    "operator_cue",
+                    f"{process_rule}.role.operator-cue",
+                    "semantic_hypothesis",
+                    "medium",
                 )
-                if source:
+
+        result_starts = {result_start for result_start, _ in result_spans}
+        if not result_starts and arithmetic_evidence:
+            for number in reversed(numbers):
+                prefix = unit[max(0, number.start() - 32) : number.start()]
+                if re.search(
+                    r"\b(?:get|gets|got|give|gives|gave|yield|yields|yielded|"
+                    r"result(?:s)?(?:\s+is)?|become|becomes|became)\s*$",
+                    prefix,
+                    re.IGNORECASE,
+                ):
+                    result_starts.add(number.start())
+                    break
+        if event_value in {
+            "arithmetic_event_candidate",
+            "state_update_with_arithmetic",
+        }:
+            for number in numbers:
+                prefix = unit[max(0, number.start() - 12) : number.start()]
+                if re.search(
+                    r"(?:step|stage|match|sentence)\s*$", prefix, re.IGNORECASE
+                ):
+                    continue
+                values = ["operand_candidate"]
+                if number.start() in result_starts:
+                    values.append("intermediate_result_candidate")
+                for value in values:
                     yield Match(
-                        start + source.start("value"),
-                        start + source.end("value"),
+                        start + number.start(),
+                        start + number.end(),
                         "process_role",
-                        "state_value_candidate",
-                        f"{process_rule}.role.state-value",
+                        value,
+                        f"{process_rule}.role.{value}",
                         "semantic_hypothesis",
                         "medium",
+                        ("role is inferred from local event syntax, not correctness",),
                     )
-                destination = re.search(
-                    r"\s*(?P<value>[A-Za-z_][\w-]*|-?\d+(?:\.\d+)?)",
-                    unit[arrow.end() :],
+
+        if arrow_evidence and event_value in {
+            "state_transition_event_candidate",
+            "state_update_with_arithmetic",
+            "state_relation_or_schema_candidate",
+        }:
+            arrow_spans = (
+                valid_state_arrows
+                if conservative
+                else [
+                    (
+                        arrow,
+                        _arrow_endpoint_span(unit, arrow, side="source"),
+                        _arrow_endpoint_span(unit, arrow, side="destination"),
+                    )
+                    for arrow in re.finditer(r"→|->", unit)
+                ]
+            )
+            for _, source, destination in arrow_spans:
+                if source is None or destination is None:
+                    continue
+                yield Match(
+                    start + source[0],
+                    start + source[1],
+                    "process_role",
+                    "state_value_candidate",
+                    f"{process_rule}.role.state-value",
+                    "semantic_hypothesis",
+                    "medium",
                 )
-                if destination:
-                    destination_start = arrow.end() + destination.start("value")
-                    destination_end = arrow.end() + destination.end("value")
-                    yield Match(
-                        start + destination_start,
-                        start + destination_end,
-                        "process_role",
-                        "state_update",
-                        f"{process_rule}.role.state-update",
-                        "semantic_hypothesis",
-                        "medium",
-                    )
+                destination_role = (
+                    "state_value_candidate"
+                    if event_value == "state_relation_or_schema_candidate"
+                    else "state_update"
+                )
+                yield Match(
+                    start + destination[0],
+                    start + destination[1],
+                    "process_role",
+                    destination_role,
+                    f"{process_rule}.role.{destination_role}",
+                    "semantic_hypothesis",
+                    "medium",
+                )
 
 
 def _serialization_segment_matches(
@@ -1562,35 +1915,51 @@ def build_inventory(documents: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 def inspection_examples(
     documents: Iterable[Mapping[str, Any]], *, context_characters: int = 72
 ) -> list[dict[str, Any]]:
-    """Select deterministic boundary and lexical examples for every rule."""
+    """Select deterministic examples stratified across each rule's response support."""
 
-    examples: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    seen_text: dict[str, set[str]] = defaultdict(set)
+    candidates: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for document in documents:
         text = document["text"]
         for suggestion in document["suggestions"]:
             rule_id = suggestion["provenance"]["rule_id"]
-            if len(examples[rule_id]) >= 7:
-                continue
-            matched = suggestion["text"].casefold()
-            if matched in seen_text[rule_id] and len(examples[rule_id]) >= 3:
-                continue
-            seen_text[rule_id].add(matched)
             start, end = suggestion["character_span"]
-            examples[rule_id].append(
-                {
-                    "response_id": document["response_id"],
-                    "suggestion_id": suggestion["suggestion_id"],
-                    "axis": suggestion["axis"],
-                    "value": suggestion["value"],
-                    "match": suggestion["text"],
-                    "context": text[
-                        max(0, start - context_characters) : min(
-                            len(text), end + context_characters
-                        )
-                    ],
-                }
-            )
+            candidate = {
+                "response_id": document["response_id"],
+                "suggestion_id": suggestion["suggestion_id"],
+                "axis": suggestion["axis"],
+                "value": suggestion["value"],
+                "match": suggestion["text"],
+                "context": text[
+                    max(0, start - context_characters) : min(
+                        len(text), end + context_characters
+                    )
+                ],
+            }
+            response_candidates = candidates[rule_id]
+            response_id = document["response_id"]
+            retained = response_candidates.get(response_id)
+            if retained is None or (
+                len(candidate["match"]),
+                candidate["suggestion_id"],
+            ) < (len(retained["match"]), retained["suggestion_id"]):
+                response_candidates[response_id] = candidate
+
+    examples: dict[str, list[dict[str, Any]]] = {}
+    for rule_id, by_response in candidates.items():
+        response_ids = list(by_response)
+        limit = 7
+        if len(response_ids) <= limit:
+            selected_response_ids = response_ids
+        else:
+            selected_response_ids = [
+                response_ids[round(index * (len(response_ids) - 1) / (limit - 1))]
+                for index in range(limit)
+            ]
+        selected: list[dict[str, Any]] = []
+        for response_id in selected_response_ids:
+            candidate = by_response[response_id]
+            selected.append(candidate)
+        examples[rule_id] = selected
     return [
         {"rule_id": rule_id, "examples": examples[rule_id]}
         for rule_id in sorted(examples)

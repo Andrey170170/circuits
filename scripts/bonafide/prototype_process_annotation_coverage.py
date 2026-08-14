@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure graph-blind v3 suggestion coverage on an existing workstation bundle.
+"""Measure versioned graph-blind suggestion coverage on a workstation bundle.
 
 This is a detector-yield diagnostic, not an annotation-quality evaluation and not a
 frozen annotation artifact.

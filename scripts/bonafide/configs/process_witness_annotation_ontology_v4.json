@@ -1,0 +1,96 @@
+{
+  "schema_version": "adag.process-witness.annotation-ontology.v4",
+  "ontology_id": "process-witness-graph-blind-v4",
+  "status": "draft_for_human_review",
+  "claim_boundary": "Observable structure describes frozen text. Discourse phases, process spans, event modalities, operations, and roles are deterministic graph-blind hypotheses from local text only; they do not establish execution, correctness, causality, or faithfulness.",
+  "multi_label": true,
+  "unknown_and_ambiguous_allowed": true,
+  "extends": "process_witness_annotation_ontology_v3.json",
+  "base_ontology_sha256": "0ccc72e2789044e1183a82b93352254bd67cbb158694a7a0feefddf1990c349b",
+  "axis_value_extensions": {
+    "discourse_phase": [
+      "instruction_or_task_description",
+      "reference_lookup_or_reading"
+    ],
+    "process_span": [
+      "state_relation_or_schema_candidate",
+      "reference_lookup_event_candidate"
+    ],
+    "event_operation": [
+      "state_relation_or_schema"
+    ]
+  },
+  "axes": {
+    "usage": {
+      "kind": "human_selection",
+      "values": [
+        "process_atlas_fit",
+        "surface_reference",
+        "trajectory_only",
+        "unknown"
+      ]
+    }
+  },
+  "disabled_rule_ids": [
+    "process.structure.v3",
+    "process.verification-cue.v1",
+    "operation.verification-cue.v1",
+    "operation.transition-lexeme.v1",
+    "operation.decode-lexeme.v1",
+    "process.numeric-relation-result.v1"
+  ],
+  "detectors": [
+    {
+      "rule_id": "process.structure.v4",
+      "detector": "process_structure",
+      "axis": "process_span",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "event_modality": "conservative_v7",
+      "ambiguity": [
+        "local textual evidence does not establish that the model executed the described event"
+      ]
+    }
+  ],
+  "machine_projection_precedence": {
+    "event_operation": [
+      "mixed_arithmetic",
+      "correction",
+      "verification",
+      "state_transition",
+      "state_relation_or_schema",
+      "lookup",
+      "order_comparison",
+      "encoding_or_decoding",
+      "exponentiation",
+      "modulo",
+      "division",
+      "multiplication",
+      "subtraction",
+      "addition",
+      "equality_check",
+      "counting"
+    ],
+    "process_span": [
+      "answer_event_candidate",
+      "correction_event_candidate",
+      "verification_event_candidate",
+      "state_update_with_arithmetic",
+      "arithmetic_event_candidate",
+      "state_transition_event_candidate",
+      "reference_lookup_event_candidate",
+      "state_relation_or_schema_candidate",
+      "comparison_or_selection_event_candidate",
+      "encoding_or_decoding_event_candidate"
+    ]
+  },
+  "token_assignment_contract": {
+    "within_axis": "zero_or_one_effective_value_per_authoritative_response_token",
+    "across_axes": "independent_values_may_overlap_on_the_same_token",
+    "semantic_conflict_policy": "configured_axis_precedence_resolves_only_declared_candidate_role_or_operation_conflicts; all_other_semantic_conflicts_remain_explicit",
+    "human_only_axes": [
+      "usage",
+      "event_status"
+    ]
+  }
+}

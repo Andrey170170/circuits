@@ -42,7 +42,7 @@ CHAT_TEMPLATE_SHA256 = (
 )
 MODEL_REVISION = "768f209d9ea81521153ed38c47d515654e938aea"
 MANIFEST_SCHEMA_VERSION = "adag.process-witness.annotation-set-manifest.v1"
-REVIEW_UI_VERSION = "process-witness-token-painter.v6"
+REVIEW_UI_VERSION = "process-witness-token-painter.v7"
 
 
 def parse_args() -> argparse.Namespace:
@@ -331,7 +331,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     inspection = {
         "schema_version": "adag.process-witness.annotation-rule-inspection.v1",
         "status": "awaiting_human_review",
-        "selection": "first diverse matches in frozen cohort order, at most seven per rule",
+        "selection": "deterministic response-stratified matches across frozen cohort support, at most seven per rule",
         "rules": inspection_examples(documents),
     }
     write_jsonl(build_path / "index.jsonl", index_rows)
