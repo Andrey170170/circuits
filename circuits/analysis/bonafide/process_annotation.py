@@ -12,6 +12,7 @@ import json
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -63,16 +64,67 @@ class Match:
 
 
 def load_ontology(path: Path) -> dict[str, Any]:
+    """Load an ontology, resolving a hash-pinned local extension when requested."""
+
     ontology = json.loads(path.read_text(encoding="utf-8"))
+    if ontology.get("schema_version") == "adag.process-witness.annotation-ontology.v3":
+        base_name = ontology.get("extends")
+        base_sha256 = ontology.get("base_ontology_sha256")
+        if not isinstance(base_name, str) or Path(base_name).name != base_name:
+            raise ValueError("v3 ontology extends must be a sibling file name")
+        base_path = path.parent / base_name
+        if file_sha256(base_path) != base_sha256:
+            raise ValueError("v3 base ontology hash drift")
+        base = load_ontology(base_path)
+        resolved = deepcopy(base)
+        for key in (
+            "schema_version",
+            "ontology_id",
+            "status",
+            "claim_boundary",
+            "multi_label",
+            "unknown_and_ambiguous_allowed",
+        ):
+            if key in ontology:
+                resolved[key] = ontology[key]
+        for axis in ontology.get("remove_axes", []):
+            resolved["axes"].pop(axis, None)
+        for axis, definition in ontology.get("axes", {}).items():
+            resolved["axes"][axis] = deepcopy(definition)
+        for axis, values in ontology.get("axis_value_extensions", {}).items():
+            if axis not in resolved["axes"]:
+                raise ValueError(f"v3 extends unknown axis {axis!r}")
+            existing = resolved["axes"][axis]["values"]
+            existing.extend(value for value in values if value not in existing)
+        disabled = set(ontology.get("disabled_rule_ids", []))
+        for collection in ("regex_rules", "lexical_rules", "detectors"):
+            resolved[collection] = [
+                rule
+                for rule in resolved.get(collection, [])
+                if rule["rule_id"] not in disabled
+            ] + deepcopy(ontology.get(collection, []))
+        resolved["token_assignment_contract"] = {
+            **resolved.get("token_assignment_contract", {}),
+            **ontology.get("token_assignment_contract", {}),
+        }
+        resolved["machine_projection_precedence"] = deepcopy(
+            ontology.get("machine_projection_precedence", {})
+        )
+        resolved["extension_provenance"] = {
+            "extends": base_name,
+            "base_ontology_sha256": base_sha256,
+        }
+        ontology = resolved
     if ontology.get("schema_version") not in {
         "adag.process-witness.annotation-ontology.v1",
         "adag.process-witness.annotation-ontology.v2",
+        "adag.process-witness.annotation-ontology.v3",
     }:
         raise ValueError("unsupported annotation ontology schema")
     axes = ontology.get("axes")
     if not isinstance(axes, dict) or not axes:
         raise ValueError("ontology axes must be a non-empty object")
-    if ontology["schema_version"].endswith(".v2"):
+    if ontology["schema_version"].endswith((".v2", ".v3")):
         contract = ontology.get("token_assignment_contract", {})
         if contract.get("within_axis") != (
             "zero_or_one_effective_value_per_authoritative_response_token"
@@ -80,6 +132,14 @@ def load_ontology(path: Path) -> dict[str, Any]:
             raise ValueError("v2 ontology lacks the within-axis token contract")
         if "compound_surface" not in axes.get("surface_form", {}).get("values", []):
             raise ValueError("v2 ontology lacks compound_surface")
+    for axis, precedence in ontology.get("machine_projection_precedence", {}).items():
+        if axis not in axes:
+            raise ValueError(f"projection precedence uses unknown axis {axis!r}")
+        unknown = set(precedence) - set(axes[axis]["values"])
+        if unknown:
+            raise ValueError(
+                f"projection precedence for {axis!r} has unknown values {sorted(unknown)}"
+            )
     rule_ids: list[str] = []
     for collection in ("regex_rules", "lexical_rules", "detectors"):
         for rule in ontology.get(collection, []):
@@ -278,9 +338,475 @@ def _numeric_relation_matches(text: str, rule: Mapping[str, Any]) -> Iterator[Ma
         )
 
 
+_ARITHMETIC_WORDS: dict[str, tuple[str, ...]] = {
+    "addition": ("add", "added", "adding", "addition", "plus", "sum", "total"),
+    "subtraction": (
+        "subtract",
+        "subtracted",
+        "subtracting",
+        "subtraction",
+        "minus",
+        "difference",
+    ),
+    "multiplication": (
+        "multiply",
+        "multiplied",
+        "multiplying",
+        "multiplication",
+        "product",
+        "times",
+    ),
+    "division": ("divide", "divided", "dividing", "division", "quotient"),
+    "modulo": ("mod", "modulo", "remainder"),
+    "exponentiation": (
+        "power",
+        "squared",
+        "cubed",
+        "exponent",
+        "exponentiation",
+    ),
+}
+_ARITHMETIC_SYMBOL_VALUES = {
+    "+": "addition",
+    "-": "subtraction",
+    "*": "multiplication",
+    "×": "multiplication",
+    "/": "division",
+    "÷": "division",
+    "%": "modulo",
+    "^": "exponentiation",
+    "²": "exponentiation",
+}
+_CORRECTION_RE = re.compile(
+    r"\b(?:mistake|wrong|correction|reconsider|hold on)\b",
+    re.IGNORECASE,
+)
+_VERIFICATION_RE = re.compile(
+    r"\b(?:check|verify|confirm|double-check|ensure|validate)\w*\b",
+    re.IGNORECASE,
+)
+_UNCERTAINTY_RE = re.compile(
+    r"\b(?:wait|maybe|perhaps|likely|probably|not sure|hmm|I think|seems)\b",
+    re.IGNORECASE,
+)
+_CONCLUSION_RE = re.compile(
+    r"\b(?:therefore|thus|hence|final answer|the answer is|answer should be|"
+    r"final node|final result|I'll go with|we conclude)\b",
+    re.IGNORECASE,
+)
+_PLANNING_RE = re.compile(
+    r"(?:\b(?:let(?:'s| us)|need to|plan|start|begin|break it down|tackle|"
+    r"first(?:ly)?|next)\b|^\s*(?:step|stage)\s+\d+\s*:)",
+    re.IGNORECASE,
+)
+_RESTATING_RE = re.compile(
+    r"\b(?:(?:the\s+)?(?:user|problem|question|task)\s+(?:asks|wants|says|gives|"
+    r"provides|requires)|we\s+(?:are|have)\s+given|given\s+(?:that|the))\b",
+    re.IGNORECASE,
+)
+_STATE_RE = re.compile(
+    r"\b(?:state|node|edge|move(?:s|d)?\s+to|transition(?:s|ed)?|"
+    r"current\s+(?:state|node)|next\s+(?:state|node)|citation_index|"
+    r"follow(?:ing)?\s+(?:the\s+)?(?:edge|reference))\b",
+    re.IGNORECASE,
+)
+_COMPARISON_RE = re.compile(
+    r"\b(?:smallest|largest|minimum|maximum|less than|greater than|"
+    r"compare(?:d)?|choose|select)\b",
+    re.IGNORECASE,
+)
+_ENCODING_RE = re.compile(
+    r"\b(?:decode|decoded|decoding|encode|encoded|encoding|cipher|"
+    r"substitute|shift the letter)\b",
+    re.IGNORECASE,
+)
+_NUMBER_RE = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.]|\.\d)")
+_RELATION_RE = re.compile(r"(?<![<>=!])=(?!=)|→|->")
+
+
+def _terminal_serialization_span(text: str) -> tuple[int, int] | None:
+    """Return only a valid JSON object after ``</think>`` at response end."""
+
+    boundary = list(re.finditer(r"</think>", text, re.IGNORECASE))
+    if not boundary:
+        return None
+    start = boundary[-1].end()
+    suffix = text[start:]
+    found = re.fullmatch(r"\s*(\{[^\r\n]*\})\s*", suffix)
+    if not found:
+        return None
+    try:
+        parsed = json.loads(found.group(1))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return start + found.start(1), start + found.end(1)
+
+
+def _text_units(text: str) -> list[tuple[int, int]]:
+    """Split nonblank prose into deterministic line/sentence units.
+
+    Decimal points and terminal JSON stay inside their source unit.  Spans exclude
+    surrounding whitespace so structural coverage is not mistaken for punctuation
+    coverage.
+    """
+
+    output: list[tuple[int, int]] = []
+    for line in re.finditer(r"[^\r\n]+", text):
+        raw = line.group(0)
+        left = len(raw) - len(raw.lstrip())
+        right = len(raw.rstrip())
+        if left >= right:
+            continue
+        content = raw[left:right]
+        absolute = line.start() + left
+        if content.startswith("{") and content.endswith("}"):
+            output.append((absolute, absolute + len(content)))
+            continue
+        if re.fullmatch(r"</?think>", content, re.IGNORECASE):
+            continue
+        unit_start = 0
+        for found in re.finditer(r"[.!?]+(?=\s+|$)", content):
+            if (
+                content[found.start()] == "."
+                and found.start() > 0
+                and found.end() < len(content)
+                and content[found.start() - 1].isdigit()
+                and content[found.end()].isdigit()
+            ):
+                continue
+            end = found.end()
+            piece = content[unit_start:end]
+            trim_left = len(piece) - len(piece.lstrip())
+            if piece.strip():
+                output.append((absolute + unit_start + trim_left, absolute + end))
+            unit_start = end
+        tail = content[unit_start:]
+        trim_left = len(tail) - len(tail.lstrip())
+        if tail.strip():
+            output.append((absolute + unit_start + trim_left, absolute + len(content)))
+    return output
+
+
+def _arithmetic_evidence(unit: str) -> tuple[set[str], list[tuple[int, int, str]]]:
+    operations: set[str] = set()
+    cues: list[tuple[int, int, str]] = []
+    for symbol, value in _ARITHMETIC_SYMBOL_VALUES.items():
+        probe = {
+            "symbols": {symbol: value},
+            "axis": "operation",
+            "rule_id": "probe",
+            "interpretation": "semantic_hypothesis",
+            "confidence": "medium",
+        }
+        for match in _arithmetic_symbol_matches(unit, probe):
+            operations.add(value)
+            cues.append((match.start, match.end, value))
+    for value, terms in _ARITHMETIC_WORDS.items():
+        pattern = re.compile(
+            r"(?<!\w)(?:" + "|".join(re.escape(term) for term in terms) + r")(?!\w)",
+            re.IGNORECASE,
+        )
+        for found in pattern.finditer(unit):
+            if (
+                value == "modulo"
+                and found.group().casefold() == "mod"
+                and re.match(r"\s*=", unit[found.end() :])
+            ):
+                continue
+            operations.add(value)
+            cues.append((found.start(), found.end(), value))
+    return operations, cues
+
+
+def _unit_phase(unit: str, *, is_serialization: bool, has_event: bool) -> str:
+    if is_serialization:
+        return "answer_serialization"
+    if _CORRECTION_RE.search(unit):
+        return "correction_or_reconsideration"
+    if _VERIFICATION_RE.search(unit):
+        return "verification"
+    if _CONCLUSION_RE.search(unit):
+        return "conclusion"
+    if _UNCERTAINTY_RE.search(unit):
+        return "uncertainty_or_deliberation"
+    if _PLANNING_RE.search(unit) and not has_event:
+        return "planning"
+    if _RESTATING_RE.search(unit) and not has_event:
+        return "orientation_or_restating"
+    if has_event:
+        return "working_or_derivation"
+    return "unclassified_or_other"
+
+
+def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[Match]:
+    """Suggest broad phases and locally evidenced process-event structure."""
+
+    serialization = _terminal_serialization_span(text)
+    process_rule = rule["rule_id"]
+    for start, end in _text_units(text):
+        unit = text[start:end]
+        is_serialization = serialization == (start, end)
+        numbers = list(_NUMBER_RE.finditer(unit))
+        operations, operator_cues = _arithmetic_evidence(unit)
+        relations = list(_RELATION_RE.finditer(unit))
+        arrow_evidence = bool(re.search(r"→|->", unit))
+        state_evidence = bool(_STATE_RE.search(unit)) or arrow_evidence
+        comparison_evidence = bool(_COMPARISON_RE.search(unit))
+        encoding_evidence = bool(_ENCODING_RE.search(unit))
+        arithmetic_evidence = bool(operations) and (
+            len(numbers) >= 2 or bool(relations)
+        )
+        has_event = any(
+            (
+                is_serialization,
+                arithmetic_evidence,
+                state_evidence,
+                comparison_evidence,
+                encoding_evidence,
+                bool(_VERIFICATION_RE.search(unit)),
+                bool(_CORRECTION_RE.search(unit)),
+            )
+        )
+        phase = _unit_phase(
+            unit, is_serialization=is_serialization, has_event=has_event
+        )
+        yield Match(
+            start,
+            end,
+            "discourse_phase",
+            phase,
+            f"{process_rule}.discourse.{phase}",
+            "observable_structure" if is_serialization else "semantic_hypothesis",
+            "high" if is_serialization else "medium",
+            ()
+            if is_serialization
+            else ("discourse phase is a deterministic structural hypothesis",),
+        )
+
+        event_value: str | None = None
+        if is_serialization:
+            event_value = "answer_event_candidate"
+        elif _CORRECTION_RE.search(unit):
+            event_value = "correction_event_candidate"
+        elif _VERIFICATION_RE.search(unit):
+            event_value = "verification_event_candidate"
+        elif phase == "conclusion":
+            event_value = "answer_event_candidate"
+        elif arithmetic_evidence and state_evidence:
+            event_value = "state_update_with_arithmetic"
+        elif arithmetic_evidence:
+            event_value = "arithmetic_event_candidate"
+        elif state_evidence:
+            event_value = "state_transition_event_candidate"
+        elif comparison_evidence:
+            event_value = "comparison_or_selection_event_candidate"
+        elif encoding_evidence:
+            event_value = "encoding_or_decoding_event_candidate"
+        if event_value is None:
+            continue
+        yield Match(
+            start,
+            end,
+            "process_span",
+            event_value,
+            f"{process_rule}.span.{event_value}",
+            "semantic_hypothesis",
+            "high" if is_serialization else "medium",
+            ("candidate event span does not establish execution or correctness",),
+        )
+
+        if arithmetic_evidence:
+            operation = (
+                next(iter(operations)) if len(operations) == 1 else "mixed_arithmetic"
+            )
+            yield Match(
+                start,
+                end,
+                "event_operation",
+                operation,
+                f"{process_rule}.operation.{operation}",
+                "semantic_hypothesis",
+                "medium",
+                ("operation is propagated across a locally evidenced candidate event",),
+            )
+            yield Match(
+                start,
+                end,
+                "domain",
+                "arithmetic",
+                f"{process_rule}.domain.arithmetic",
+                "semantic_hypothesis",
+                "medium",
+            )
+        elif state_evidence:
+            yield Match(
+                start,
+                end,
+                "event_operation",
+                "state_transition",
+                f"{process_rule}.operation.state-transition",
+                "semantic_hypothesis",
+                "medium",
+            )
+        elif comparison_evidence:
+            yield Match(
+                start,
+                end,
+                "event_operation",
+                "order_comparison",
+                f"{process_rule}.operation.comparison",
+                "semantic_hypothesis",
+                "medium",
+            )
+        elif encoding_evidence:
+            yield Match(
+                start,
+                end,
+                "event_operation",
+                "encoding_or_decoding",
+                f"{process_rule}.operation.encoding",
+                "semantic_hypothesis",
+                "medium",
+            )
+
+        for cue_start, cue_end, _ in operator_cues:
+            yield Match(
+                start + cue_start,
+                start + cue_end,
+                "process_role",
+                "operator_cue",
+                f"{process_rule}.role.operator-cue",
+                "semantic_hypothesis",
+                "medium",
+            )
+
+        result_starts: set[int] = set()
+        for relation in relations:
+            result = next(
+                (number for number in numbers if number.start() >= relation.end()), None
+            )
+            if result is not None:
+                result_starts.add(result.start())
+        if (
+            not result_starts
+            and arithmetic_evidence
+            and len(numbers) >= 3
+            and re.search(
+                r"\b(?:get|gets|got|give|gives|yield|yields|result)\b",
+                unit,
+                re.IGNORECASE,
+            )
+        ):
+            result_starts.add(numbers[-1].start())
+        for number in numbers:
+            prefix = unit[max(0, number.start() - 12) : number.start()]
+            if re.search(r"(?:step|stage|match|sentence)\s*$", prefix, re.IGNORECASE):
+                continue
+            values = ["operand_candidate"]
+            if phase == "conclusion":
+                values.append("final_result")
+            elif number.start() in result_starts:
+                values.append("intermediate_result_candidate")
+            for value in values:
+                yield Match(
+                    start + number.start(),
+                    start + number.end(),
+                    "process_role",
+                    value,
+                    f"{process_rule}.role.{value}",
+                    "semantic_hypothesis",
+                    "high" if is_serialization else "medium",
+                    ("role is inferred from local event syntax, not correctness",),
+                )
+
+        if state_evidence:
+            arrows = list(re.finditer(r"→|->", unit))
+            for arrow in arrows:
+                source = re.search(
+                    r"(?P<value>[A-Za-z_][\w-]*|-?\d+(?:\.\d+)?)\s*$",
+                    unit[: arrow.start()],
+                )
+                if source:
+                    yield Match(
+                        start + source.start("value"),
+                        start + source.end("value"),
+                        "process_role",
+                        "state_value_candidate",
+                        f"{process_rule}.role.state-value",
+                        "semantic_hypothesis",
+                        "medium",
+                    )
+                destination = re.search(
+                    r"\s*(?P<value>[A-Za-z_][\w-]*|-?\d+(?:\.\d+)?)",
+                    unit[arrow.end() :],
+                )
+                if destination:
+                    destination_start = arrow.end() + destination.start("value")
+                    destination_end = arrow.end() + destination.end("value")
+                    yield Match(
+                        start + destination_start,
+                        start + destination_end,
+                        "process_role",
+                        "state_update",
+                        f"{process_rule}.role.state-update",
+                        "semantic_hypothesis",
+                        "medium",
+                    )
+
+
+def _serialization_segment_matches(
+    text: str, rule: Mapping[str, Any]
+) -> Iterator[Match]:
+    boundary = list(re.finditer(r"</?think>", text, re.IGNORECASE))
+    close = next(
+        (found for found in reversed(boundary) if found.group().lower() == "</think>"),
+        None,
+    )
+    opening = next(
+        (found for found in boundary if found.group().lower() == "<think>"), None
+    )
+    thinking_start = opening.end() if opening else 0
+    thinking_end = close.start() if close else len(text)
+    if thinking_end > thinking_start:
+        yield Match(
+            thinking_start,
+            thinking_end,
+            "serialization_segment",
+            "thinking_segment",
+            f"{rule['rule_id']}.thinking",
+            "observable_structure",
+            "high",
+        )
+    for found in boundary:
+        yield Match(
+            found.start(),
+            found.end(),
+            "serialization_segment",
+            "boundary_or_control",
+            f"{rule['rule_id']}.boundary",
+            "observable_structure",
+            "high",
+        )
+    final = _terminal_serialization_span(text)
+    if final:
+        yield Match(
+            final[0],
+            final[1],
+            "serialization_segment",
+            "final_answer_segment",
+            f"{rule['rule_id']}.final",
+            "observable_structure",
+            "high",
+        )
+
+
 DETECTORS = {
     "arithmetic_symbols": _arithmetic_symbol_matches,
     "numeric_relation_results": _numeric_relation_matches,
+    "process_structure": _process_structure_matches,
+    "serialization_segments": _serialization_segment_matches,
 }
 
 
@@ -304,6 +830,46 @@ def suggest_matches(
         except KeyError as error:
             raise ValueError(f"unknown detector {rule['detector']}") from error
         matches.extend(detector(text, rule))
+    if accepted_answer_keys:
+        terminal = _terminal_serialization_span(text)
+        accepted_terminal_key = any(
+            match.axis == "representation"
+            and match.value == "answer_key"
+            and terminal is not None
+            and terminal[0] <= match.start < match.end <= terminal[1]
+            for match in matches
+        )
+        if terminal is not None and not accepted_terminal_key:
+            matches = [
+                match
+                for match in matches
+                if not (
+                    (match.start, match.end) == terminal
+                    and match.value
+                    in {
+                        "answer_serialization",
+                        "answer_event_candidate",
+                        "final_answer_segment",
+                    }
+                )
+            ]
+    if "discourse_phase" in ontology["axes"]:
+        matches.extend(
+            [
+                Match(
+                    match.start,
+                    match.end,
+                    "process_role",
+                    "final_result",
+                    "process.structure.v3.role.final-result-from-answer-commitment",
+                    "semantic_hypothesis",
+                    "high",
+                    ("terminal answer syntax identifies commitment, not correctness",),
+                )
+                for match in matches
+                if match.axis == "process_role" and match.value == "answer_commitment"
+            ]
+        )
     unique = {
         (
             match.start,
@@ -493,6 +1059,70 @@ def align_span(
     }
 
 
+def event_token_position_matches(
+    text: str, offsets: Sequence[Sequence[int]], matches: Sequence[Match]
+) -> list[Match]:
+    """Derive exclusive event-relative token positions from process spans."""
+
+    output: list[Match] = []
+    occupied: set[int] = set()
+    process_spans = sorted(
+        (match for match in matches if match.axis == "process_span"),
+        key=lambda match: (match.start, match.end),
+    )
+    for process in process_spans:
+        aligned = align_span(offsets, process.start, process.end)
+        positions = list(range(aligned["start"], aligned["end"]))
+        available = [position for position in positions if position not in occupied]
+        if not available:
+            continue
+        position_groups: list[tuple[int, int, str]] = []
+        if len(available) == 1:
+            position_groups.append((available[0], available[0] + 1, "span_terminal"))
+        else:
+            position_groups.append((available[0], available[0] + 1, "span_onset"))
+            if len(available) > 2:
+                position_groups.append((available[1], available[-1], "span_interior"))
+            position_groups.append((available[-1], available[-1] + 1, "span_terminal"))
+        for token_start_position, token_end_position, value in position_groups:
+            token_start = int(offsets[token_start_position][0])
+            token_end = int(offsets[token_end_position - 1][1])
+            if token_start == token_end:
+                continue
+            output.append(
+                Match(
+                    token_start,
+                    token_end,
+                    "event_token_position",
+                    value,
+                    f"process.structure.v3.event-position.{value}",
+                    "semantic_hypothesis",
+                    "medium",
+                )
+            )
+        occupied.update(available)
+        following = aligned["end"]
+        if following < len(offsets) and following not in occupied:
+            token_start, token_end = offsets[following]
+            separator = text[token_start:token_end]
+            if separator and all(
+                character.isspace() or character in ".,;:!?" for character in separator
+            ):
+                output.append(
+                    Match(
+                        int(token_start),
+                        int(token_end),
+                        "event_token_position",
+                        "following_separator",
+                        "process.structure.v3.event-position.following-separator",
+                        "semantic_hypothesis",
+                        "medium",
+                    )
+                )
+                occupied.add(following)
+    return output
+
+
 def _token_surface(text: str) -> str:
     if not text:
         return "empty"
@@ -583,11 +1213,23 @@ def annotate_response(
                 str(key) for key in schema.get("exact_keys", [])
             )
     suggestions = []
-    for match in suggest_matches(
+    matches = suggest_matches(
         text,
         ontology,
         accepted_answer_keys=accepted_answer_keys or None,
-    ):
+    )
+    if "event_token_position" in ontology["axes"]:
+        matches.extend(event_token_position_matches(text, offsets, matches))
+        matches.sort(
+            key=lambda match: (
+                match.start,
+                match.end,
+                match.axis,
+                match.value,
+                match.rule_id,
+            )
+        )
+    for match in matches:
         if match.axis not in ontology["axes"]:
             raise ValueError(f"suggestion uses unknown axis {match.axis!r}")
         if match.value not in ontology["axes"][match.axis]["values"]:
@@ -640,6 +1282,10 @@ def annotate_response(
             "sha256": ontology_sha256,
             "axes": ontology["axes"],
             "review_vocabularies": ontology["review_vocabularies"],
+            "machine_projection_precedence": ontology.get(
+                "machine_projection_precedence", {}
+            ),
+            "extension_provenance": ontology.get("extension_provenance"),
         },
         "response_id": response["response_id"],
         "response_source": response["source"],
@@ -672,9 +1318,9 @@ def compact_workstation_document(
 
     The frozen draft remains authoritative.  This projection shares ontology metadata
     at bundle level, stores exact token identities compactly, and run-length encodes the
-    effective machine layer.  Under ontology v2, overlapping surface-form values map to
-    ``compound_surface``; semantic conflicts remain sorted lists rather than receiving a
-    silent winner.
+    effective machine layer. Overlapping surface-form values map to
+    ``compound_surface``. Ontology-declared precedence resolves only explicitly listed
+    candidate conflicts; all other semantic conflicts remain sorted lists.
     """
 
     tokens = document["tokenization"]["tokens"]
@@ -689,6 +1335,9 @@ def compact_workstation_document(
 
     machine_layers: dict[str, list[list[Any]]] = {}
     for axis, values_by_token in axis_values.items():
+        precedence = (
+            document["ontology"].get("machine_projection_precedence", {}).get(axis, [])
+        )
         runs: list[list[Any]] = []
         run_start: int | None = None
         run_value: str | list[str] | None = None
@@ -706,6 +1355,12 @@ def compact_workstation_document(
                     in document["ontology"]["axes"][axis]["values"]
                 ):
                     value = "compound_surface"
+                elif precedence and any(
+                    candidate in values for candidate in precedence
+                ):
+                    value = next(
+                        candidate for candidate in precedence if candidate in values
+                    )
                 else:
                     value = sorted(values)
             else:

@@ -1,0 +1,163 @@
+{
+  "schema_version": "adag.process-witness.annotation-ontology.v3",
+  "ontology_id": "process-witness-graph-blind-v3",
+  "status": "draft_for_human_review",
+  "claim_boundary": "Observable structure describes frozen text. Discourse phases, process spans, operations, and roles are deterministic graph-blind hypotheses from local text only; they do not establish execution, correctness, or faithfulness.",
+  "multi_label": true,
+  "unknown_and_ambiguous_allowed": true,
+  "extends": "process_witness_annotation_ontology_v2.json",
+  "base_ontology_sha256": "3a9c00a8f254ea319a5e2cbc05dea305c232441ada5a6944ce5c31dc4efe55d7",
+  "remove_axes": [
+    "token_position"
+  ],
+  "axes": {
+    "discourse_phase": {
+      "kind": "semantic_hypothesis_except_exact_answer_serialization",
+      "exclusive": true,
+      "values": [
+        "orientation_or_restating",
+        "planning",
+        "working_or_derivation",
+        "uncertainty_or_deliberation",
+        "verification",
+        "correction_or_reconsideration",
+        "conclusion",
+        "answer_serialization",
+        "unclassified_or_other"
+      ]
+    },
+    "process_span": {
+      "kind": "semantic_hypothesis",
+      "exclusive": true,
+      "values": [
+        "arithmetic_event_candidate",
+        "state_transition_event_candidate",
+        "state_update_with_arithmetic",
+        "comparison_or_selection_event_candidate",
+        "encoding_or_decoding_event_candidate",
+        "verification_event_candidate",
+        "correction_event_candidate",
+        "answer_event_candidate"
+      ]
+    },
+    "serialization_segment": {
+      "kind": "observable_structure",
+      "exclusive": true,
+      "values": [
+        "thinking_segment",
+        "final_answer_segment",
+        "boundary_or_control",
+        "unknown"
+      ]
+    },
+    "event_token_position": {
+      "kind": "derived_semantic_hypothesis",
+      "exclusive": true,
+      "values": [
+        "span_onset",
+        "span_interior",
+        "span_terminal",
+        "following_separator",
+        "unknown"
+      ]
+    },
+    "event_operation": {
+      "kind": "semantic_hypothesis",
+      "exclusive": true,
+      "values": [
+        "addition",
+        "subtraction",
+        "multiplication",
+        "division",
+        "modulo",
+        "exponentiation",
+        "mixed_arithmetic",
+        "equality_check",
+        "order_comparison",
+        "state_transition",
+        "lookup",
+        "encoding_or_decoding",
+        "counting",
+        "verification",
+        "correction"
+      ]
+    }
+  },
+  "detectors": [
+    {
+      "rule_id": "process.structure.v3",
+      "detector": "process_structure",
+      "axis": "process_span",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "ambiguity": [
+        "local textual evidence does not establish that the model executed the described event"
+      ]
+    },
+    {
+      "rule_id": "serialization.segment.v3",
+      "detector": "serialization_segments",
+      "axis": "serialization_segment",
+      "interpretation": "observable_structure",
+      "confidence": "high"
+    }
+  ],
+  "machine_projection_precedence": {
+    "event_operation": [
+      "mixed_arithmetic",
+      "correction",
+      "verification",
+      "state_transition",
+      "order_comparison",
+      "encoding_or_decoding",
+      "exponentiation",
+      "modulo",
+      "division",
+      "multiplication",
+      "subtraction",
+      "addition",
+      "equality_check",
+      "lookup",
+      "counting"
+    ],
+    "process_role": [
+      "final_result",
+      "state_update",
+      "intermediate_result",
+      "intermediate_result_candidate",
+      "answer_commitment",
+      "state_value",
+      "state_value_candidate",
+      "input_operand",
+      "operand_candidate",
+      "operator_cue",
+      "verification",
+      "verification_cue",
+      "correction",
+      "correction_cue",
+      "planning_cue",
+      "uncertainty_cue",
+      "unknown"
+    ],
+    "process_span": [
+      "answer_event_candidate",
+      "correction_event_candidate",
+      "verification_event_candidate",
+      "state_update_with_arithmetic",
+      "arithmetic_event_candidate",
+      "state_transition_event_candidate",
+      "comparison_or_selection_event_candidate",
+      "encoding_or_decoding_event_candidate"
+    ]
+  },
+  "token_assignment_contract": {
+    "within_axis": "zero_or_one_effective_value_per_authoritative_response_token",
+    "across_axes": "independent_values_may_overlap_on_the_same_token",
+    "surface_compound_policy": "two_or_more_distinct_machine_surface_form_values_on_one_token_project_to_compound_surface",
+    "semantic_conflict_policy": "configured_axis_precedence_resolves_only_declared_candidate_role_or_operation_conflicts; all_other_semantic_conflicts_remain_explicit",
+    "human_only_axes": [
+      "usage",
+      "event_status"
+    ]
+  }
+}

@@ -74,7 +74,7 @@
       display: grid;
       grid-template-columns: minmax(0, 1fr) 282px;
     }
-    .document-shell { min-width: 0; display: flex; flex-direction: column; }
+    .document-shell { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
     .context-bar {
       background: #0f1215;
       border-bottom: 1px solid var(--border);
@@ -94,7 +94,7 @@
       color: #d8dee2; background: #0b0e11; border-left: 2px solid #34404a;
       padding: 9px 11px; margin: 8px 0 2px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
-    .document-scroll { flex: 1; overflow: auto; padding: 30px clamp(22px, 5vw, 76px) 70px; }
+    .document-scroll { flex: 1; min-height: 0; overflow: auto; padding: 30px clamp(22px, 5vw, 76px) 70px; }
     .document-frame { max-width: 1120px; margin: 0 auto; }
     .document-caption { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
     .document-caption h2 { font-size: 12px; color: var(--muted); margin: 0; text-transform: uppercase; letter-spacing: .11em; }
@@ -280,7 +280,7 @@
 
 <script>
 "use strict";
-const UI_VERSION = "process-witness-token-painter.v5";
+const UI_VERSION = "process-witness-token-painter.v6";
 const BUNDLE_SCHEMA = "adag.process-witness.annotation-workstation-bundle.v1";
 const DRAFT_SCHEMA = "adag.process-witness.annotation-draft.v1";
 const EXPORT_SCHEMA = "adag.process-witness.annotation-paint-export.v1";
@@ -466,7 +466,7 @@ function configureOntology() {
   const axes = Object.keys(state.identity.ontology.axes);
   el("axisSelect").replaceChildren.apply(el("axisSelect"), axes.map(function(axis) { return new Option(axis.replaceAll("_", " "), axis); }));
   el("axisSelect").disabled = false;
-  state.axis = axes[0] || null;
+  state.axis = axes.includes("discourse_phase") ? "discourse_phase" : axes[0] || null;
   state.brush = null;
   el("eraser").disabled = false;
   el("revert").disabled = false;
