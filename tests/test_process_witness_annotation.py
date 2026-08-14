@@ -35,6 +35,10 @@ ONTOLOGY_V5_PATH = (
     Path(__file__).parents[1]
     / "scripts/bonafide/configs/process_witness_annotation_ontology_v5.json"
 )
+ONTOLOGY_V6_PATH = (
+    Path(__file__).parents[1]
+    / "scripts/bonafide/configs/process_witness_annotation_ontology_v6.json"
+)
 
 
 class CharacterTokenizer:
@@ -573,6 +577,220 @@ def test_v5_derived_results_and_active_listed_relations() -> None:
     )
 
 
+def test_v6_surrounding_unit_execution_context() -> None:
+    ontology = load_ontology(ONTOLOGY_V6_PATH)
+    assert ontology["schema_version"].endswith(".v6")
+    assert ontology["ontology_id"] == "process-witness-graph-blind-v6"
+
+    compact = "Step 2: H → J.\nNext:4."
+    compact_matches = suggest_matches(compact, ontology)
+    assert any(
+        match.value == "state_transition_event_candidate"
+        and compact[match.start : match.end] == "Step 2: H → J."
+        for match in compact_matches
+    )
+    assert {
+        compact[match.start : match.end]: match.value
+        for match in compact_matches
+        if match.axis == "discourse_phase"
+    } == {
+        "Step 2: H → J.": "working_or_derivation",
+        "Next:4.": "working_or_derivation",
+    }
+
+    for instruction_text in (
+        "1.\nReverse the resulting string.",
+        '"Reverse the resulting string."',
+    ):
+        matches = suggest_matches(instruction_text, ontology)
+        reverse_start = instruction_text.index("Reverse")
+        assert any(
+            match.value == "instruction_or_task_description"
+            and match.start <= reverse_start < match.end
+            for match in matches
+        )
+        assert not any(
+            match.value == "working_or_derivation"
+            and match.start <= reverse_start < match.end
+            for match in matches
+        )
+
+    transition = "So Den → Laboratory."
+    transition_matches = suggest_matches(transition, ontology)
+    assert any(
+        match.value == "state_transition_event_candidate"
+        for match in transition_matches
+    )
+    assert not any(
+        match.value == "state_relation_or_schema_candidate"
+        for match in transition_matches
+    )
+
+    outcome = "Manticore → Wyvern wins."
+    outcome_matches = suggest_matches(outcome, ontology)
+    assert any(
+        match.value == "comparison_or_selection_event_candidate"
+        for match in outcome_matches
+    )
+    assert not any(
+        match.value == "state_relation_or_schema_candidate" for match in outcome_matches
+    )
+
+    so_outcome = "So Wyvern beats Manticore → Wyvern wins."
+    so_outcome_matches = suggest_matches(so_outcome, ontology)
+    assert any(
+        match.value == "comparison_or_selection_event_candidate"
+        for match in so_outcome_matches
+    )
+    assert not any(
+        match.value == "state_transition_event_candidate"
+        for match in so_outcome_matches
+    )
+
+    compact_match_outcome = "Match5: Harpy vs Gargoyle → Gargoyle"
+    compact_match_matches = suggest_matches(compact_match_outcome, ontology)
+    assert any(
+        match.value == "comparison_or_selection_event_candidate"
+        for match in compact_match_matches
+    )
+    assert not any(
+        match.value == "state_relation_or_schema_candidate"
+        for match in compact_match_matches
+    )
+
+    final_match_outcome = "Final: Gargoyle vs Gargoyle → Gargoyle."
+    final_match_matches = suggest_matches(final_match_outcome, ontology)
+    assert any(
+        match.value == "comparison_or_selection_event_candidate"
+        for match in final_match_matches
+    )
+    assert not any(
+        match.value == "state_relation_or_schema_candidate"
+        for match in final_match_matches
+    )
+
+    policy = "At each step, we choose the smallest fuel_cost outgoing edge."
+    policy_matches = suggest_matches(policy, ontology)
+    assert any(
+        match.value == "instruction_or_task_description" for match in policy_matches
+    )
+    assert not any(
+        match.value == "comparison_or_selection_event_candidate"
+        for match in policy_matches
+    )
+
+    for check in (
+        "Check outgoing edges from J.",
+        "Check outgoing lanes.",
+        "Check if Isaac has any outgoing edges.",
+    ):
+        active = f"Step 2: H → J.\n{check}"
+        active_matches = suggest_matches(active, ontology)
+        check_start = active.index(check)
+        assert any(
+            match.value == "reference_lookup_event_candidate"
+            and match.start == check_start
+            for match in active_matches
+        )
+        assert not any(
+            match.value == "instruction_or_task_description"
+            and match.start == check_start
+            for match in active_matches
+        )
+
+        bare_matches = suggest_matches(check, ontology)
+        assert any(
+            match.value == "instruction_or_task_description" for match in bare_matches
+        )
+        assert not any(
+            match.value == "reference_lookup_event_candidate" for match in bare_matches
+        )
+
+    next_context = (
+        "Squares: 1, 1, 36. Sum: 1 + 1 + 36 = 38. So next is 38.\n"
+        "Sequence: [8640, 116, 38]\n"
+        "Next: 38.\nDigits: 3, 8.\nSquares: 9, 64. Sum: 9 + 64 = 73.\n"
+        "Sequence: [8640, 116, 38, 73]\n"
+        "Next: 73.\nDigits:7,3. Squares:49,9. Sum:49+9=58.\n"
+        "Sequence: [8640, 116, 38, 73, 58]\n"
+        "Next:58.\nDigits:5,8. Squares:25,64. Sum:25+64=89.\n"
+        "Sequence: [8640, 116, 38, 73, 58, 89]\n"
+        "Next:89.\nDigits:8,9. Squares:64,81. Sum:64+81=145.\n"
+        "Sequence: [8640, 116, 38, 73, 58, 89, 145]\n"
+        "Next:145.\nDigits:1,4,5. Squares:1,16,25. Sum:1+16=17; 17+25=42.\n"
+        "Sequence: [8640, 116, 38, 73, 58, 89, 145, 42]\n"
+        "Next:42.\nDigits:4,2. Squares:16,4. Sum:20.\n"
+        "Sequence: [8640, 116, 38, 73, 58, 89, 145, 42, 20]\n"
+        "Next:20.\nDigits:2,0. Squares:4,0. Sum:4.\n"
+        "Sequence: [8640, 116, 38, 73, 58, 89, 145, 42, 20, 4]\n"
+        "Next:4.\nDigits:4. Square:16. Sum:16."
+    )
+    next_start = next_context.index("\nNext:4.\n") + 1
+    assert any(
+        match.axis == "discourse_phase"
+        and match.value == "working_or_derivation"
+        and match.start == next_start
+        for match in suggest_matches(next_context, ontology)
+    )
+
+    exact_lookup_contexts = {
+        "Check outgoing edges from J.": (
+            "2*3 =6, 6+34=40. 40 mod 308 is 40.\n"
+            "So digest becomes 40.\nNow at J.\nCheck outgoing edges from J."
+        ),
+        "Check outgoing lanes.": (
+            "143*11 = 1573; 1573 +19 = 1592.\n"
+            "1592 mod 985: 985*1=985, 1592-985=607. So 607.\n"
+            "5. Now at Saiph. Check outgoing lanes."
+        ),
+        "Check if Isaac has any outgoing edges.": (
+            "219*3 = 657. 657 +18 = 675. 675 mod 470: 470*1=470, "
+            "675-470=205. Correct.\nNow, at Isaac. "
+            "Check if Isaac has any outgoing edges."
+        ),
+    }
+    for target, context in exact_lookup_contexts.items():
+        target_start = context.index(target)
+        assert any(
+            match.value == "reference_lookup_event_candidate"
+            and match.start == target_start
+            for match in suggest_matches(context, ontology)
+        )
+
+    recap_context = (
+        "Let's recount the steps:\nStart: 8640\nStep 1: 116\nStep 2: 38\n"
+        "Step3:73\nStep4:58"
+    )
+    recap_start = recap_context.index("Step 2: 38")
+    assert any(
+        match.axis == "discourse_phase"
+        and match.value == "working_or_derivation"
+        and match.start == recap_start
+        for match in suggest_matches(recap_context, ontology)
+    )
+
+    inventory_context = (
+        "Looking at the list:\n- Aldebaran → Saiph: fuel 95.\n"
+        "Wait, is there any other outgoing lane from Aldebaran? Let me check all "
+        "the entries.\nThe list:\nWezen → Aldebaran (so Aldebaran is a "
+        "destination here, not a source)\n"
+        "Aldebaran → Saiph is listed as a lane."
+    )
+    inventory_start = inventory_context.index("Aldebaran → Saiph is listed")
+    inventory_matches = suggest_matches(inventory_context, ontology)
+    assert any(
+        match.axis == "discourse_phase"
+        and match.value == "reference_lookup_or_reading"
+        and match.start == inventory_start
+        for match in inventory_matches
+    )
+    assert not any(
+        match.value == "instruction_or_task_description"
+        and match.start == inventory_start
+        for match in inventory_matches
+    )
+
+
 def test_rule_inspection_is_stratified_across_response_support() -> None:
     documents = []
     for index in range(10):
@@ -954,13 +1172,13 @@ def test_review_ui_is_token_painter_with_bound_provenance() -> None:
     assert 'node.classList.contains("overlap-fragment")' in html
     assert ".document-shell { min-width: 0; min-height: 0;" in html
     assert ".document-scroll { flex: 1; min-height: 0; overflow: auto;" in html
-    assert 'const UI_VERSION = "process-witness-token-painter.v8"' in html
+    assert 'const UI_VERSION = "process-witness-token-painter.v9"' in html
     assert 'axes.includes("discourse_phase") ? "discourse_phase"' in html
     builder = (
         Path(__file__).parents[1]
         / "scripts/bonafide/build_process_witness_annotations.py"
     ).read_text(encoding="utf-8")
-    assert 'REVIEW_UI_VERSION = "process-witness-token-painter.v8"' in builder
+    assert 'REVIEW_UI_VERSION = "process-witness-token-painter.v9"' in builder
     assert "const documentCodepoints" in html
     assert "cpSlice(document.text" not in html
     assert '"--annotation-set-id"' in builder

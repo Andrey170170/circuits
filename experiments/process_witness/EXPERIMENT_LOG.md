@@ -99,18 +99,27 @@ intermediate-result, state-transition, lookup, encoding, verification, and instr
 rules. Version 6 remains an immutable diagnostic artifact only. No human review or trace-target
 selection used it.
 
-## 2026-08-13 — Conservative v7 automatic draft frozen for review
+## 2026-08-13 — Conservative v7 draft rejected after post-build sampling
 
-The replacement `process-witness-graph-blind-auto-v7` draft uses a conservative v4 ontology and
-token-painting UI v7. It preserves exact local operator cues separately from broad candidate event
-spans, adds explicit instruction, lookup, schema-relation, state-transition, arithmetic,
-verification, correction, and answer layers, and leaves `usage` and `event_status` human-only.
-Strict replay now abstains on task descriptions, lookup imperatives, background or planned
-encoding, ambiguous motion, classification and parameter-assignment arrows, negated verification,
-and bare coefficients while retaining explicit arithmetic results and performed transitions.
+The replacement `process-witness-graph-blind-auto-v7` draft used a conservative v4 ontology and
+token-painting UI v7. It passed full provenance and real-browser QA, but the post-build
+response-stratified sample still found generic discourse shortcuts that mislabeled derived
+conclusions beginning with "Given that" and one active list lookup. Version 7 is therefore
+preserved as another diagnostic artifact and was not used for human review.
 
-The frozen artifact contains 188 responses, 842,007 tokens, and 1,037,629 graph-blind automatic
-suggestions. Its 39.4 MB compact bundle is the sole canonical input for real review. Automatic
+## 2026-08-13 — Conservative v8 automatic draft frozen for review
+
+The final `process-witness-graph-blind-auto-v8` draft uses ontology v5 and token-painting UI v8.
+It preserves exact local operator cues separately from broad candidate event spans, adds explicit
+instruction, lookup, schema-relation, state-transition, arithmetic, verification, correction, and
+answer layers, and leaves `usage` and `event_status` human-only. Strict replay abstains on task
+descriptions, lookup imperatives, background or planned encoding, ambiguous motion,
+classification and parameter-assignment arrows, negated verification, generic "given that", and
+bare coefficients while retaining explicit arithmetic results, performed transitions, and active
+lookups.
+
+The frozen artifact contains 188 responses, 842,007 tokens, and 1,038,936 graph-blind automatic
+suggestions. Its 39.5 MB compact bundle is the sole canonical input for real review. Automatic
 coverage is deliberately layered: `discourse_phase` 97.4%, `process_span` 35.7%,
 `event_operation` 33.7%, exact `operation` 3.1%, and `process_role` 17.9%. These are detector yields,
 not accuracy or evidence of internal computation. Human review, `usage` assignment, and the

@@ -1,0 +1,1323 @@
+{
+  "schema_version": "adag.process-witness.annotation-coverage-prototype.v1",
+  "status": "prototype_not_frozen",
+  "generated_at": "2026-08-14T04:50:19.784041+00:00",
+  "claim_boundary": "Unique-token detector yield on frozen text; this does not measure label accuracy, process execution, correctness, or faithfulness.",
+  "inputs": {
+    "bundle": "/scratch/general/vast/u1653998/circuits/results/process_witness/annotations/process-witness-graph-blind-auto-v6/workstation-bundle.json",
+    "bundle_sha256": "193bdba3f801d32410d6aaa7718325a6adc375a04ddb5f815a184f05797263d6",
+    "source_annotation_set_id": "process-witness-graph-blind-auto-v6",
+    "cohort": "/scratch/rai/vast1/u1653998/bonafide/campaigns/qwen3-4b-thinking-2507-process-witness-broad-v1/cohorts/atlas-responses-backfilled-v2",
+    "cohort_manifest_sha256": "d4cbb862333b62d5ae108fdc2d02aab8ab47f4b729438d80f1b880f21d1d76f6",
+    "cohort_index_sha256": "c13cdf45a28b350ade8ec578ec4adc0eac740ecc5dec1f32869439ae7c5d9cbc",
+    "cohort_id": "qwen3-thinking-process-witness-atlas-responses-backfilled-v2",
+    "ontology": "scripts/bonafide/configs/process_witness_annotation_ontology_v6.json",
+    "ontology_file_sha256": "1ab6c780e3f8a1488967d4ca90b3bb500946b0b00e455716c04e24d702f6b923",
+    "ontology_id": "process-witness-graph-blind-v6",
+    "base_ontology_sha256": "5937bd2469e3d1020db2b0206d34c7850ce0530829629698acc572f877bfa014"
+  },
+  "responses": 188,
+  "tokens": 842007,
+  "terminal_answer_serializations": 186,
+  "builder_fidelity": {
+    "accepted_answer_keys_from_hash_verified_source_records": true,
+    "derived_event_token_positions_included": true,
+    "token_offsets_from_source_workstation_bundle": true
+  },
+  "unique_token_coverage_by_axis": {
+    "discourse_phase": {
+      "tokens": 820236,
+      "percent": 97.414
+    },
+    "process_span": {
+      "tokens": 303498,
+      "percent": 36.045
+    },
+    "event_operation": {
+      "tokens": 286055,
+      "percent": 33.973
+    },
+    "operation": {
+      "tokens": 26152,
+      "percent": 3.106
+    },
+    "process_role": {
+      "tokens": 149830,
+      "percent": 17.794
+    },
+    "event_token_position": {
+      "tokens": 312036,
+      "percent": 37.059
+    }
+  },
+  "unique_token_coverage_by_value": {
+    "discourse_phase/answer_serialization": 2775,
+    "discourse_phase/conclusion": 14740,
+    "discourse_phase/correction_or_reconsideration": 5479,
+    "discourse_phase/instruction_or_task_description": 36545,
+    "discourse_phase/planning": 62013,
+    "discourse_phase/reference_lookup_or_reading": 7127,
+    "discourse_phase/uncertainty_or_deliberation": 83644,
+    "discourse_phase/unclassified_or_other": 442503,
+    "discourse_phase/verification": 4740,
+    "discourse_phase/working_or_derivation": 160670,
+    "event_operation/addition": 17389,
+    "event_operation/correction": 5459,
+    "event_operation/division": 2016,
+    "event_operation/encoding_or_decoding": 4822,
+    "event_operation/exponentiation": 2443,
+    "event_operation/lookup": 7045,
+    "event_operation/mixed_arithmetic": 65559,
+    "event_operation/modulo": 1588,
+    "event_operation/multiplication": 18291,
+    "event_operation/order_comparison": 17839,
+    "event_operation/state_relation_or_schema": 97230,
+    "event_operation/state_transition": 13213,
+    "event_operation/subtraction": 23081,
+    "event_operation/verification": 10080,
+    "event_token_position/following_separator": 8538,
+    "event_token_position/span_interior": 259698,
+    "event_token_position/span_onset": 21900,
+    "event_token_position/span_terminal": 21900,
+    "operation/addition": 6228,
+    "operation/correction": 396,
+    "operation/counting": 666,
+    "operation/division": 796,
+    "operation/encoding_or_decoding": 333,
+    "operation/exponentiation": 1166,
+    "operation/lookup": 170,
+    "operation/modulo": 4730,
+    "operation/multiplication": 5748,
+    "operation/order_comparison": 2099,
+    "operation/state_transition": 257,
+    "operation/subtraction": 2588,
+    "operation/verification": 975,
+    "process_role/answer_commitment": 1787,
+    "process_role/correction_cue": 415,
+    "process_role/final_result": 1787,
+    "process_role/intermediate_result_candidate": 18018,
+    "process_role/operand_candidate": 72686,
+    "process_role/operator_cue": 11026,
+    "process_role/planning_cue": 11716,
+    "process_role/state_update": 1429,
+    "process_role/state_value_candidate": 42615,
+    "process_role/uncertainty_cue": 7819,
+    "process_role/verification_cue": 975,
+    "process_span/answer_event_candidate": 17443,
+    "process_span/arithmetic_event_candidate": 130047,
+    "process_span/comparison_or_selection_event_candidate": 17839,
+    "process_span/correction_event_candidate": 5459,
+    "process_span/encoding_or_decoding_event_candidate": 4822,
+    "process_span/reference_lookup_event_candidate": 7045,
+    "process_span/state_relation_or_schema_candidate": 97230,
+    "process_span/state_transition_event_candidate": 13213,
+    "process_span/state_update_with_arithmetic": 320,
+    "process_span/verification_event_candidate": 10080
+  },
+  "response_support_by_value": {
+    "discourse_phase/answer_serialization": 186,
+    "discourse_phase/conclusion": 187,
+    "discourse_phase/correction_or_reconsideration": 136,
+    "discourse_phase/instruction_or_task_description": 177,
+    "discourse_phase/planning": 188,
+    "discourse_phase/reference_lookup_or_reading": 119,
+    "discourse_phase/uncertainty_or_deliberation": 188,
+    "discourse_phase/unclassified_or_other": 188,
+    "discourse_phase/verification": 170,
+    "discourse_phase/working_or_derivation": 188,
+    "event_operation/addition": 137,
+    "event_operation/correction": 136,
+    "event_operation/division": 28,
+    "event_operation/encoding_or_decoding": 20,
+    "event_operation/exponentiation": 27,
+    "event_operation/lookup": 122,
+    "event_operation/mixed_arithmetic": 149,
+    "event_operation/modulo": 52,
+    "event_operation/multiplication": 113,
+    "event_operation/order_comparison": 125,
+    "event_operation/state_relation_or_schema": 119,
+    "event_operation/state_transition": 117,
+    "event_operation/subtraction": 93,
+    "event_operation/verification": 187,
+    "event_token_position/following_separator": 157,
+    "event_token_position/span_interior": 188,
+    "event_token_position/span_onset": 188,
+    "event_token_position/span_terminal": 188,
+    "operation/addition": 182,
+    "operation/correction": 139,
+    "operation/counting": 53,
+    "operation/division": 120,
+    "operation/encoding_or_decoding": 20,
+    "operation/exponentiation": 36,
+    "operation/lookup": 65,
+    "operation/modulo": 133,
+    "operation/multiplication": 150,
+    "operation/order_comparison": 119,
+    "operation/state_transition": 52,
+    "operation/subtraction": 154,
+    "operation/verification": 187,
+    "process_role/answer_commitment": 186,
+    "process_role/correction_cue": 146,
+    "process_role/final_result": 186,
+    "process_role/intermediate_result_candidate": 173,
+    "process_role/operand_candidate": 173,
+    "process_role/operator_cue": 174,
+    "process_role/planning_cue": 188,
+    "process_role/state_update": 109,
+    "process_role/state_value_candidate": 120,
+    "process_role/uncertainty_cue": 188,
+    "process_role/verification_cue": 187,
+    "process_span/answer_event_candidate": 188,
+    "process_span/arithmetic_event_candidate": 174,
+    "process_span/comparison_or_selection_event_candidate": 125,
+    "process_span/correction_event_candidate": 136,
+    "process_span/encoding_or_decoding_event_candidate": 20,
+    "process_span/reference_lookup_event_candidate": 122,
+    "process_span/state_relation_or_schema_candidate": 119,
+    "process_span/state_transition_event_candidate": 117,
+    "process_span/state_update_with_arithmetic": 6,
+    "process_span/verification_event_candidate": 187
+  },
+  "process_span_coverage_by_source_type": {
+    "complex": {
+      "tokens": 110096,
+      "total_tokens": 408377,
+      "percent": 26.959
+    },
+    "graph": {
+      "tokens": 193402,
+      "total_tokens": 433630,
+      "percent": 44.601
+    }
+  },
+  "per_response": [
+    {
+      "response_id": "atlasresponsev1_996f28f119674fc4ee909050933734332b9cd7bac10c2b6c8d2b66d1c86bb0fe",
+      "token_count": 3816,
+      "discourse_phase_tokens": 3643,
+      "process_span_tokens": 1760
+    },
+    {
+      "response_id": "atlasresponsev1_b5065765486e0f9ad4f32cc48ae051472f9b222e62e25dcfa37bdc5544880549",
+      "token_count": 5667,
+      "discourse_phase_tokens": 5514,
+      "process_span_tokens": 1790
+    },
+    {
+      "response_id": "atlasresponsev1_3fdef1416af68185bec073e19d44cf84a0bc707335dba27e182225ef08bcd311",
+      "token_count": 6616,
+      "discourse_phase_tokens": 6249,
+      "process_span_tokens": 2833
+    },
+    {
+      "response_id": "atlasresponsev1_1a03bb001585ad388cfd30a1112ce19124a305b6ec966a6d5c70b5ea9df2a1ce",
+      "token_count": 3629,
+      "discourse_phase_tokens": 3523,
+      "process_span_tokens": 1887
+    },
+    {
+      "response_id": "atlasresponsev1_d3eb66ba7f731b4cd78f870514793c7395d167827851bf88a382fe55043e41ad",
+      "token_count": 9714,
+      "discourse_phase_tokens": 9629,
+      "process_span_tokens": 5217
+    },
+    {
+      "response_id": "atlasresponsev1_ec8542ee0132dd530b486181a6cdb35c418f48eb3e479b6b81acc69f0a3347c8",
+      "token_count": 6866,
+      "discourse_phase_tokens": 6838,
+      "process_span_tokens": 3367
+    },
+    {
+      "response_id": "atlasresponsev1_182fcce39e4763f1a43f3ad7826f0ab714e6fa56ceb6c695789466f751dd2cdc",
+      "token_count": 8207,
+      "discourse_phase_tokens": 8190,
+      "process_span_tokens": 4541
+    },
+    {
+      "response_id": "atlasresponsev1_378cde5ff32856aa23ee0de771399947b12aab982b6cff50653e76e8e554598e",
+      "token_count": 8545,
+      "discourse_phase_tokens": 8412,
+      "process_span_tokens": 4945
+    },
+    {
+      "response_id": "atlasresponsev1_f79e3b67cdfa37d7cf4205482deea63136fe0fb82851bcdc176c5e41d1f2b2b0",
+      "token_count": 3548,
+      "discourse_phase_tokens": 3409,
+      "process_span_tokens": 1591
+    },
+    {
+      "response_id": "atlasresponsev1_0de218464e2365d2560e0d024b9dcc486583cf64f9376507adeebb8041f6b8b3",
+      "token_count": 3295,
+      "discourse_phase_tokens": 3229,
+      "process_span_tokens": 1548
+    },
+    {
+      "response_id": "atlasresponsev1_13a30fe15c7cb3c09fb3498ca4ef9e92d6f2d78b2eb7db16ffe1c0f2b959d19b",
+      "token_count": 4388,
+      "discourse_phase_tokens": 4253,
+      "process_span_tokens": 2149
+    },
+    {
+      "response_id": "atlasresponsev1_5ff93e69e7c4068ec82110cbe51044971521cc23c111aef9658fc566dad1f61e",
+      "token_count": 3113,
+      "discourse_phase_tokens": 2995,
+      "process_span_tokens": 1386
+    },
+    {
+      "response_id": "atlasresponsev1_c8dfa5d8bb8ff608783e3b969bfc77d9e8e94841b70ae4502945cbd47856ce59",
+      "token_count": 3284,
+      "discourse_phase_tokens": 3199,
+      "process_span_tokens": 1868
+    },
+    {
+      "response_id": "atlasresponsev1_3225e654599982e0b369d18b7fc70b02409421448b88e4732f832aa81303bf70",
+      "token_count": 3361,
+      "discourse_phase_tokens": 3310,
+      "process_span_tokens": 2178
+    },
+    {
+      "response_id": "atlasresponsev1_4fa84e14e642d04017f0b16d02fda1c15d04ec69af504b40907a0d3c2ddf2178",
+      "token_count": 3451,
+      "discourse_phase_tokens": 3390,
+      "process_span_tokens": 1915
+    },
+    {
+      "response_id": "atlasresponsev1_834d8539d82541574dd3e824a99f69630d33d143eca202d523d91277c9d5a520",
+      "token_count": 3166,
+      "discourse_phase_tokens": 3105,
+      "process_span_tokens": 2020
+    },
+    {
+      "response_id": "atlasresponsev1_5d558c4613c38278062cae8d2e594be8e3607a50911fccffc27ea04f34905c23",
+      "token_count": 5308,
+      "discourse_phase_tokens": 5217,
+      "process_span_tokens": 1955
+    },
+    {
+      "response_id": "atlasresponsev1_578b70327a976c1758a1923b144bf25e3728ff298f8e89c34defefae470be5df",
+      "token_count": 6886,
+      "discourse_phase_tokens": 6636,
+      "process_span_tokens": 1301
+    },
+    {
+      "response_id": "atlasresponsev1_ef1cc8a9e643fe8971fdd08c0ec70154c1b6b457a49600deeb8d2c493ffbd6d8",
+      "token_count": 4943,
+      "discourse_phase_tokens": 4572,
+      "process_span_tokens": 1694
+    },
+    {
+      "response_id": "atlasresponsev1_757376e81a1be0b3eb18d36e48cd6b8f2ca7d760bf4799a651287e3ebe7ca2e7",
+      "token_count": 5867,
+      "discourse_phase_tokens": 5560,
+      "process_span_tokens": 2308
+    },
+    {
+      "response_id": "atlasresponsev1_c45c70a79b52d8be15b1458700a1ca3cbfca3c70d94db66c21610280d1adbec5",
+      "token_count": 3389,
+      "discourse_phase_tokens": 3290,
+      "process_span_tokens": 1878
+    },
+    {
+      "response_id": "atlasresponsev1_80c8d3f01a2a49dec37097dcf190f6d07945c25259b7cf95d03e2ed979dbf048",
+      "token_count": 3725,
+      "discourse_phase_tokens": 3607,
+      "process_span_tokens": 1610
+    },
+    {
+      "response_id": "atlasresponsev1_3dbe4effe71e6cafb34cb3dc28a717b6cd4358fb0d7bdecdd42d7cecbe87e5d1",
+      "token_count": 3006,
+      "discourse_phase_tokens": 2867,
+      "process_span_tokens": 1320
+    },
+    {
+      "response_id": "atlasresponsev1_a1ebe8382f5e460f8f3bde2ac68b3c877c30566db443dd617bd8c3975c4b4ca4",
+      "token_count": 2553,
+      "discourse_phase_tokens": 2423,
+      "process_span_tokens": 1327
+    },
+    {
+      "response_id": "atlasresponsev1_50ddaea7e17a37b67753313afdb4f6aa503e3a8ad11e889d08f17d496f51063b",
+      "token_count": 2929,
+      "discourse_phase_tokens": 2851,
+      "process_span_tokens": 1340
+    },
+    {
+      "response_id": "atlasresponsev1_2bb2702e136de88ba0ebac13bdfa43101e0f7b3f7e02539bbd3e566818992d29",
+      "token_count": 3453,
+      "discourse_phase_tokens": 3317,
+      "process_span_tokens": 1102
+    },
+    {
+      "response_id": "atlasresponsev1_77b379fc6c85908b17cbc395a21c2d169b41f710f0145e6016588e316a0a71e1",
+      "token_count": 3937,
+      "discourse_phase_tokens": 3880,
+      "process_span_tokens": 1904
+    },
+    {
+      "response_id": "atlasresponsev1_72432d410c48706c9169ff59bb543712a3144226cf7abca00dab7ec8a67050f9",
+      "token_count": 2971,
+      "discourse_phase_tokens": 2921,
+      "process_span_tokens": 1145
+    },
+    {
+      "response_id": "atlasresponsev1_232376ff723ff794c3eb06a35f85ecfd4d8501c338b1dbc416a4b91123a350bd",
+      "token_count": 2571,
+      "discourse_phase_tokens": 2537,
+      "process_span_tokens": 1013
+    },
+    {
+      "response_id": "atlasresponsev1_7589585c20f47b73efcc8a7ac29bf70546ceb7d3ed97b8b2d060265fc563656d",
+      "token_count": 2840,
+      "discourse_phase_tokens": 2773,
+      "process_span_tokens": 1288
+    },
+    {
+      "response_id": "atlasresponsev1_b3c0c6865762cd16a001b1c09361ee66b28bcd85c4dcabc30a4ffb3c86d9097f",
+      "token_count": 2681,
+      "discourse_phase_tokens": 2642,
+      "process_span_tokens": 1364
+    },
+    {
+      "response_id": "atlasresponsev1_5c1fff5a134337fd28b84c464ed66fdde3aace8d67b6d0bb4101cbf526d797c2",
+      "token_count": 3053,
+      "discourse_phase_tokens": 3039,
+      "process_span_tokens": 1266
+    },
+    {
+      "response_id": "atlasresponsev1_0b98d347cc9b17fd8d155f11635e8cd6582d61779310b3a7fd67c8332cef32d2",
+      "token_count": 3905,
+      "discourse_phase_tokens": 3852,
+      "process_span_tokens": 845
+    },
+    {
+      "response_id": "atlasresponsev1_52222c4b0bb93f8af0e02ab403982a6d060eb15451e0cc7edcd05e6d55859f14",
+      "token_count": 4240,
+      "discourse_phase_tokens": 4201,
+      "process_span_tokens": 684
+    },
+    {
+      "response_id": "atlasresponsev1_11c947082c6532ace76ee962620884e0d2ceafb22e1d3d15c9897f3d38f577ad",
+      "token_count": 5085,
+      "discourse_phase_tokens": 5010,
+      "process_span_tokens": 1721
+    },
+    {
+      "response_id": "atlasresponsev1_f828a1321bb1c61c15440960d6ccb2dad5f10fc88de9082bcd33548b2e3a1c10",
+      "token_count": 10580,
+      "discourse_phase_tokens": 10428,
+      "process_span_tokens": 2237
+    },
+    {
+      "response_id": "atlasresponsev1_bdc8afdd0075eb520860c5b770f9fda2482c2020d7c59409d5bb8628c1ef9dd2",
+      "token_count": 4092,
+      "discourse_phase_tokens": 3996,
+      "process_span_tokens": 2001
+    },
+    {
+      "response_id": "atlasresponsev1_434e0d907a9dd9040677c466e4aa317032877e142317c4d3ca1d0cb66d19e236",
+      "token_count": 3906,
+      "discourse_phase_tokens": 3724,
+      "process_span_tokens": 2052
+    },
+    {
+      "response_id": "atlasresponsev1_13a59ed6035199d54eb1a0412b6d7ba62eed3c6e010c2ebf0c26acc81812ee4e",
+      "token_count": 5993,
+      "discourse_phase_tokens": 5557,
+      "process_span_tokens": 2415
+    },
+    {
+      "response_id": "atlasresponsev1_63820ec069ef2284ac5ac313ae4537ee7a772c9ffb6878fb76abf3b41430743c",
+      "token_count": 5265,
+      "discourse_phase_tokens": 5132,
+      "process_span_tokens": 3383
+    },
+    {
+      "response_id": "atlasresponsev1_dd67fe16ef893daaeae1f08059acd5d56dc3f91f0f109113db7d3f513e42d5f0",
+      "token_count": 1767,
+      "discourse_phase_tokens": 1736,
+      "process_span_tokens": 557
+    },
+    {
+      "response_id": "atlasresponsev1_8386a9f4b308c67eeedd84ac78497e416f796f16cf0e3391043169fe16b5fbc3",
+      "token_count": 1192,
+      "discourse_phase_tokens": 1162,
+      "process_span_tokens": 373
+    },
+    {
+      "response_id": "atlasresponsev1_bb0a9634136f329a621debddda122a6b20335894738c9df21c03a6b2a478b47f",
+      "token_count": 1677,
+      "discourse_phase_tokens": 1640,
+      "process_span_tokens": 321
+    },
+    {
+      "response_id": "atlasresponsev1_6ec1565847a4c6cc984fc373724a9fe110cebaee3ed5139c6fd8e54cf31d3a09",
+      "token_count": 2358,
+      "discourse_phase_tokens": 2328,
+      "process_span_tokens": 594
+    },
+    {
+      "response_id": "atlasresponsev1_fbeb5d409cd232d3c79cbc263ce72450a16de35c59877c4398d4d7bf715dd04a",
+      "token_count": 2690,
+      "discourse_phase_tokens": 2599,
+      "process_span_tokens": 1181
+    },
+    {
+      "response_id": "atlasresponsev1_ed25957cd204aa7b2f432d6506d70357cd60da09aa54cb6664ce5eb9968dd13b",
+      "token_count": 2107,
+      "discourse_phase_tokens": 2056,
+      "process_span_tokens": 1084
+    },
+    {
+      "response_id": "atlasresponsev1_c6d0651df4b15c53cac432a4f02f8969265e455e5ca76f026beaab8f09e1890b",
+      "token_count": 1981,
+      "discourse_phase_tokens": 1936,
+      "process_span_tokens": 937
+    },
+    {
+      "response_id": "atlasresponsev1_1c0dced65db8feedf3cb38966830eb63dea9f76868124aec09dcfd7a8acbd04a",
+      "token_count": 2400,
+      "discourse_phase_tokens": 2297,
+      "process_span_tokens": 1221
+    },
+    {
+      "response_id": "atlasresponsev1_1bbce112b79cf6f9060a2216c2141492cc7ae48098078b57df1fc1d791a15693",
+      "token_count": 9321,
+      "discourse_phase_tokens": 8954,
+      "process_span_tokens": 134
+    },
+    {
+      "response_id": "atlasresponsev1_c3808b0f052369331d4f458fc0d85ce02e577741ff6223fa0a45f7b9550058cc",
+      "token_count": 7720,
+      "discourse_phase_tokens": 7252,
+      "process_span_tokens": 116
+    },
+    {
+      "response_id": "atlasresponsev1_dbe5777381cc83892d658a1027dcde1fdb72b18ed61255f25650068a1146020c",
+      "token_count": 8708,
+      "discourse_phase_tokens": 8087,
+      "process_span_tokens": 205
+    },
+    {
+      "response_id": "atlasresponsev1_75b0cfc6173f7a5073396b9ebf3f43231444a018be14e6b1c86b0f4e6fa2a0d2",
+      "token_count": 9396,
+      "discourse_phase_tokens": 9029,
+      "process_span_tokens": 160
+    },
+    {
+      "response_id": "atlasresponsev1_c811db90b4edd000d690b108db2f49bd8bc9da0a9d59131d2823a0c054f4c65f",
+      "token_count": 3433,
+      "discourse_phase_tokens": 3333,
+      "process_span_tokens": 2055
+    },
+    {
+      "response_id": "atlasresponsev1_0f2dd80ad40e5dfae14c0736635aef819d72886b3f87b0fe0ea7112d95a114e4",
+      "token_count": 2714,
+      "discourse_phase_tokens": 2567,
+      "process_span_tokens": 1398
+    },
+    {
+      "response_id": "atlasresponsev1_dd73e41af7da7ae4761098147192e8795c58fcc8d0bf9d30224c350fb3089d61",
+      "token_count": 3285,
+      "discourse_phase_tokens": 3143,
+      "process_span_tokens": 1546
+    },
+    {
+      "response_id": "atlasresponsev1_fc8eab72b784f7248e9008079f3930507db3460e44fe9212435c4d39ec6bf493",
+      "token_count": 3636,
+      "discourse_phase_tokens": 3576,
+      "process_span_tokens": 1937
+    },
+    {
+      "response_id": "atlasresponsev1_950b1f82a57135749e68555f8837926ece02e2ff0d372d8a65afea8700a9dac6",
+      "token_count": 3681,
+      "discourse_phase_tokens": 3633,
+      "process_span_tokens": 1611
+    },
+    {
+      "response_id": "atlasresponsev1_a1fc49e9aa7b2782967572e94c4fdbc26a37a7614edb0b9d05be26e2d31bc013",
+      "token_count": 3552,
+      "discourse_phase_tokens": 3484,
+      "process_span_tokens": 1426
+    },
+    {
+      "response_id": "atlasresponsev1_c0119384f6817c663da52e0c09609cad693a11bd9d12fce2e675175b01b54cb6",
+      "token_count": 3519,
+      "discourse_phase_tokens": 3354,
+      "process_span_tokens": 1408
+    },
+    {
+      "response_id": "atlasresponsev1_1798ac79086f47a920cdfece41dae2dde04ab9159d6ba56437a657ff65dd4a20",
+      "token_count": 2908,
+      "discourse_phase_tokens": 2767,
+      "process_span_tokens": 1054
+    },
+    {
+      "response_id": "atlasresponsev1_bdca702effa3a4b6bf1e5d1f2b251dfc9b1011710bebd34c5b44dab431bdfb05",
+      "token_count": 3836,
+      "discourse_phase_tokens": 3742,
+      "process_span_tokens": 1971
+    },
+    {
+      "response_id": "atlasresponsev1_dc538b319012a148358e2fa8fec8316d12f6f32b5a75c5ed430c4883def2d64f",
+      "token_count": 5252,
+      "discourse_phase_tokens": 5118,
+      "process_span_tokens": 2352
+    },
+    {
+      "response_id": "atlasresponsev1_19bab82a6e969cfd0439bc4d9426f026f731a465b33bab4c24b56ce317d72770",
+      "token_count": 3558,
+      "discourse_phase_tokens": 3474,
+      "process_span_tokens": 1712
+    },
+    {
+      "response_id": "atlasresponsev1_d569381b1571aefcf93bf71bd2a88217c5033bbd22fc8efb14b86ac59ffb29fd",
+      "token_count": 3843,
+      "discourse_phase_tokens": 3787,
+      "process_span_tokens": 1829
+    },
+    {
+      "response_id": "atlasresponsev1_7b0c816309c0466ac64eb0d647a584ac25cc473e5c44c88ca8bdd5ad8ed8dd99",
+      "token_count": 3223,
+      "discourse_phase_tokens": 3181,
+      "process_span_tokens": 1706
+    },
+    {
+      "response_id": "atlasresponsev1_d8e1de800b9dbf147d6ba6c5c547b9158c694f96eec3db3c0f6aed7dc0b7f1c0",
+      "token_count": 5255,
+      "discourse_phase_tokens": 5113,
+      "process_span_tokens": 2284
+    },
+    {
+      "response_id": "atlasresponsev1_d89b2e958805eec4cf7d8e8aed47ee308e5204a7e2da2234a09d117e3550e2e0",
+      "token_count": 2956,
+      "discourse_phase_tokens": 2909,
+      "process_span_tokens": 1433
+    },
+    {
+      "response_id": "atlasresponsev1_f2bf78ccecdc9c16116fa525ab08fba61d1b842d38f7b4b93c44a5b8ef327024",
+      "token_count": 2538,
+      "discourse_phase_tokens": 2507,
+      "process_span_tokens": 1406
+    },
+    {
+      "response_id": "atlasresponsev1_9760590320697522ceb1761c906e8ad4f72b0e41b04b1e9712eb5962428b30a5",
+      "token_count": 4186,
+      "discourse_phase_tokens": 3958,
+      "process_span_tokens": 2459
+    },
+    {
+      "response_id": "atlasresponsev1_ac9ced08cbad99e032769455981f445af182431126b31b7464a5d8e4b8fbd901",
+      "token_count": 4663,
+      "discourse_phase_tokens": 4538,
+      "process_span_tokens": 2203
+    },
+    {
+      "response_id": "atlasresponsev1_8dcbd8f3f2d42081a5b20b1ad209dd6eb680b9baef035ec44193463a0b245ea0",
+      "token_count": 3894,
+      "discourse_phase_tokens": 3736,
+      "process_span_tokens": 2058
+    },
+    {
+      "response_id": "atlasresponsev1_538716e7db36115823273ef7f90c4c7443c088ed142373f16e4062a21fbb0d33",
+      "token_count": 4830,
+      "discourse_phase_tokens": 4682,
+      "process_span_tokens": 2061
+    },
+    {
+      "response_id": "atlasresponsev1_d6fbe33e8f5e01f2214de3b180ae93476721434e0dfa0cad6aa29004ad63425e",
+      "token_count": 3934,
+      "discourse_phase_tokens": 3895,
+      "process_span_tokens": 2629
+    },
+    {
+      "response_id": "atlasresponsev1_bf42c5f38ec56d1fc07fa0a8ff0fbfaab899b3287fe649f7566a13aecd2bb253",
+      "token_count": 4174,
+      "discourse_phase_tokens": 4135,
+      "process_span_tokens": 2581
+    },
+    {
+      "response_id": "atlasresponsev1_11d5c0b79e21c5d3c6a4864810cba70915dfaf4e18d6043798361a9c326a3c62",
+      "token_count": 6601,
+      "discourse_phase_tokens": 6532,
+      "process_span_tokens": 3827
+    },
+    {
+      "response_id": "atlasresponsev1_94da7a0db79bd4246ea4f18804a221023b2c71413c202fc81123df8e2c1812ca",
+      "token_count": 3888,
+      "discourse_phase_tokens": 3838,
+      "process_span_tokens": 2606
+    },
+    {
+      "response_id": "atlasresponsev1_71a0bb8983ec0cebfacef6e4c8f55d105a1c25b420ec028f10c0d52eeb7d5717",
+      "token_count": 1627,
+      "discourse_phase_tokens": 1589,
+      "process_span_tokens": 224
+    },
+    {
+      "response_id": "atlasresponsev1_19580bba93cb957f55e71a933a3bbdae34d7b86de9fe87be575bdaf864427739",
+      "token_count": 1677,
+      "discourse_phase_tokens": 1638,
+      "process_span_tokens": 208
+    },
+    {
+      "response_id": "atlasresponsev1_11c85a7fc4c8a2741ac7ad49a952b44c68b512749a4688d36e7c46a2f2d55288",
+      "token_count": 1049,
+      "discourse_phase_tokens": 1011,
+      "process_span_tokens": 188
+    },
+    {
+      "response_id": "atlasresponsev1_381141dfed65493f774e10158884c3496d1b0d861f2e8d8864b089bea464fe64",
+      "token_count": 1123,
+      "discourse_phase_tokens": 1104,
+      "process_span_tokens": 245
+    },
+    {
+      "response_id": "atlasresponsev1_754bd4a11e3e80f224c6d59ca6d89f8fea045b9c5e86cee08ec75f4241add593",
+      "token_count": 3621,
+      "discourse_phase_tokens": 3504,
+      "process_span_tokens": 1772
+    },
+    {
+      "response_id": "atlasresponsev1_df45d0080fdbf5efcd808d3f67a8364828dbd57b45b2ea9201682915ced36570",
+      "token_count": 6915,
+      "discourse_phase_tokens": 6853,
+      "process_span_tokens": 2090
+    },
+    {
+      "response_id": "atlasresponsev1_0ee6642898f3f94ed73153b459dafe525a0859ee942ffd9d88b6f0b8cfb4936c",
+      "token_count": 8522,
+      "discourse_phase_tokens": 8119,
+      "process_span_tokens": 2083
+    },
+    {
+      "response_id": "atlasresponsev1_c226b17b73643719e89d80a0801100232cb4b443bf66df1281e243f6977552f5",
+      "token_count": 5314,
+      "discourse_phase_tokens": 5140,
+      "process_span_tokens": 2715
+    },
+    {
+      "response_id": "atlasresponsev1_0feb7108c0b69d0df5f887a24942209f1321b9f6263cdd9549b9d84fa834f981",
+      "token_count": 3396,
+      "discourse_phase_tokens": 3351,
+      "process_span_tokens": 1339
+    },
+    {
+      "response_id": "atlasresponsev1_c8c8dd48ed0bc12cf5a7144b10c255e7e12d95e53660b146b76828322c86e57b",
+      "token_count": 3727,
+      "discourse_phase_tokens": 3662,
+      "process_span_tokens": 1507
+    },
+    {
+      "response_id": "atlasresponsev1_234214fbe026ffe06093ec4123bb0c9810019aa86ee3b6c3bcaa559ebcb759dc",
+      "token_count": 3005,
+      "discourse_phase_tokens": 2958,
+      "process_span_tokens": 1547
+    },
+    {
+      "response_id": "atlasresponsev1_7039a7ff19205701fcea8dc99f6f7c3cf95077ba80cbc683d6c7e270843191d9",
+      "token_count": 3287,
+      "discourse_phase_tokens": 3235,
+      "process_span_tokens": 1547
+    },
+    {
+      "response_id": "atlasresponsev1_869cff99156bba36975255f9bf7ce1a1ab6721509dd4af71005f6dd3a611c20e",
+      "token_count": 3194,
+      "discourse_phase_tokens": 3172,
+      "process_span_tokens": 178
+    },
+    {
+      "response_id": "atlasresponsev1_fd019ad65f6ef07ea1b29d3806e28c32efa20b5bca66a4efad99146194a29ecf",
+      "token_count": 3430,
+      "discourse_phase_tokens": 3423,
+      "process_span_tokens": 190
+    },
+    {
+      "response_id": "atlasresponsev1_759bd91008cd809f7ea907c741fa10fddd608324b417b64fad87f299bdac8896",
+      "token_count": 3723,
+      "discourse_phase_tokens": 3701,
+      "process_span_tokens": 308
+    },
+    {
+      "response_id": "atlasresponsev1_ca04626adbf112308b2797506da33fdb7d721914fd20178528592232a4d4bb59",
+      "token_count": 3441,
+      "discourse_phase_tokens": 3423,
+      "process_span_tokens": 305
+    },
+    {
+      "response_id": "atlasresponsev1_c865622e79a0f52c2ed418617d4b235b979347215761cb1fc7bafeac8a0d66e0",
+      "token_count": 5566,
+      "discourse_phase_tokens": 5474,
+      "process_span_tokens": 491
+    },
+    {
+      "response_id": "atlasresponsev1_e7efa949b69608d12c57ec72b825dd62a038235cb713bb919e248f9d948c47ab",
+      "token_count": 6558,
+      "discourse_phase_tokens": 6383,
+      "process_span_tokens": 775
+    },
+    {
+      "response_id": "atlasresponsev1_b1373e2d3d6b8421b38d6aeabf837f5d90876e588be8657c8c94ad8d66d358d2",
+      "token_count": 7318,
+      "discourse_phase_tokens": 7173,
+      "process_span_tokens": 756
+    },
+    {
+      "response_id": "atlasresponsev1_9d88f629726bb35b909e8e6355fb152f03c24e32c0e5cb93f4e6af09a7460bbe",
+      "token_count": 7331,
+      "discourse_phase_tokens": 7164,
+      "process_span_tokens": 1242
+    },
+    {
+      "response_id": "atlasresponsev1_dbbae3e20c8edcbe376407a3845222a54ab5d390d6c3cd2c55ad30c82f50d447",
+      "token_count": 1430,
+      "discourse_phase_tokens": 1404,
+      "process_span_tokens": 960
+    },
+    {
+      "response_id": "atlasresponsev1_08eff038ebb73983be49c046de055c1cff10d5f39f85489c463ee1883fb5b5f4",
+      "token_count": 1625,
+      "discourse_phase_tokens": 1592,
+      "process_span_tokens": 1103
+    },
+    {
+      "response_id": "atlasresponsev1_953f06039c283644a41a677a3cfad9511507229a3d38bb2cdd62f78a68cd6ee9",
+      "token_count": 1542,
+      "discourse_phase_tokens": 1527,
+      "process_span_tokens": 1132
+    },
+    {
+      "response_id": "atlasresponsev1_1d7a8be9d887cfcdf9907455ae4af85032ffc64cf5d9b6eeff2bbc8dd8d14c81",
+      "token_count": 1381,
+      "discourse_phase_tokens": 1367,
+      "process_span_tokens": 944
+    },
+    {
+      "response_id": "atlasresponsev1_fa2d1e54dd71e510f168a5b61f28232f53ca58744ae7c7f89d32f7bb62cdbd9b",
+      "token_count": 8854,
+      "discourse_phase_tokens": 8438,
+      "process_span_tokens": 331
+    },
+    {
+      "response_id": "atlasresponsev1_5ff333cd1e545cec895cb7379d159b4493b869a0e8e8aa5f0c47af0770dcdeae",
+      "token_count": 9663,
+      "discourse_phase_tokens": 9249,
+      "process_span_tokens": 266
+    },
+    {
+      "response_id": "atlasresponsev1_324adfbe2c5a2d06770164539f0577458e8623139491bef823c29d8df676df74",
+      "token_count": 8616,
+      "discourse_phase_tokens": 8207,
+      "process_span_tokens": 137
+    },
+    {
+      "response_id": "atlasresponsev1_cfc3c9590e7bfb42b237ba8b81ef851674e99240c0473cda7116b94a17c7d1e7",
+      "token_count": 7048,
+      "discourse_phase_tokens": 6689,
+      "process_span_tokens": 309
+    },
+    {
+      "response_id": "atlasresponsev1_85c25c91ca12ad0e22f9d48a403d9b6eafe01853dcc1e1a32225272a17e7161f",
+      "token_count": 3593,
+      "discourse_phase_tokens": 3448,
+      "process_span_tokens": 1924
+    },
+    {
+      "response_id": "atlasresponsev1_f565c91851a41ecfdf681bcae185b51bd8b081d6b009e3c89bfb5b5f833c3af2",
+      "token_count": 4280,
+      "discourse_phase_tokens": 4194,
+      "process_span_tokens": 1790
+    },
+    {
+      "response_id": "atlasresponsev1_3f68627550f6078eee682815e9d3538d1286e32ea75d4fbd4d0b659d578be30f",
+      "token_count": 3890,
+      "discourse_phase_tokens": 3850,
+      "process_span_tokens": 1925
+    },
+    {
+      "response_id": "atlasresponsev1_324690dcda90e3fcae409480696548b114110bcc3f1f601e3ff6948514d9fea8",
+      "token_count": 4656,
+      "discourse_phase_tokens": 4553,
+      "process_span_tokens": 2241
+    },
+    {
+      "response_id": "atlasresponsev1_7ac951e7bd5b32def6e5bea84578ee941ef652068ae569ab91fd804703eaf3bb",
+      "token_count": 1007,
+      "discourse_phase_tokens": 985,
+      "process_span_tokens": 222
+    },
+    {
+      "response_id": "atlasresponsev1_55d2be7ba62346bc3c165b92ed7b397c5ad5e83d229f6c7ae21894ab663d9cc7",
+      "token_count": 1699,
+      "discourse_phase_tokens": 1663,
+      "process_span_tokens": 189
+    },
+    {
+      "response_id": "atlasresponsev1_201458e0e8d56fa2ae4a5ce31957d2de9199402cec539eab97969705d5146045",
+      "token_count": 1417,
+      "discourse_phase_tokens": 1378,
+      "process_span_tokens": 210
+    },
+    {
+      "response_id": "atlasresponsev1_e488332220a84274342f5aa57a3aab6f44f31517ace0eb12b967b3e7528b7638",
+      "token_count": 1320,
+      "discourse_phase_tokens": 1298,
+      "process_span_tokens": 264
+    },
+    {
+      "response_id": "atlasresponsev1_83f6cd057c87b5d1894da29668646da9f5577c4ebebfd7e0bf16defd85e86f13",
+      "token_count": 4980,
+      "discourse_phase_tokens": 4924,
+      "process_span_tokens": 3110
+    },
+    {
+      "response_id": "atlasresponsev1_b887fd8422be99d64d436f771aa1a519824e1f591ad0b3b0492320d5749bb329",
+      "token_count": 5756,
+      "discourse_phase_tokens": 5617,
+      "process_span_tokens": 1726
+    },
+    {
+      "response_id": "atlasresponsev1_23cd79c5ab47695cbd99be6367b95ec1fa812462e2b1e350d970402b472fcb0e",
+      "token_count": 4212,
+      "discourse_phase_tokens": 4157,
+      "process_span_tokens": 2259
+    },
+    {
+      "response_id": "atlasresponsev1_49337cc0148912e67928c21902813f04638f27fb9b14f28d01a2d551aa5444d8",
+      "token_count": 6702,
+      "discourse_phase_tokens": 6405,
+      "process_span_tokens": 2981
+    },
+    {
+      "response_id": "atlasresponsev1_f2c17917719dbe8613f731646caef171159a5acaa7a4e9e42ff912968bd9b529",
+      "token_count": 5507,
+      "discourse_phase_tokens": 5387,
+      "process_span_tokens": 1813
+    },
+    {
+      "response_id": "atlasresponsev1_92e2162d18d285c53d035a9e868103afc77d8c84f5e082e8af01efe9cd16b14a",
+      "token_count": 4622,
+      "discourse_phase_tokens": 4574,
+      "process_span_tokens": 1767
+    },
+    {
+      "response_id": "atlasresponsev1_74a7758eba189d99dd87f993d94cb9d6c5c14e583dd3fd7c948561acba3884d4",
+      "token_count": 5336,
+      "discourse_phase_tokens": 5240,
+      "process_span_tokens": 1745
+    },
+    {
+      "response_id": "atlasresponsev1_1b8d60e1f8c3041fcbb01839bdd9657e98455340663b5b4e097011705e4d450e",
+      "token_count": 3903,
+      "discourse_phase_tokens": 3883,
+      "process_span_tokens": 1749
+    },
+    {
+      "response_id": "atlasresponsev1_0184f1cf44252b7db38cda6dee8d4b39fdd3a667f1def90caff09362cb846f89",
+      "token_count": 3514,
+      "discourse_phase_tokens": 3508,
+      "process_span_tokens": 140
+    },
+    {
+      "response_id": "atlasresponsev1_101b104f92655f0ca184befed8878cd9adf5bc83f77d40e130744dd17a2e0c08",
+      "token_count": 3899,
+      "discourse_phase_tokens": 3885,
+      "process_span_tokens": 213
+    },
+    {
+      "response_id": "atlasresponsev1_61adea1aa3582c45f8defc7a514154dce764af6fcb82295360a402b046860562",
+      "token_count": 3185,
+      "discourse_phase_tokens": 3182,
+      "process_span_tokens": 202
+    },
+    {
+      "response_id": "atlasresponsev1_3375c2f2cedcfaae66311bba70c82376a6c23ebb680600b799083f9bdc990403",
+      "token_count": 4924,
+      "discourse_phase_tokens": 4914,
+      "process_span_tokens": 190
+    },
+    {
+      "response_id": "atlasresponsev1_0cc1429a6d01fce4d5db9fa1f19a9ae864583fc5b9b3459883a3ffb50ae2546d",
+      "token_count": 3590,
+      "discourse_phase_tokens": 3476,
+      "process_span_tokens": 1508
+    },
+    {
+      "response_id": "atlasresponsev1_5390992f8a44917a9569460861b5488410e62ca7f456aa27c5fdec00b5c52c34",
+      "token_count": 4149,
+      "discourse_phase_tokens": 4045,
+      "process_span_tokens": 1983
+    },
+    {
+      "response_id": "atlasresponsev1_fccb210bbdede27b78f83f3b6471df11517a5e37ad800d398eb2883e7af54854",
+      "token_count": 3583,
+      "discourse_phase_tokens": 3490,
+      "process_span_tokens": 1328
+    },
+    {
+      "response_id": "atlasresponsev1_88afb2b470116b1b8445a15fbec836f273df20b7b3952ff2d15f04bffe0e2c8f",
+      "token_count": 3186,
+      "discourse_phase_tokens": 3118,
+      "process_span_tokens": 1211
+    },
+    {
+      "response_id": "atlasresponsev1_ae575c3be5868fbf49bac04ed7139c0a00810257bc66cebba80e25f5071b8a69",
+      "token_count": 5157,
+      "discourse_phase_tokens": 4994,
+      "process_span_tokens": 2231
+    },
+    {
+      "response_id": "atlasresponsev1_290b53eea011dc7e92d1884ab3e33230e4be78300c74c7fd9b03f50579d5e68c",
+      "token_count": 6197,
+      "discourse_phase_tokens": 6122,
+      "process_span_tokens": 2903
+    },
+    {
+      "response_id": "atlasresponsev1_1938056839528ee31eb68136d9ecdd51e635d074156e42eedbf8bfe0d473d418",
+      "token_count": 7262,
+      "discourse_phase_tokens": 7089,
+      "process_span_tokens": 3238
+    },
+    {
+      "response_id": "atlasresponsev1_1edaa88e55b349e98d777900f68bd23d946c76ae731d022b944aa1c1c372928e",
+      "token_count": 6361,
+      "discourse_phase_tokens": 6245,
+      "process_span_tokens": 3212
+    },
+    {
+      "response_id": "atlasresponsev1_115b1e23a9e361438d8ed7fc883059bfe2fa2875dfa29edf7e0e09aacfac6563",
+      "token_count": 9376,
+      "discourse_phase_tokens": 9277,
+      "process_span_tokens": 5930
+    },
+    {
+      "response_id": "atlasresponsev1_1359ff98fd65fde3246cfd1f27bb9c56b181fd17046e5b028e881e3ffbc7a8be",
+      "token_count": 8428,
+      "discourse_phase_tokens": 8349,
+      "process_span_tokens": 5520
+    },
+    {
+      "response_id": "atlasresponsev1_956fc3463b2bb5433e577b62bee142ea5097eb5e01a020eadfbf827cd85ecd97",
+      "token_count": 9225,
+      "discourse_phase_tokens": 9145,
+      "process_span_tokens": 5552
+    },
+    {
+      "response_id": "atlasresponsev1_7a4406f927122a0a7095bd0d816703d347fc186f9296b339d51b4ba04b7ad86a",
+      "token_count": 8989,
+      "discourse_phase_tokens": 8925,
+      "process_span_tokens": 5759
+    },
+    {
+      "response_id": "atlasresponsev1_70a31da2fead5df819f8803974433013712e55e6a59d1de91422a26ace99e921",
+      "token_count": 1081,
+      "discourse_phase_tokens": 1068,
+      "process_span_tokens": 236
+    },
+    {
+      "response_id": "atlasresponsev1_863bbed73c03ed787b0fd46ecb5b23f114fe567cd244b4de500168c8170d28ac",
+      "token_count": 960,
+      "discourse_phase_tokens": 939,
+      "process_span_tokens": 162
+    },
+    {
+      "response_id": "atlasresponsev1_6c68fbd1c3efe6274f4bd2ff3d58cd88cd1b511b4b9dbdaaec33073e798f4060",
+      "token_count": 1035,
+      "discourse_phase_tokens": 1020,
+      "process_span_tokens": 90
+    },
+    {
+      "response_id": "atlasresponsev1_106c64cb9fee9fea30e665e5bd8029b716fceb1d22a8a9a58f8a512dc2f5dafe",
+      "token_count": 1104,
+      "discourse_phase_tokens": 1090,
+      "process_span_tokens": 191
+    },
+    {
+      "response_id": "atlasresponsev1_08681bf8d7073990106e0bce297ad4d79fa00a18d6585c0959d66e421d70b5ac",
+      "token_count": 6185,
+      "discourse_phase_tokens": 6069,
+      "process_span_tokens": 2840
+    },
+    {
+      "response_id": "atlasresponsev1_2af740cbb77acc3ffbf555051bb7c0012460457a83f283f54e129c9d000f0e84",
+      "token_count": 5931,
+      "discourse_phase_tokens": 5812,
+      "process_span_tokens": 2668
+    },
+    {
+      "response_id": "atlasresponsev1_590d7a0d43469f8b5f31b3e4415d50b40228c8645f97db09c900f7e83e208153",
+      "token_count": 6663,
+      "discourse_phase_tokens": 6543,
+      "process_span_tokens": 2576
+    },
+    {
+      "response_id": "atlasresponsev1_f74c6eeb6ce82be00c6e3e57ae9607b532cf732bfc63674c135885fcb95c0f7f",
+      "token_count": 5160,
+      "discourse_phase_tokens": 5085,
+      "process_span_tokens": 2605
+    },
+    {
+      "response_id": "atlasresponsev1_e3b443c4c2d2585b9a01cbead454d6f111ea1f9a80dba6a6a5d95f072c427606",
+      "token_count": 4171,
+      "discourse_phase_tokens": 4029,
+      "process_span_tokens": 1971
+    },
+    {
+      "response_id": "atlasresponsev1_66ca3cca1f726e1560b0edff1feec17c2639f0fc533e4a76417eb29f800cb91e",
+      "token_count": 5122,
+      "discourse_phase_tokens": 5004,
+      "process_span_tokens": 2222
+    },
+    {
+      "response_id": "atlasresponsev1_c1a44cf67252479833c99ea627fa7552d25976da48a65e6d8f841db41921ec7b",
+      "token_count": 5858,
+      "discourse_phase_tokens": 5562,
+      "process_span_tokens": 2238
+    },
+    {
+      "response_id": "atlasresponsev1_dacc2992091e581d1180d246f1a5dcdc4b1b3ce59b61a3b215fbc9f2776976d2",
+      "token_count": 4538,
+      "discourse_phase_tokens": 4418,
+      "process_span_tokens": 2190
+    },
+    {
+      "response_id": "atlasresponsev1_265163de03447530cc86075e0c3f7c440d60d1885290a99bec86384ee4907750",
+      "token_count": 6723,
+      "discourse_phase_tokens": 6613,
+      "process_span_tokens": 593
+    },
+    {
+      "response_id": "atlasresponsev1_8f345b8069caae2bc15e4f0ed2fa222acf448510837902a31e45468c3c4e9bf4",
+      "token_count": 8585,
+      "discourse_phase_tokens": 8472,
+      "process_span_tokens": 730
+    },
+    {
+      "response_id": "atlasresponsev1_1298eb25c5e8bfc0d94ed8909e66fb703db500db276641b18f886f1e4e0c5f08",
+      "token_count": 9871,
+      "discourse_phase_tokens": 9740,
+      "process_span_tokens": 682
+    },
+    {
+      "response_id": "atlasresponsev1_d433428e06d882c84e313244901dee129d98749f1c41629f6332f74c1e222fe4",
+      "token_count": 6820,
+      "discourse_phase_tokens": 6722,
+      "process_span_tokens": 568
+    },
+    {
+      "response_id": "atlasresponsev1_0c90d892b313a713b3ca619f17aea811b41a3b72b6c954e76f998e9d5adfe2dc",
+      "token_count": 4880,
+      "discourse_phase_tokens": 4760,
+      "process_span_tokens": 1800
+    },
+    {
+      "response_id": "atlasresponsev1_a29513a75bca508dd66836ad3e6e0a09cbd6ca7735df7db50fb7e0eea5482531",
+      "token_count": 4059,
+      "discourse_phase_tokens": 3955,
+      "process_span_tokens": 2378
+    },
+    {
+      "response_id": "atlasresponsev1_6bcac2af0b1ae17c47bf4ef0cb9dd37124db1ece9851c1bad19a7047acc197b9",
+      "token_count": 8388,
+      "discourse_phase_tokens": 8250,
+      "process_span_tokens": 2504
+    },
+    {
+      "response_id": "atlasresponsev1_d5cf0d07cefb9bdf31dc4eb74c19805fc8b739aded0e46c02b5fa20435a25160",
+      "token_count": 4935,
+      "discourse_phase_tokens": 4898,
+      "process_span_tokens": 2391
+    },
+    {
+      "response_id": "atlasresponsev1_4fba0dd228352255029746af49cdc02a94cc14d099e3016c93326df795c52fe3",
+      "token_count": 2346,
+      "discourse_phase_tokens": 2274,
+      "process_span_tokens": 629
+    },
+    {
+      "response_id": "atlasresponsev1_0a69326604cea9db560883a196ff94179ad254d4a3f6105d1a61368a6e9fdf40",
+      "token_count": 2027,
+      "discourse_phase_tokens": 1984,
+      "process_span_tokens": 813
+    },
+    {
+      "response_id": "atlasresponsev1_9741774ddf3f4dc6e8596e3beb9e08e298fa617aade4175b1d26b3b052cfe003",
+      "token_count": 2658,
+      "discourse_phase_tokens": 2544,
+      "process_span_tokens": 575
+    },
+    {
+      "response_id": "atlasresponsev1_794f2937b36db9e204bdc605eeaf146d329439d77f83c83126168b19de1fc4d2",
+      "token_count": 1706,
+      "discourse_phase_tokens": 1677,
+      "process_span_tokens": 732
+    },
+    {
+      "response_id": "atlasresponsev1_2165179b2af549298c45cca52fd13dedc1771794a0c9b625012e9ed7c4f85603",
+      "token_count": 3465,
+      "discourse_phase_tokens": 3427,
+      "process_span_tokens": 1601
+    },
+    {
+      "response_id": "atlasresponsev1_46b7f9df860a491b8f29c24d7f95e3f4db4f63624cb0ef23fcc78d3d2e9d5a53",
+      "token_count": 3043,
+      "discourse_phase_tokens": 3016,
+      "process_span_tokens": 1399
+    },
+    {
+      "response_id": "atlasresponsev1_c008bee0d88b2bdf1f35eb69c8dd66df4510a2403061b617479c7897b1af7c2d",
+      "token_count": 3450,
+      "discourse_phase_tokens": 3398,
+      "process_span_tokens": 1536
+    },
+    {
+      "response_id": "atlasresponsev1_4aca1f663621e7b26e997d749a5f753f4fb7eecc1e84e769dbd355639c76b4d9",
+      "token_count": 3263,
+      "discourse_phase_tokens": 3201,
+      "process_span_tokens": 1275
+    },
+    {
+      "response_id": "atlasresponsev1_0b0d56f79cbf295a1da22ab1558e2924445b17bd94636bebd76af81b20a542fb",
+      "token_count": 9825,
+      "discourse_phase_tokens": 9455,
+      "process_span_tokens": 3225
+    },
+    {
+      "response_id": "atlasresponsev1_183d74bd4c46f2062acd8653de01e18752bd6488dfe58c5102265d9136ba3f80",
+      "token_count": 7510,
+      "discourse_phase_tokens": 7218,
+      "process_span_tokens": 3013
+    },
+    {
+      "response_id": "atlasresponsev1_c53d6e24a4636ae9d7cb5c4a174502735a691d378bbb7cd1f982d7179c025209",
+      "token_count": 8357,
+      "discourse_phase_tokens": 8106,
+      "process_span_tokens": 2890
+    },
+    {
+      "response_id": "atlasresponsev1_0ea1260956558a96d9ad31d85e46950ea91e3288ce45c14b372935e03aa3ebe1",
+      "token_count": 10261,
+      "discourse_phase_tokens": 9908,
+      "process_span_tokens": 4528
+    },
+    {
+      "response_id": "atlasresponsev1_178139735194c09be75bf4fc9ac94e1e0f33a69e59ee95782216af1eaf05c31b",
+      "token_count": 1185,
+      "discourse_phase_tokens": 1163,
+      "process_span_tokens": 756
+    },
+    {
+      "response_id": "atlasresponsev1_baf58c00dd0012cfe295d61822b4b7428235e86b8fad52cd9991a794a70eb2c1",
+      "token_count": 1394,
+      "discourse_phase_tokens": 1372,
+      "process_span_tokens": 828
+    },
+    {
+      "response_id": "atlasresponsev1_56a7d85490a5c4232ca58b89db68536d5c94209d9f104b8c51da4a7a4694a44c",
+      "token_count": 1363,
+      "discourse_phase_tokens": 1339,
+      "process_span_tokens": 862
+    },
+    {
+      "response_id": "atlasresponsev1_20b431d0a2a133952abb829b4f5cf794a3286f6a75bc906e0b0d1a6d2591d11d",
+      "token_count": 2504,
+      "discourse_phase_tokens": 2474,
+      "process_span_tokens": 1674
+    },
+    {
+      "response_id": "atlasresponsev1_4c49b5082655a77dc6aeeb9f4f402a74f7f78e7221ddd29bfdce79026ae058e5",
+      "token_count": 6513,
+      "discourse_phase_tokens": 6140,
+      "process_span_tokens": 206
+    },
+    {
+      "response_id": "atlasresponsev1_4ead5de75c277e4dbf1e89ac019effcd676b4e9d150b206b8374b9d49411f0bb",
+      "token_count": 7947,
+      "discourse_phase_tokens": 7567,
+      "process_span_tokens": 216
+    },
+    {
+      "response_id": "atlasresponsev1_7fceb5e25300fd7146e518c8e858574e8b2bb90fb7c4399648524e928234bd77",
+      "token_count": 7434,
+      "discourse_phase_tokens": 7155,
+      "process_span_tokens": 161
+    },
+    {
+      "response_id": "atlasresponsev1_b3351970bda71f9cff5861f602ea8975960aaec5a46999874a11223c0993f2cb",
+      "token_count": 7637,
+      "discourse_phase_tokens": 7172,
+      "process_span_tokens": 246
+    },
+    {
+      "response_id": "atlasresponsev1_30151654c90def24568fb6af5596455509b3ec9aa9f4576f4107cf1ea756e568",
+      "token_count": 1554,
+      "discourse_phase_tokens": 1508,
+      "process_span_tokens": 618
+    },
+    {
+      "response_id": "atlasresponsev1_793119b06ad6087b5558e558959bc0ab4a7b60be4b0c46cf298f1e8274103073",
+      "token_count": 1537,
+      "discourse_phase_tokens": 1484,
+      "process_span_tokens": 753
+    },
+    {
+      "response_id": "atlasresponsev1_4479f5a7eb0027b660f453f500144e9c9007aff66bb9c55e2925fd98b81efe36",
+      "token_count": 2192,
+      "discourse_phase_tokens": 2180,
+      "process_span_tokens": 684
+    },
+    {
+      "response_id": "atlasresponsev1_06ada873b1c491ea9030b234ec987941ca15d1e4a8f680a85586d8e4e3ec481d",
+      "token_count": 1252,
+      "discourse_phase_tokens": 1220,
+      "process_span_tokens": 403
+    },
+    {
+      "response_id": "atlasresponsev1_33d86be1765a192591e6368c82e1848a1bb26dbc6a8cf8bd0a7ac8d250ea9bbb",
+      "token_count": 2782,
+      "discourse_phase_tokens": 2715,
+      "process_span_tokens": 1367
+    },
+    {
+      "response_id": "atlasresponsev1_ed497083a7b19a4e6a18552379ffa9cdfed734604b4b8fde2609146e52794d52",
+      "token_count": 2711,
+      "discourse_phase_tokens": 2686,
+      "process_span_tokens": 1085
+    },
+    {
+      "response_id": "atlasresponsev1_675531fafc85990a8542d21daba831ad5dbc3314c3a45a042abe46e2e4d1f0f5",
+      "token_count": 4620,
+      "discourse_phase_tokens": 4510,
+      "process_span_tokens": 1706
+    },
+    {
+      "response_id": "atlasresponsev1_13f9cf724ad5193860454b08505e31252033c54bb72ea51f75d9c5db39952d0e",
+      "token_count": 3056,
+      "discourse_phase_tokens": 3018,
+      "process_span_tokens": 1632
+    },
+    {
+      "response_id": "atlasresponsev1_a557a7486688380e80d6890b4b680d43bca27d1c9559d58a80e8c2b593f33e8b",
+      "token_count": 4104,
+      "discourse_phase_tokens": 3991,
+      "process_span_tokens": 2135
+    },
+    {
+      "response_id": "atlasresponsev1_077bfcb71ac720dd02420baa6933235fdb4fea2df7dd982ec9dcdf2e86841580",
+      "token_count": 6264,
+      "discourse_phase_tokens": 6185,
+      "process_span_tokens": 3315
+    },
+    {
+      "response_id": "atlasresponsev1_815d3d71e95c43cd1f228e5d040fad4d16acd4a1aecdfd87cafea51201fb970f",
+      "token_count": 4137,
+      "discourse_phase_tokens": 4066,
+      "process_span_tokens": 1944
+    },
+    {
+      "response_id": "atlasresponsev1_d9ea2d6d5f79e6e3d54c3b4a14761a9376334fd87d3d4329a6583d8fbf321610",
+      "token_count": 5433,
+      "discourse_phase_tokens": 5166,
+      "process_span_tokens": 2546
+    }
+  ]
+}

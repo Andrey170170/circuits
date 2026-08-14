@@ -71,6 +71,7 @@ def load_ontology(path: Path) -> dict[str, Any]:
         "adag.process-witness.annotation-ontology.v3",
         "adag.process-witness.annotation-ontology.v4",
         "adag.process-witness.annotation-ontology.v5",
+        "adag.process-witness.annotation-ontology.v6",
     }:
         base_name = ontology.get("extends")
         base_sha256 = ontology.get("base_ontology_sha256")
@@ -126,12 +127,13 @@ def load_ontology(path: Path) -> dict[str, Any]:
         "adag.process-witness.annotation-ontology.v3",
         "adag.process-witness.annotation-ontology.v4",
         "adag.process-witness.annotation-ontology.v5",
+        "adag.process-witness.annotation-ontology.v6",
     }:
         raise ValueError("unsupported annotation ontology schema")
     axes = ontology.get("axes")
     if not isinstance(axes, dict) or not axes:
         raise ValueError("ontology axes must be a non-empty object")
-    if ontology["schema_version"].endswith((".v2", ".v3", ".v4", ".v5")):
+    if ontology["schema_version"].endswith((".v2", ".v3", ".v4", ".v5", ".v6")):
         contract = ontology.get("token_assignment_contract", {})
         if contract.get("within_axis") != (
             "zero_or_one_effective_value_per_authoritative_response_token"
@@ -429,7 +431,7 @@ _INSTRUCTION_RE = re.compile(
     r"\bthe\s+(?:task|goal)\s+is\b|\b(?:objective|aim)(?:\s+is|\s*:)|"
     r"\bthe\s+task\s+involves\b|"
     r"\byou\s+(?:need|must|should)\b|^\s*[\"'`]+(?:move|update|follow|choose|"
-    r"return|start|stop)\b)",
+    r"return|start|stop|reverse|decode|encode|swap|shift|substitute)\b)",
     re.IGNORECASE,
 )
 _LOOKUP_RE = re.compile(
@@ -451,6 +453,49 @@ _QUOTED_LISTED_RELATION_RE = re.compile(
     r"[\"“][^\"”\n]*(?:→|->)[^\"”\n]*[\"”]\s+is\s+listed\s+as\s*:",
     re.IGNORECASE,
 )
+_LISTED_LANE_RELATION_RE = re.compile(
+    r"[^.?!\n]+(?:→|->)[^.?!\n]+\s+is\s+listed\s+as\s+(?:a|an)\s+"
+    r"(?:lane|edge|path|reference)\b",
+    re.IGNORECASE,
+)
+_COMPACT_STEP_TRANSITION_RE = re.compile(
+    r"^\s*Step\s+\d+\s*:\s*[^.?!\n]+(?:→|->)[^.?!\n]+[.]?\s*$",
+    re.IGNORECASE,
+)
+_SO_TRANSITION_RE = re.compile(
+    r"^\s*So\s+[^.?!\n]+(?:→|->)[^.?!\n]+[.]?\s*$",
+    re.IGNORECASE,
+)
+_ARROW_OUTCOME_RE = re.compile(
+    r"(?:→|->)\s*[^.?!\n]+\s+wins?\b|"
+    r"^\s*(?:Match\s*\d+|Final)\s*:\s*[^.?!\n]+\bvs\b[^.?!\n]+"
+    r"(?:→|->)[^.?!\n]+[.]?\s*$",
+    re.IGNORECASE,
+)
+_NUMBERED_IMPERATIVE_RE = re.compile(
+    r"^\s*(?:\d+[.)]\s*)?(?:reverse|decode|encode|swap|shift|substitute|"
+    r"move|update|follow|choose|return|check|find)\b",
+    re.IGNORECASE,
+)
+_ACTIVE_LOOKUP_IMPERATIVE_RE = re.compile(
+    r"^\s*(?:Then\s+)?(?:check|find)\b[^.?!\n]*\b(?:outgoing|edges?|lanes?)\b",
+    re.IGNORECASE,
+)
+_ACTIVE_NEXT_RE = re.compile(r"^\s*Next\s*:\s*\d+\s*[.]?\s*$", re.IGNORECASE)
+_TASK_POLICY_RE = re.compile(
+    r"^\s*At\s+each\s+step,\s+(?:we|you)\s+(?:choose|select|take|follow)\b",
+    re.IGNORECASE,
+)
+_SEQUENCE_RECAP_RE = re.compile(
+    r"\b(?:let(?:'s| us)|I(?:'ll| will))\s+(?:recount|list)\s+the\s+steps\b",
+    re.IGNORECASE,
+)
+_COMPACT_NUMERIC_STEP_RE = re.compile(
+    r"^\s*Step\s*\d+\s*:\s*-?\d+(?:\.\d+)?\s*[.]?\s*$",
+    re.IGNORECASE,
+)
+_RECENT_EXECUTION_WINDOW_UNITS = 6
+_SEQUENCE_RECAP_WINDOW_UNITS = 16
 _STATE_EXECUTION_RE = re.compile(
     r"\b(?:move(?:d)?\s+to|transition(?:ed)?\s+to|"
     r"(?:now|current|next)\s+(?:state|node)\s+(?:is|=)|"
@@ -757,11 +802,28 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
     serialization = _terminal_serialization_span(text)
     process_rule = rule["rule_id"]
     event_modality = rule.get("event_modality")
-    conservative = event_modality in {"conservative_v7", "conservative_v8"}
-    conservative_v8 = event_modality == "conservative_v8"
+    conservative = event_modality in {
+        "conservative_v7",
+        "conservative_v8",
+        "conservative_v9",
+    }
+    conservative_v8 = event_modality in {"conservative_v8", "conservative_v9"}
+    conservative_v9 = event_modality == "conservative_v9"
     quoted_spans = _quoted_spans(text) if conservative else []
-    for start, end in _text_units(text):
+    units = _text_units(text)
+    recent_execution_units = 0
+    sequence_recap_units = 0
+    for unit_index, (start, end) in enumerate(units):
         unit = text[start:end]
+        previous_unit = text[slice(*units[unit_index - 1])] if unit_index else ""
+        recent_execution = recent_execution_units > 0
+        if conservative_v9 and _SEQUENCE_RECAP_RE.search(unit):
+            sequence_recap_units = _SEQUENCE_RECAP_WINDOW_UNITS
+        active_sequence_step = bool(
+            conservative_v9
+            and sequence_recap_units > 0
+            and _COMPACT_NUMERIC_STEP_RE.fullmatch(unit)
+        )
         is_serialization = serialization == (start, end)
         numbers = list(_NUMBER_RE.finditer(unit))
         operations, operator_cues = _arithmetic_evidence(unit)
@@ -780,24 +842,44 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
             for quote_start, quote_end in quoted_spans
         )
         active_scan_context = bool(
-            _ACTIVE_SCAN_RE.search(text[max(0, start - 180) : end])
+            _ACTIVE_SCAN_RE.search(text[max(0, start - 400) : end])
         )
         listed_relation_lookup = bool(
             conservative_v8
             and valid_state_arrows
             and active_scan_context
-            and _QUOTED_LISTED_RELATION_RE.search(unit)
+            and (
+                _QUOTED_LISTED_RELATION_RE.search(unit)
+                or (conservative_v9 and _LISTED_LANE_RELATION_RE.search(unit))
+            )
         )
         lookup_imperative = conservative and bool(_LOOKUP_IMPERATIVE_RE.search(unit))
+        mid_execution_lookup = bool(
+            conservative_v9
+            and recent_execution
+            and _ACTIVE_LOOKUP_IMPERATIVE_RE.search(unit)
+        )
+        numbered_instruction = bool(
+            conservative_v9
+            and _NUMBERED_IMPERATIVE_RE.search(unit)
+            and re.fullmatch(r"\s*\d+[.)]\s*", previous_unit)
+        )
+        policy_instruction = bool(conservative_v9 and _TASK_POLICY_RE.search(unit))
         instruction = conservative and bool(
             (_INSTRUCTION_RE.search(unit) and not listed_relation_lookup)
             or quoted_imperative
-            or lookup_imperative
+            or (lookup_imperative and not mid_execution_lookup)
+            or numbered_instruction
+            or policy_instruction
         )
         lookup = (
             conservative
             and not instruction
-            and bool(listed_relation_lookup or _LOOKUP_RE.search(unit))
+            and bool(
+                listed_relation_lookup
+                or mid_execution_lookup
+                or _LOOKUP_RE.search(unit)
+            )
         )
         verification = bool(
             _VERIFICATION_STRONG_RE.search(unit) or _VERIFICATION_CHECK_RE.search(unit)
@@ -811,12 +893,28 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
                 and (bool(result_spans) or bool(_RESULT_CUE_RE.search(unit)))
             )
         )
-        state_execution = not instruction and bool(_STATE_EXECUTION_RE.search(unit))
+        compact_step_execution = bool(
+            conservative_v9
+            and valid_state_arrows
+            and _COMPACT_STEP_TRANSITION_RE.fullmatch(unit)
+        )
+        so_transition = bool(
+            conservative_v9 and valid_state_arrows and _SO_TRANSITION_RE.fullmatch(unit)
+        )
+        comparison_outcome = bool(
+            conservative_v9 and valid_state_arrows and _ARROW_OUTCOME_RE.search(unit)
+        )
+        state_execution = not instruction and bool(
+            _STATE_EXECUTION_RE.search(unit)
+            or compact_step_execution
+            or (so_transition and not comparison_outcome)
+        )
         state_schema = (
             conservative
             and arrow_evidence
             and not state_execution
             and not listed_relation_lookup
+            and not comparison_outcome
         )
         comparison_evidence = bool(_COMPARISON_RE.search(unit)) and (
             not conservative
@@ -829,6 +927,7 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
                 )
             )
         )
+        comparison_evidence = comparison_evidence or comparison_outcome
         encoding_evidence = bool(_ENCODING_ACTIVE_RE.search(unit)) and not instruction
         if conservative:
             encoding_evidence = (
@@ -840,6 +939,9 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
             )
         correction = bool(_CORRECTION_RE.search(unit)) and not instruction
         derived_result = conservative_v8 and bool(_DERIVED_RESULT_RE.search(unit))
+        active_next = bool(
+            conservative_v9 and recent_execution and _ACTIVE_NEXT_RE.fullmatch(unit)
+        )
         has_executed_event = any(
             (
                 is_serialization,
@@ -850,6 +952,8 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
                 lookup,
                 verification,
                 correction,
+                active_next,
+                active_sequence_step,
             )
         )
         phase = _unit_phase(
@@ -899,6 +1003,17 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
             event_value = "comparison_or_selection_event_candidate"
         elif encoding_evidence:
             event_value = "encoding_or_decoding_event_candidate"
+        current_active = bool(
+            has_executed_event
+            and not instruction
+            and phase in {"working_or_derivation", "reference_lookup_or_reading"}
+        )
+        recent_execution_units = (
+            _RECENT_EXECUTION_WINDOW_UNITS
+            if current_active
+            else max(0, recent_execution_units - 1)
+        )
+        sequence_recap_units = max(0, sequence_recap_units - 1)
         if event_value is None:
             continue
         yield Match(

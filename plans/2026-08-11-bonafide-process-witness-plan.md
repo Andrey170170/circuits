@@ -3,8 +3,9 @@
 Status: **central protocol; the architecture and historical-reconstruction choice are accepted.
 Step-0 input inventories are frozen in version 1, the bounded T5 landmark gate passed, and the
 balanced 188-response atlas-response cohort is frozen as
-`qwen3-thinking-process-witness-atlas-responses-backfilled-v2`. The cohort is not yet a fitted
-atlas. Before any witness inspection, the study will test whether ADAG's global signed-neuron
+`qwen3-thinking-process-witness-atlas-responses-backfilled-v2`, and its graph-blind v8 automatic
+annotation draft is frozen for human review. The cohort is not yet a fitted atlas. Before any
+witness inspection, the study will test whether ADAG's global signed-neuron
 clustering and cluster labels remain meaningful under controlled semantic mixture. Production
 tracing remains gated by graph-blind annotation, response balancing, and target-context resource
 tests.**
@@ -803,11 +804,13 @@ append-only provenance-rich events; rules distinguish apostrophes and guard non-
 percentages; terminal JSON detection fails closed. Seven focused tests, Ruff, Python compilation,
 and diff checks pass.
 
-This checkpoint is superseded by the canonical v5 automatic draft. The read-only artifact is at
-`/scratch/general/vast/u1653998/circuits/results/process_witness/annotations/process-witness-graph-blind-auto-v5`.
-It contains 188 responses, 842,007 tokens, and 786,924 suggestions; manifest SHA-256 is
-`1385e81297e61564f68be9919ac279909b5c6034f995c08e85177b83a385ea19`, and compact workstation
-bundle SHA-256 is `8bfc493e7db0b7c62f9dd1204a698f241b8d73fec43d34634a2a4e0e1ffac299`.
-Independent artifact audit and real-bundle browser QA passed. Only the compact
-`workstation-bundle.json` is canonical for human annotation. Versions 1–4 are preserved but
-superseded; no human review or tracing has yet begun.
+The canonical automatic draft is now v8. The read-only artifact is at
+`/scratch/general/vast/u1653998/circuits/results/process_witness/annotations/process-witness-graph-blind-auto-v8`.
+It contains 188 responses, 842,007 tokens, and 1,038,936 suggestions; manifest SHA-256 is
+`740fd684acf91a79bce093ec4d58c987d5df2af9aee2aa582179c3efae2aaf75`, and compact workstation
+bundle SHA-256 is `8d2bb5b2907e78c3fe0c4374fa8f54f654f18720048fd345d2cd09a2c760f765`.
+Ontology v5 preserves exact token cues separately from broader candidate event spans and leaves
+the downstream `usage` and `event_status` axes human-only. Versions 1–7 remain preserved but are
+superseded: v5 was too semantically sparse, while denser v6 and v7 drafts were blocked by
+response-stratified false-positive audits. Only v8 `workstation-bundle.json` is canonical for human
+annotation. No human review, target selection, or tracing has yet begun.
