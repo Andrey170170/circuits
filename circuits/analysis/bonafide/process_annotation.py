@@ -70,6 +70,7 @@ def load_ontology(path: Path) -> dict[str, Any]:
     if ontology.get("schema_version") in {
         "adag.process-witness.annotation-ontology.v3",
         "adag.process-witness.annotation-ontology.v4",
+        "adag.process-witness.annotation-ontology.v5",
     }:
         base_name = ontology.get("extends")
         base_sha256 = ontology.get("base_ontology_sha256")
@@ -124,12 +125,13 @@ def load_ontology(path: Path) -> dict[str, Any]:
         "adag.process-witness.annotation-ontology.v2",
         "adag.process-witness.annotation-ontology.v3",
         "adag.process-witness.annotation-ontology.v4",
+        "adag.process-witness.annotation-ontology.v5",
     }:
         raise ValueError("unsupported annotation ontology schema")
     axes = ontology.get("axes")
     if not isinstance(axes, dict) or not axes:
         raise ValueError("ontology axes must be a non-empty object")
-    if ontology["schema_version"].endswith((".v2", ".v3", ".v4")):
+    if ontology["schema_version"].endswith((".v2", ".v3", ".v4", ".v5")):
         contract = ontology.get("token_assignment_contract", {})
         if contract.get("within_axis") != (
             "zero_or_one_effective_value_per_authoritative_response_token"
@@ -408,12 +410,17 @@ _CONCLUSION_RE = re.compile(
 )
 _PLANNING_RE = re.compile(
     r"(?:\b(?:let(?:'s| us)|need to|plan|start|begin|break it down|tackle|"
-    r"first(?:ly)?|next)\b|^\s*(?:step|stage)\s+\d+\s*:)",
+    r"first(?:ly)?|next|I['’]ll\s+proceed)\b|^\s*(?:step|stage)\s+\d+\s*:)",
     re.IGNORECASE,
 )
 _RESTATING_RE = re.compile(
     r"\b(?:(?:the\s+)?(?:user|problem|question|task)\s+(?:asks|wants|says|gives|"
-    r"provides|requires)|we\s+(?:are|have)\s+given|given\s+that)\b",
+    r"provides|requires)|we\s+(?:are|have)\s+given)\b",
+    re.IGNORECASE,
+)
+_DERIVED_RESULT_RE = re.compile(
+    r"^\s*Given that,\s+(?:the\s+)?(?:decoded\s+plaintext|plaintext|winner|"
+    r"result|answer|value|node)\s+(?:is|=)\b",
     re.IGNORECASE,
 )
 _INSTRUCTION_RE = re.compile(
@@ -426,7 +433,7 @@ _INSTRUCTION_RE = re.compile(
     re.IGNORECASE,
 )
 _LOOKUP_RE = re.compile(
-    r"\b(?:look(?:ing|ed)\s+(?:at|up)|consult(?:ing|ed)|"
+    r"\b(?:look(?:ing|ed)\s+(?:at|up|through)|consult(?:ing|ed)|"
     r"(?:I|we)\s+(?:(?:am|are)\s+)?check(?:ing|ed)?\s+"
     r"(?:all\s+)?(?:the\s+)?(?:references?|outgoing|edges?|list|table|mapping)|"
     r"from\s+the\s+"
@@ -435,6 +442,15 @@ _LOOKUP_RE = re.compile(
     re.IGNORECASE,
 )
 _LOOKUP_IMPERATIVE_RE = re.compile(r"^\s*(?:then\s+)?(?:check|find)\b", re.IGNORECASE)
+_ACTIVE_SCAN_RE = re.compile(
+    r"\b(?:looking|scanning|reading|checking)\s+(?:through|at)|"
+    r"\bfrom\s+the\s+(?:list|table|references?)\b",
+    re.IGNORECASE,
+)
+_QUOTED_LISTED_RELATION_RE = re.compile(
+    r"[\"“][^\"”\n]*(?:→|->)[^\"”\n]*[\"”]\s+is\s+listed\s+as\s*:",
+    re.IGNORECASE,
+)
 _STATE_EXECUTION_RE = re.compile(
     r"\b(?:move(?:d)?\s+to|transition(?:ed)?\s+to|"
     r"(?:now|current|next)\s+(?:state|node)\s+(?:is|=)|"
@@ -687,9 +703,12 @@ def _unit_phase(
     lookup: bool,
     verification: bool,
     has_executed_event: bool,
+    derived_result: bool = False,
 ) -> str:
     if is_serialization:
         return "answer_serialization"
+    if derived_result:
+        return "conclusion"
     if instruction:
         return "instruction_or_task_description"
     if _CORRECTION_RE.search(unit):
@@ -737,7 +756,9 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
 
     serialization = _terminal_serialization_span(text)
     process_rule = rule["rule_id"]
-    conservative = rule.get("event_modality") == "conservative_v7"
+    event_modality = rule.get("event_modality")
+    conservative = event_modality in {"conservative_v7", "conservative_v8"}
+    conservative_v8 = event_modality == "conservative_v8"
     quoted_spans = _quoted_spans(text) if conservative else []
     for start, end in _text_units(text):
         unit = text[start:end]
@@ -758,11 +779,26 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
             )
             for quote_start, quote_end in quoted_spans
         )
+        active_scan_context = bool(
+            _ACTIVE_SCAN_RE.search(text[max(0, start - 180) : end])
+        )
+        listed_relation_lookup = bool(
+            conservative_v8
+            and valid_state_arrows
+            and active_scan_context
+            and _QUOTED_LISTED_RELATION_RE.search(unit)
+        )
         lookup_imperative = conservative and bool(_LOOKUP_IMPERATIVE_RE.search(unit))
         instruction = conservative and bool(
-            _INSTRUCTION_RE.search(unit) or quoted_imperative or lookup_imperative
+            (_INSTRUCTION_RE.search(unit) and not listed_relation_lookup)
+            or quoted_imperative
+            or lookup_imperative
         )
-        lookup = conservative and not instruction and bool(_LOOKUP_RE.search(unit))
+        lookup = (
+            conservative
+            and not instruction
+            and bool(listed_relation_lookup or _LOOKUP_RE.search(unit))
+        )
         verification = bool(
             _VERIFICATION_STRONG_RE.search(unit) or _VERIFICATION_CHECK_RE.search(unit)
         ) and not (instruction or lookup or _NEGATED_SENSE_RE.search(unit))
@@ -776,7 +812,12 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
             )
         )
         state_execution = not instruction and bool(_STATE_EXECUTION_RE.search(unit))
-        state_schema = conservative and arrow_evidence and not state_execution
+        state_schema = (
+            conservative
+            and arrow_evidence
+            and not state_execution
+            and not listed_relation_lookup
+        )
         comparison_evidence = bool(_COMPARISON_RE.search(unit)) and (
             not conservative
             or (
@@ -798,6 +839,7 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
                 and not bool(_ENCODING_NONEXECUTED_RE.search(unit))
             )
         correction = bool(_CORRECTION_RE.search(unit)) and not instruction
+        derived_result = conservative_v8 and bool(_DERIVED_RESULT_RE.search(unit))
         has_executed_event = any(
             (
                 is_serialization,
@@ -817,6 +859,7 @@ def _process_structure_matches(text: str, rule: Mapping[str, Any]) -> Iterator[M
             lookup=lookup,
             verification=verification,
             has_executed_event=has_executed_event,
+            derived_result=derived_result,
         )
         yield Match(
             start,

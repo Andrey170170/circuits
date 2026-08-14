@@ -31,6 +31,10 @@ ONTOLOGY_V4_PATH = (
     Path(__file__).parents[1]
     / "scripts/bonafide/configs/process_witness_annotation_ontology_v4.json"
 )
+ONTOLOGY_V5_PATH = (
+    Path(__file__).parents[1]
+    / "scripts/bonafide/configs/process_witness_annotation_ontology_v5.json"
+)
 
 
 class CharacterTokenizer:
@@ -497,6 +501,78 @@ def test_v4_role_and_modality_hard_negatives() -> None:
     )
 
 
+def test_v5_derived_results_and_active_listed_relations() -> None:
+    ontology = load_ontology(ONTOLOGY_V5_PATH)
+    assert ontology["schema_version"].endswith(".v5")
+    assert ontology["ontology_id"] == "process-witness-graph-blind-v5"
+
+    manual_meta = "But given that I'm doing this manually, I'll proceed carefully."
+    manual_matches = suggest_matches(manual_meta, ontology)
+    assert any(match.value == "planning" for match in manual_matches)
+    assert not any(
+        match.value == "orientation_or_restating" for match in manual_matches
+    )
+
+    intended_path = (
+        "But given that the problem expects a unique answer, "
+        "this must be the intended path."
+    )
+    assert not any(
+        match.value == "orientation_or_restating"
+        for match in suggest_matches(intended_path, ontology)
+    )
+
+    explicit_restatement = "We have given three values."
+    assert any(
+        match.value == "orientation_or_restating"
+        for match in suggest_matches(explicit_restatement, ontology)
+    )
+
+    for text in (
+        "Given that, the decoded plaintext is K V H F U P I L.",
+        "Given that, the winner is Basilisk.",
+    ):
+        matches = suggest_matches(text, ontology)
+        assert any(match.value == "conclusion" for match in matches)
+        assert any(match.value == "answer_event_candidate" for match in matches)
+        assert not any(match.value == "orientation_or_restating" for match in matches)
+
+    active_scan = (
+        'Looking through the list.\n"Pollux → Spica" is listed as:\n'
+        "Decision: fuel_cost=66"
+    )
+    active_matches = suggest_matches(active_scan, ontology)
+    relation_start = active_scan.index('"Pollux')
+    assert any(
+        match.axis == "discourse_phase"
+        and match.value == "reference_lookup_or_reading"
+        and active_scan[match.start : match.end] == "Looking through the list."
+        for match in active_matches
+    )
+    assert any(
+        match.axis == "discourse_phase"
+        and match.value == "reference_lookup_or_reading"
+        and match.start == relation_start
+        for match in active_matches
+    )
+    assert any(
+        match.value == "reference_lookup_event_candidate"
+        and match.start == relation_start
+        for match in active_matches
+    )
+    assert not any(
+        match.value == "instruction_or_task_description"
+        and match.start == relation_start
+        for match in active_matches
+    )
+
+    bare_schema = '"Pollux → Spica" is listed as:'
+    assert any(
+        match.value == "instruction_or_task_description"
+        for match in suggest_matches(bare_schema, ontology)
+    )
+
+
 def test_rule_inspection_is_stratified_across_response_support() -> None:
     documents = []
     for index in range(10):
@@ -878,13 +954,13 @@ def test_review_ui_is_token_painter_with_bound_provenance() -> None:
     assert 'node.classList.contains("overlap-fragment")' in html
     assert ".document-shell { min-width: 0; min-height: 0;" in html
     assert ".document-scroll { flex: 1; min-height: 0; overflow: auto;" in html
-    assert 'const UI_VERSION = "process-witness-token-painter.v7"' in html
+    assert 'const UI_VERSION = "process-witness-token-painter.v8"' in html
     assert 'axes.includes("discourse_phase") ? "discourse_phase"' in html
     builder = (
         Path(__file__).parents[1]
         / "scripts/bonafide/build_process_witness_annotations.py"
     ).read_text(encoding="utf-8")
-    assert 'REVIEW_UI_VERSION = "process-witness-token-painter.v7"' in builder
+    assert 'REVIEW_UI_VERSION = "process-witness-token-painter.v8"' in builder
     assert "const documentCodepoints" in html
     assert "cpSlice(document.text" not in html
     assert '"--annotation-set-id"' in builder

@@ -1,0 +1,35 @@
+{
+  "schema_version": "adag.process-witness.annotation-ontology.v5",
+  "ontology_id": "process-witness-graph-blind-v5",
+  "status": "draft_for_human_review",
+  "claim_boundary": "Observable structure describes frozen text. Discourse phases, process spans, event modalities, operations, and roles are deterministic graph-blind hypotheses from local text only; they do not establish execution, correctness, causality, or faithfulness.",
+  "multi_label": true,
+  "unknown_and_ambiguous_allowed": true,
+  "extends": "process_witness_annotation_ontology_v4.json",
+  "base_ontology_sha256": "5a2a418b31da4bb31590b117509d96dc63e7e05ec723e6e49037f94c7e030c1f",
+  "disabled_rule_ids": [
+    "process.structure.v4"
+  ],
+  "detectors": [
+    {
+      "rule_id": "process.structure.v5",
+      "detector": "process_structure",
+      "axis": "process_span",
+      "interpretation": "semantic_hypothesis",
+      "confidence": "medium",
+      "event_modality": "conservative_v8",
+      "ambiguity": [
+        "local textual evidence does not establish that the model executed the described event"
+      ]
+    }
+  ],
+  "token_assignment_contract": {
+    "within_axis": "zero_or_one_effective_value_per_authoritative_response_token",
+    "across_axes": "independent_values_may_overlap_on_the_same_token",
+    "semantic_conflict_policy": "configured_axis_precedence_resolves_only_declared_candidate_role_or_operation_conflicts; all_other_semantic_conflicts_remain_explicit",
+    "human_only_axes": [
+      "usage",
+      "event_status"
+    ]
+  }
+}

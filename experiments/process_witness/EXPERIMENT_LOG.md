@@ -88,3 +88,30 @@ passed painting, axis switching, clear/revert/undo, review completion, export, a
 resume with no console errors. The earlier v4 artifact is preserved but superseded because its UI
 performed quadratic Unicode slicing during bundle import. No human response/axis has yet been
 reviewed, and these machine suggestions are not accepted semantic labels or process truth.
+
+## 2026-08-13 — Dense semantic draft rejected after quality audit
+
+The v6 automatic draft fixed workstation scrolling and expanded broad semantic coverage, but it
+was not promoted for human annotation. Although its 188-response artifact passed full provenance,
+tokenization, projection, permission, and browser-interaction audits, a deterministic
+response-stratified semantic review found avoidable false positives in final-result,
+intermediate-result, state-transition, lookup, encoding, verification, and instruction-versus-work
+rules. Version 6 remains an immutable diagnostic artifact only. No human review or trace-target
+selection used it.
+
+## 2026-08-13 — Conservative v7 automatic draft frozen for review
+
+The replacement `process-witness-graph-blind-auto-v7` draft uses a conservative v4 ontology and
+token-painting UI v7. It preserves exact local operator cues separately from broad candidate event
+spans, adds explicit instruction, lookup, schema-relation, state-transition, arithmetic,
+verification, correction, and answer layers, and leaves `usage` and `event_status` human-only.
+Strict replay now abstains on task descriptions, lookup imperatives, background or planned
+encoding, ambiguous motion, classification and parameter-assignment arrows, negated verification,
+and bare coefficients while retaining explicit arithmetic results and performed transitions.
+
+The frozen artifact contains 188 responses, 842,007 tokens, and 1,037,629 graph-blind automatic
+suggestions. Its 39.4 MB compact bundle is the sole canonical input for real review. Automatic
+coverage is deliberately layered: `discourse_phase` 97.4%, `process_span` 35.7%,
+`event_operation` 33.7%, exact `operation` 3.1%, and `process_role` 17.9%. These are detector yields,
+not accuracy or evidence of internal computation. Human review, `usage` assignment, and the
+response-balanced trace-target conversion remain pending.
