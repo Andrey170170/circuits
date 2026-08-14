@@ -3,20 +3,20 @@
 - Source of truth: user Excalidraw sketch at
   `/scratch/local/u1653998/1795966/chpc-codex/capsules/t3/t3/userdata/attachments/b600b237-482e-4b95-bdb7-113bc30ba349-0f379120-6778-4a6a-9c17-053f606fa828.png`
 - Implementation: `scripts/bonafide/process_witness_annotation_review.html`
-- Canonical data: `process-witness-graph-blind-auto-v7/workstation-bundle.json`
-- Bundle SHA-256: `aaaf11778aa0071cb9c754ce214d594215074c83fd8f9d200f38c0bbb4228ced`
-- Browser evidence: `/tmp/pw-v7-default-discourse.png`, `/tmp/pw-v7-process-span.png`,
-  `/tmp/pw-v7-event-operation.png`, `/tmp/pw-v7-operation.png`,
-  `/tmp/pw-v7-after-drag-paint.png`, and `/tmp/pw-v7-resumed-review.png`
-- Browser report: `/tmp/pw-v7-real-qa-report.json`
+- Canonical data: `process-witness-graph-blind-auto-v9/workstation-bundle.json`
+- Bundle SHA-256: `95a5627768b2e5f05920aaab91f6e1cd9c00688560f9d821ffc2d8d69c7ceeea`
+- Browser evidence: `/tmp/pw-v9-default-discourse.png`, `/tmp/pw-v9-process-span.png`,
+  `/tmp/pw-v9-event-operation.png`, `/tmp/pw-v9-operation.png`,
+  `/tmp/pw-v9-after-drag-paint.png`, and `/tmp/pw-v9-resumed-review.png`
+- Browser report: `/tmp/pw-v9-real-qa-report.json`
 - Viewport: 1440 by 813, headless Google Chrome fallback
 - State captured: real 188-response bundle loaded; broad and exact semantic axes inspected;
   scrolling exercised; four manual token overrides; one response/axis marked reviewed; exported
   review re-imported.
 
 The product-native T3 preview reported that browser preview was unavailable in this environment,
-so QA used the permitted headless-Chrome fallback. The real 39,424,274-byte bundle loaded and
-validated all 188 responses in 4.984 seconds. An actual wheel event moved the inner document
+so QA used the permitted headless-Chrome fallback. The real 39,468,364-byte bundle loaded and
+validated all 188 responses in 4.667 seconds. An actual wheel event moved the inner document
 scroller from 0 to 900 pixels, with 10,092 pixels of available scroll range. The run exercised
 prompt/task display, axis switching, click-and-drag painting, clear, revert, undo, review
 completion, export, and fresh-page resume with no page or console errors.

@@ -166,7 +166,7 @@ this still does not establish whether the model internally executed it.
 The frozen cohort contains full reasoning responses, not short excerpts. The current 188 responses
 contain 842,007 response tokens: mean 4,479, median 3,892, interquartile range 2,967–5,883, and
 range 960–10,580. Broad automatic event spans are normally much shorter than a response. In the
-frozen v8 draft, median runs are 10 tokens for `process_span`, 10 for `event_operation`, 11 for
+frozen v9 draft, median runs are 10 tokens for `process_span`, 10 for `event_operation`, 11 for
 `discourse_phase`, and one token for both exact `operation` and fine-grained `process_role`.
 Rare unpunctuated lines remain large outliers (up to 794 tokens for an event span), so long spans
 must be split or target-sampled during review rather than traced wholesale.

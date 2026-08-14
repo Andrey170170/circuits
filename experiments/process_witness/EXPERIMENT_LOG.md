@@ -107,18 +107,24 @@ response-stratified sample still found generic discourse shortcuts that mislabel
 conclusions beginning with "Given that" and one active list lookup. Version 7 is therefore
 preserved as another diagnostic artifact and was not used for human review.
 
-## 2026-08-13 — Conservative v8 automatic draft frozen for review
+## 2026-08-13 — Conservative v8 draft rejected after contextual audit
 
-The final `process-witness-graph-blind-auto-v8` draft uses ontology v5 and token-painting UI v8.
-It preserves exact local operator cues separately from broad candidate event spans, adds explicit
-instruction, lookup, schema-relation, state-transition, arithmetic, verification, correction, and
-answer layers, and leaves `usage` and `event_status` human-only. Strict replay abstains on task
-descriptions, lookup imperatives, background or planned encoding, ambiguous motion,
-classification and parameter-assignment arrows, negated verification, generic "given that", and
-bare coefficients while retaining explicit arithmetic results, performed transitions, and active
-lookups.
+The `process-witness-graph-blind-auto-v8` draft passed full mechanical and browser audits, but its
+post-build contextual audit exposed instruction-versus-execution and schema-versus-outcome errors
+that sentence-local rules could not resolve. Version 8 remains diagnostic and was not opened for
+human review.
 
-The frozen artifact contains 188 responses, 842,007 tokens, and 1,038,936 graph-blind automatic
+## 2026-08-13 — Context-aware v9 automatic draft frozen for review
+
+The final `process-witness-graph-blind-auto-v9` draft uses ontology v6 and token-painting UI v9.
+It preserves exact local operator cues separately from broad candidate event spans, adds bounded
+recent-execution and inventory-reading context, and keeps `usage` and `event_status` human-only.
+The frozen known-error regression packet covers all systematic cases found during inspection:
+task descriptions, lookup imperatives, active lookups, background or planned encoding, ambiguous
+motion, sequence recaps, classification and parameter-assignment arrows, negated verification,
+generic "given that", bare coefficients, performed transitions, and compact comparison outcomes.
+
+The frozen artifact contains 188 responses, 842,007 tokens, and 1,038,919 graph-blind automatic
 suggestions. Its 39.5 MB compact bundle is the sole canonical input for real review. Automatic
 coverage is deliberately layered: `discourse_phase` 97.4%, `process_span` 35.7%,
 `event_operation` 33.7%, exact `operation` 3.1%, and `process_role` 17.9%. These are detector yields,

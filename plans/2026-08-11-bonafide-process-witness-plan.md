@@ -3,7 +3,7 @@
 Status: **central protocol; the architecture and historical-reconstruction choice are accepted.
 Step-0 input inventories are frozen in version 1, the bounded T5 landmark gate passed, and the
 balanced 188-response atlas-response cohort is frozen as
-`qwen3-thinking-process-witness-atlas-responses-backfilled-v2`, and its graph-blind v8 automatic
+`qwen3-thinking-process-witness-atlas-responses-backfilled-v2`, and its graph-blind v9 automatic
 annotation draft is frozen for human review. The cohort is not yet a fitted atlas. Before any
 witness inspection, the study will test whether ADAG's global signed-neuron
 clustering and cluster labels remain meaningful under controlled semantic mixture. Production
@@ -804,13 +804,14 @@ append-only provenance-rich events; rules distinguish apostrophes and guard non-
 percentages; terminal JSON detection fails closed. Seven focused tests, Ruff, Python compilation,
 and diff checks pass.
 
-The canonical automatic draft is now v8. The read-only artifact is at
-`/scratch/general/vast/u1653998/circuits/results/process_witness/annotations/process-witness-graph-blind-auto-v8`.
-It contains 188 responses, 842,007 tokens, and 1,038,936 suggestions; manifest SHA-256 is
-`740fd684acf91a79bce093ec4d58c987d5df2af9aee2aa582179c3efae2aaf75`, and compact workstation
-bundle SHA-256 is `8d2bb5b2907e78c3fe0c4374fa8f54f654f18720048fd345d2cd09a2c760f765`.
-Ontology v5 preserves exact token cues separately from broader candidate event spans and leaves
-the downstream `usage` and `event_status` axes human-only. Versions 1–7 remain preserved but are
-superseded: v5 was too semantically sparse, while denser v6 and v7 drafts were blocked by
-response-stratified false-positive audits. Only v8 `workstation-bundle.json` is canonical for human
-annotation. No human review, target selection, or tracing has yet begun.
+The canonical automatic draft is now v9. The read-only artifact is at
+`/scratch/general/vast/u1653998/circuits/results/process_witness/annotations/process-witness-graph-blind-auto-v9`.
+It contains 188 responses, 842,007 tokens, and 1,038,919 suggestions; manifest SHA-256 is
+`634509e5ff9b7a9dd6f859fbd281aa696a17f2c7f24a7dcf8d76f8e4441dd2af`, and compact workstation
+bundle SHA-256 is `95a5627768b2e5f05920aaab91f6e1cd9c00688560f9d821ffc2d8d69c7ceeea`.
+Ontology v6 preserves exact token cues separately from broader candidate event spans, adds bounded
+context for active execution and lookup, and leaves the downstream `usage` and `event_status` axes
+human-only. Versions 1–8 remain preserved but are superseded: v5 was too semantically sparse,
+while denser v6–v8 drafts were blocked by response-stratified and contextual false-positive audits.
+Only v9 `workstation-bundle.json` is canonical for human annotation. No human review, target
+selection, or tracing has yet begun.
