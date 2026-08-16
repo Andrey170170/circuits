@@ -145,3 +145,35 @@ thresholds are deferred until the adequacy gate records `robust`. A `brittle` re
 project to a newly versioned representation; an `inconclusive` result admits only additional
 adequacy data. Existing target-local traces may later be reused when they meet a separately frozen
 motif-study manifest, but the adequacy bank is not optimized for a witness hypothesis.
+
+## 2026-08-16 — Coarse-first trace sequence and mechanism-specific adequacy battery
+
+The adequacy study now uses two graph-blind annotation products. A frozen **coarse selection
+layer** supplies broad functional regime, process family, surface form, event/response identity,
+uncertainty, and provenance for stratified target selection. A richer **descriptive annotation
+layer** may be refined in immutable versions while T5 tracing runs; it cannot inspect graphs or
+retroactively change why a target entered the trace bank. Sampling will retain both balanced
+diagnostic and natural-frequency views, explicit inclusion weights, and prompt/response/event
+blocking.
+
+The working production envelope is roughly 30,000–40,000 independent T5 targets completed within
+about one week, but the exact count remains unfrozen pending coarse-label yield, target-context
+resource tiers, panel support, throughput, and resume-policy design.
+
+After the coarse target manifest freezes, three lanes proceed concurrently: T5 trace production,
+graph-blind descriptive refinement, and synthetic tests of ADAG similarity/clustering. The
+synthetic and real-data adequacy battery separately tests pairwise co-occurrence censoring,
+bridge-induced merging, mean masking and support loss, missing-versus-incompatible ambiguity,
+hard-assignment/resolution failure, position/mixture aliasing, and cluster-description dilution.
+
+A source audit found that the paper harmonic-fuses attribution and contribution similarities
+inside each context before averaging contexts, whereas released `combine="harmonic"` code averages
+each view first and the callable default is arithmetic mean. The study records paper-faithful and
+released-code conditions separately and will freeze their gate relationship before outcomes.
+Existing Leiden and concatenated-profile clusterers are predeclared localization comparators, not
+alternatives chosen because their labels look better; the same bounded grid runs on compatible
+synthetic fixtures. Surface references remain excluded from the primary process atlas but may enter
+one separately named nuisance-contamination fit after the primary state freezes. Only a robust
+adequacy verdict permits a separately frozen motif study. Brittle outcomes are localized into
+controllable, repairable, representation-level, or fundamental failures before any revised method
+is attempted.

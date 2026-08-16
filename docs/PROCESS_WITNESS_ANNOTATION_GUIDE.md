@@ -4,6 +4,15 @@ This guide describes the graph-blind token-painting workstation used before ADAG
 automatic colors are suggestions derived only from the frozen prompt and response text. They are
 not claims about correctness, internal computation, causality, or faithfulness.
 
+**Current sequencing note (2026-08-16):** this workstation and its v9 draft seed the richer
+**descriptive annotation layer**. Exhaustive review of every axis is no longer a prerequisite for
+tracing. Production tracing instead waits for a separately frozen **coarse selection layer** and
+target-conversion manifest derived from broad regime, process-family, surface, event/response,
+uncertainty, and provenance fields. Descriptive review may continue graph-blind while tracing runs.
+Until that coarse schema and conversion policy freeze, do not treat UI completion or `usage` paint
+as an authoritative trace manifest. The governing sequence is in
+`plans/2026-08-11-bonafide-process-witness-plan.md`.
+
 ## Loading and saving
 
 1. Open `scripts/bonafide/process_witness_annotation_review.html` in a current browser.
@@ -148,7 +157,7 @@ This is human-only and controls later target selection:
 | Value | Downstream meaning |
 | --- | --- |
 | `process_atlas_fit` | Eligible for the balanced process-atlas target bank. |
-| `surface_reference` | Explicit form/punctuation comparison target; excluded from process-atlas fitting and labeling. |
+| `surface_reference` | Explicit form/punctuation comparison target; excluded from primary fitting and labeling, with use allowed only in a separately frozen nuisance-contamination sensitivity. |
 | `trajectory_only` | Retained for ordered dense projection but not used to fit the primary atlas. |
 | `unknown` | Review is unresolved; not eligible for freeze. |
 

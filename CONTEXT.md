@@ -48,6 +48,43 @@ The reusable collection of independent target-local T5 graphs selected to evalua
 panels, without being optimized for a later motif hypothesis.
 _Avoid_: Witness corpus, dense trajectory corpus
 
+**Coarse selection layer**:
+A frozen graph-blind annotation projection used to stratify and sample adequacy targets. It records
+broad functional regime, process family, surface form, event and response identity, uncertainty,
+and provenance without claiming an internal computation.
+_Avoid_: Ground truth, final ontology, ADAG label
+
+**Descriptive annotation layer**:
+A versioned graph-blind set of finer token and event annotations used to condition adequacy
+measurements after target selection. It may grow while tracing runs but cannot retroactively change
+the frozen selection reason for a target.
+_Avoid_: Selection manifest, neuron interpretation
+
+**ADAG cluster description**:
+A bounded natural-language summary or abstention for one fitted cluster, evaluated separately from
+the cluster assignment itself.
+_Avoid_: Text annotation, neuron ground truth, witness
+
+**Context-conditioned role aliasing**:
+Loss of distinctions when one global signed-neuron assignment represents occurrences whose
+attribution, contribution, or relational role changes across declared context strata.
+_Avoid_: Proven neuron polysemanticity
+
+**Pairwise co-occurrence censoring**:
+The absence of one-sided contexts from the direct similarity evidence for a neuron pair because the
+pair is compared only where both signed identities are observed after tracing and pruning.
+_Avoid_: Evidence that an absent neuron was inactive
+
+**Bridge-induced merging**:
+A possible global-partition outcome in which context-specific affinities connect otherwise
+unsupported or incompatible neuron groups through intermediate identities.
+_Avoid_: Guaranteed transitivity
+
+**Mean masking**:
+Loss of support, dispersion, minority disagreement, or context-family reversal when a distribution
+of pair evidence is reduced to one aggregate affinity.
+_Avoid_: Polysemanticity by itself
+
 ## Witnesses
 
 **Process motif candidate**:

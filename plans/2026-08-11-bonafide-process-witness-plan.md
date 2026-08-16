@@ -7,9 +7,11 @@ balanced 188-response atlas-response cohort is frozen as
 annotation draft is frozen for human review. The cohort is not yet a fitted atlas. The next study
 is a standalone global-atlas adequacy test, not a combined adequacy-and-witness experiment. It will
 test whether ADAG's global signed-neuron clustering and cluster labels remain useful under
-controlled semantic mixture. Witness-specific annotation, motif-dataset construction, and dense
-trajectory production begin only after a robust adequacy verdict. Production tracing remains gated
-by graph-blind annotation, response balancing, and target-context resource tests.**
+controlled semantic mixture. A frozen coarse selection layer is required before target selection;
+the richer descriptive annotation layer and synthetic ADAG tests then proceed concurrently with
+production tracing. Witness-specific dataset construction, dense trajectory production, and motif
+testing begin only after a robust adequacy verdict. Production tracing remains gated by the coarse
+graph-blind selection layer, response balancing, and target-context resource tests.**
 
 This is the governing plan for the new process-witness campaign. Where it conflicts with
 `docs/ADAG_BONAFIDE_NAIVE_PILOT.md` or `docs/TRACING_CORPUS_PLAN.md`, this plan governs the new
@@ -266,7 +268,7 @@ cluster states, or generated labels. The annotation interface must support at le
 5. explicit surface-reference regions such as punctuation, whitespace/control delimiters,
    function words, and discourse filler.
 
-The first annotation version must not collapse these judgments into one flat class. It records
+The annotation system must not collapse these judgments into one flat class. It records
 independent, reviewable axes at both event/span and token level:
 
 - semantic domain and task family;
@@ -279,15 +281,41 @@ independent, reviewable axes at both event/span and token level:
 - correctness or attempted/ambiguous status, kept separate from semantic type;
 - suggestion source, review state, annotator revision, and ambiguity notes.
 
+The plan distinguishes two graph-blind annotation products with different freeze times:
+
+1. **Coarse selection layer.** This is the minimal pre-trace contract. It assigns every candidate
+   target independent broad fields for local functional regime, process family, surface form,
+   event/span identity, response/prompt identity, confidence, and annotation provenance. It is
+   allowed to retain `unknown` and ambiguous cases. A simpler derived selection stratum and frozen
+   sampling weight are computed from these fields. This layer, its review audit, and its exact
+   target-conversion policy freeze before the adequacy target manifest or any scientific trace.
+2. **Descriptive annotation layer.** This retains and refines the richer ontology above, including
+   process signatures, detailed roles, operation/state types, modality, correctness/status, and
+   event-relative structure. It may be refined in new graph-blind versions while tracing runs. It
+   must never inspect graphs, neurons, clusters, generated ADAG descriptions, or adequacy outcomes.
+   Every version remains linked to the same immutable response and token identities. The exact
+   descriptive version and fields used by an adequacy measurement freeze before that measurement
+   opens cluster assignments or labels.
+
+The frozen v9 automatic draft is a seed for both layers, not reviewed semantic truth. Exhaustive
+manual painting of every rich axis over all 842,007 tokens is not a prerequisite for tracing.
+Semantic-heavy coarse fields may use a structured LLM annotator followed by graph-blind human audit
+of balanced examples, conflicts, rare strata, and low-confidence cases. Later descriptive versions
+may add information to already traced targets, but they cannot retroactively change why a target
+entered the frozen trace bank.
+
 Automatic annotation may classify observable form broadly but is not semantic ground truth. Use
 high-precision regular expressions, lexical rules, or another deterministic local classifier to
 suggest numbers, operators, equations, JSON structure, delimiters, punctuation, whitespace,
 answer markers, and explicit operation words. A human reviews those suggestions and supplies or
-corrects process roles and operations. Preserve both the proposal and reviewed value; permit
-`unknown`, `ambiguous`, and multi-label annotations rather than forcing complete semantic coverage.
-Audit a stratified sample of raw suggestions before accepting the first draft so avoidable token
-boundary, sign, decimal, Markdown, JSON, delimiter, and operation-word errors are corrected before
-manual review scales up.
+corrects high-impact cases. Structured LLM annotation may propose semantic-heavy regimes, process
+families, roles, and event boundaries at scale; preserve the model, prompt, response, confidence,
+and raw proposal. Human review is required on balanced samples, conflicts, rare strata,
+low-confidence cases, and any manually selected anchors, but exhaustive rich-axis correction is not
+a pre-trace requirement. Preserve proposal and reviewed values separately; permit `unknown`,
+`ambiguous`, and multi-label annotations rather than forcing complete semantic coverage. Audit a
+stratified sample before accepting each draft so avoidable token-boundary, semantic shortcut,
+sign, decimal, Markdown, JSON, delimiter, and operation-word errors are corrected before use.
 
 Manual selection is permitted for this exploratory study. Annotators may use the frozen task
 schema, raw prompt/completion, BonaFide annotations, and audited process ledger. Broad attempted
@@ -304,7 +332,9 @@ Every annotated or derived target receives exactly one usage class:
 
 - **`process_atlas_fit`:** eligible to fit and label the primary process atlas;
 - **`surface_reference`:** explicit surface-form comparison positions, excluded from all atlas
-  fitting, hyperparameter choice, exemplars, and labels;
+  fitting, hyperparameter choice, exemplars, and labels for the primary process atlas. They may
+  enter only a separately named, predeclared nuisance-contamination sensitivity after the primary
+  state and hyperparameters freeze;
 - **`trajectory_only`:** the unselected or unclassified remainder, which is not assumed to be a
   negative example of computation.
 
@@ -317,9 +347,11 @@ Use a small token-aware local annotation page for this work. It must render the 
 and tokenizer boundaries, allow span painting and usage/event assignment, and export a reviewable
 manifest containing at least response ID, character span, token span, usage class, process/event ID,
 target-conversion policy, annotator, revision, source-response hash, and tokenizer hash. The page
-must not load graph or clustering artifacts. Freeze and hash the reviewed annotation manifest before
-production tracing or atlas fitting. At freeze, every dense position not explicitly assigned to
-`process_atlas_fit` or `surface_reference` is recorded as `trajectory_only` rather than omitted.
+must not load graph or clustering artifacts. Freeze and hash the reviewed coarse selection manifest
+before production tracing or atlas fitting. Richer descriptive reviews are separately versioned and
+need not all finish before tracing. At selection freeze, every dense position not explicitly
+assigned to `process_atlas_fit` or `surface_reference` is recorded as `trajectory_only` rather than
+omitted.
 
 The initial trace budget is deliberately not frozen in this draft. First inventory annotated
 process-target yield and measure T5 cost on the selected model, then freeze the response-balancing
@@ -411,10 +443,56 @@ required before every frozen prompt cell can contribute atlas-fit targets.
 
 ## Step 1: run the standalone global-atlas adequacy study
 
-### 1A. Trace the atlas-fit corpus
+Step 1 has three concurrent work lanes after the coarse selection manifest freezes:
+
+```text
+T5 trace production  ||  graph-blind descriptive annotation  ||  synthetic ADAG tests
+```
+
+Tracing is expected to be the long pole. Synthetic similarity/clustering tests and descriptive
+label refinement should use that time; neither waits for all traces, and neither may inspect partial
+scientific cluster outcomes. Real-data atlas fitting begins only when the required trace tranche and
+the exact descriptive annotation version for that measurement are both frozen.
+
+### 1A. Freeze the coarse selection layer and adequacy trace bank
+
+Derive a compact selection layer from the graph-blind annotations. Each candidate target retains
+independent fields for:
+
+- local functional regime: process execution, state/information retrieval,
+  verification/correction, result/answer commitment, planning/restatement/explanation,
+  structural/surface serialization, or uncertain;
+- broad process family, including arithmetic/numeric transformation, graph/relation traversal,
+  state/sequence update, comparison/selection, encoding/decoding/extraction, other task-specific
+  process, none, or unknown;
+- surface form, event/span ID, event-relative position, prompt/response identity, suggestion source,
+  confidence, and review status.
+
+Use these fields to predeclare both a balanced diagnostic distribution and a natural-frequency
+distribution. Sampling need not be uniform. Oversample rare regimes and matched controls when that
+improves power, but preserve inclusion probabilities, target weights, and the population to which
+each result applies. Sample hierarchically by prompt, response, event, then token so subtokens and
+nearby targets from one event are never treated as independent evidence. Include same-surface/
+different-role and same-role/different-surface comparisons. Freeze an ordered manifest so the first
+completed trace tranches already contain usable repeatability, favorable, mixed, and specificity
+panels without making partial completion a new target-selection decision.
+
+The working planning envelope is approximately 30,000–40,000 independent T5 targets with a goal of
+finishing production within about one week. This is neither a frozen count nor launch authority.
+The exact count follows the coarse-label yield inventory, target-context resource tiers, achievable
+array throughput, per-panel minimum support, and failure/resume policy. Reduce or expand only through
+the frozen nested target-bank tiers, never by inspecting partial scientific outcomes.
+
+The coarse annotations define context strata and selection only. They do not enter the ADAG
+similarity or clustering objective and do not assert that the model internally performed the
+painted process. Any target added after inspecting a graph or cluster belongs to a separately
+versioned discovery or follow-up bank.
+
+### 1B. Trace the atlas-fit corpus
 
 - Trace the frozen `process_atlas_fit` targets and `surface_reference` panels selected for the
-  adequacy study with T5; keep surface-reference artifacts sealed from fitting and labeling.
+  adequacy study with T5; keep surface-reference artifacts sealed from primary fitting, primary
+  hyperparameter choice, and labeling.
 - Permit dense discovery A and B to contribute only targets that satisfy a frozen adequacy-panel
   rule. Do not trace every response token in Step 1.
 - Before tracing, freeze deterministic `process_atlas_fit` panels under the chosen response-
@@ -446,13 +524,71 @@ A separately named hierarchically weighted all-dense atlas may be implemented la
 sensitivity, but it is not upstream-equivalent T5 ADAG. Cluster-label evidence must likewise use
 frozen prompt/response exemplar caps. Full dense traces are produced only in conditional Step 2.
 Surface-reference traces are opened for projection and comparison only after each candidate atlas
-state freezes.
+state freezes. A separately predeclared nuisance-contamination fit may then deliberately add them
+at matched budget to measure how punctuation, filler, or serialization contexts alter clustering;
+it cannot replace, relabel, or tune the primary process-only state.
 
-### 1B. Fit matched candidate atlases label-blind
+While this production lane runs, continue graph-blind descriptive annotation in immutable versions.
+In parallel, execute the synthetic ADAG battery in Section 1C. Neither activity changes the frozen
+trace target membership.
+
+### 1C. Run synthetic ADAG mechanism tests concurrently
+
+Before interpreting real clusters, test the exact similarity and clustering implementations on
+engineered attribution/contribution profiles and co-occurrence masks with known structure. At
+minimum include:
+
+1. a stable monosemantic block control;
+2. high `A-B` similarity on shared contexts plus a distinct `A`-only regime;
+3. disjoint `A-B` and `B-C` context families with no direct `A-C` evidence;
+4. many positive co-occurrences plus a rare severe disagreement regime;
+5. equal mean affinity supported by one versus many contexts;
+6. balanced versus frequency-skewed mixtures; and
+7. token-position-specific roles before and after the default token-collapse operation.
+
+For every case retain the complete per-context similarities, overlap counts, one-sided occurrence,
+affinity matrix, spectral embedding, assignments, and sensitivity to `k`, seed, and mixture
+proportion. Synthetic outcomes locate structural behavior of the algorithm; they do not estimate
+how often that behavior occurs in the BonaFide-derived corpus.
+
+Run the frozen paper-faithful and released-code similarity conditions plus the predeclared spectral,
+Leiden, and concatenated-profile clustering comparators on the same compatible synthetic fixtures.
+This is required to distinguish failures caused by pair construction from failures caused by the
+global partition. Do not expand the comparator grid after seeing a fixture outcome.
+
+### 1D. Fit matched candidate atlases label-blind
 
 Construct input-attribution and output-contribution profiles using only the frozen atlas-fit
 corpus. Select normalization, cluster state, and stability settings without looking for attractive
 process labels or opening the dense reserve case.
+
+The primary algorithmic reference must be named precisely. The paper defines **paper-faithful
+multi-view spectral ADAG** as: clamp and harmonic-fuse attribution/contribution cosine similarity
+inside each co-occurring context, uniformly average those fused scores across contexts, then apply
+spectral clustering to the non-negative affinity. The released implementation differs: its
+`combine="harmonic"` mode averages each view across contexts before harmonic fusion, while the
+callable default is arithmetic `combine="mean"`. Record and test both; do not call either one the
+other. A paper-faithful implementation requires its own parity fixtures before scientific use.
+
+Treat clustering implementation as a predeclared diagnostic axis rather than an unrestricted model
+search. The repository already exposes:
+
+- multi-view spectral clustering with normalized or unnormalized affinity, non-negative clipping
+  or linear shift, arithmetic or released-code harmonic fusion, and a `k` sweep;
+- Leiden community detection on a k-nearest-neighbor sparsification of the same multi-view
+  affinity; and
+- concatenated-profile baselines using agglomerative, K-means, bisecting K-means, or RBF spectral
+  clustering.
+
+The adequacy report must keep paper-faithful and released-code multi-view spectral ADAG as distinct
+unmodified conditions. Before opening outcomes, freeze whether the gate requires both, designates
+one primary with the other as a fidelity comparator, or permits a split verdict; do not choose this
+after seeing which condition looks better. Use Leiden and the concatenated-profile clusterers to
+localize whether a failure comes from pair construction, global spectral partition, hard fixed-`k`
+assignment, or the underlying profiles; they may not be promoted merely because their labels look
+cleaner. Optional absence-aware importance profiles, hierarchical weights, position-preserving
+identities, robust aggregation, or support thresholds are explicitly modified methods and enter
+only as named repair/sensitivity conditions after the unmodified conditions are recorded.
 
 To evaluate global-atlas adequacy, fit an equal-budget composition series from the same saved trace
 bank. The exact viable cells and counts freeze after the graph-blind annotation-yield inventory,
@@ -463,7 +599,9 @@ but before any cluster or label output is opened. The intended progression is:
 3. multiple process signatures at one matched role;
 4. balanced process families and roles within one well-supported domain or task family;
 5. balanced process families, roles, and domains across the outright-process distribution;
-6. a separately named surface-matched mixture sensitivity.
+6. same-surface/different-role and same-role/different-surface process-target mixtures; and
+7. a separately named nuisance-contamination sensitivity that injects actual
+   `surface_reference` contexts only after the primary process-only state freezes.
 
 Hold total contexts and prompt/response contribution fixed within each direct comparison. Sample
 hierarchically by prompt, response, process event, then token; adjacent subtokens from one event are
@@ -493,14 +631,14 @@ Retain:
 - exact exemplars and their response/family provenance;
 - unseen-feature application rule.
 
-### 1C. Label candidate states
+### 1E. Label candidate states
 
 Generate cluster descriptions from discovery evidence, retain abstentions and uncertainty, and
 audit proposed labels against exact profile/graph exemplars. Candidate labels are not yet a witness
 vocabulary. Map them, blind to held-out cluster occurrences, to the frozen annotation ontology or
 abstention and test whether their specificity is supported on held-out prompts.
 
-### 1D. Pre-witness polysemanticity and label-quality gate
+### 1F. Diagnose global-atlas aliasing and label quality
 
 ADAG gives each signed `(layer, neuron, polarity)` identity one global cluster assignment. More
 clusters can regroup identities but cannot give one neuron different memberships in different
@@ -510,6 +648,33 @@ task-conditional labels when operations, roles, and domains are mixed.
 Call this the **global-atlas adequacy test**. Context-dependent neuron reuse is one possible cause
 of failure, but the gate does not claim to measure intrinsic neuron polysemanticity. It measures
 whether the fitted global atlas remains useful for this process corpus.
+
+The primary risk is **context-conditioned role aliasing under a global hard partition**, not
+polysemanticity in the abstract. Separate and report these mechanisms:
+
+1. **Pairwise co-occurrence censoring:** `A-B` similarity is computed only where both identities
+   survive pruning; `A`-only and `B`-only contexts do not directly disconfirm the pair.
+2. **Bridge-induced merging:** positive `A-B` and `B-C` affinity from disjoint context families can
+   connect `A` and `C` in a global partition without direct `A-C` evidence.
+3. **Mean masking:** a high mean can conceal low-support, high-variance, minority-disagreement, or
+   family-reversed pair behavior.
+4. **Missing-versus-incompatible ambiguity:** zero affinity can mean no overlap or observed
+   incompatibility; the partition does not preserve that distinction.
+5. **Hard-assignment and resolution failure:** every retained signed identity receives one cluster
+   at the chosen resolution even when its conditional neighborhood changes across strata.
+6. **Position and mixture aliasing:** default token collapse and unequal context support may merge
+   position-specific roles or let frequent prompts, responses, and events dominate.
+7. **Description dilution:** cluster construction may be coherent while one aggregate natural-
+   language label is broad, dominant-regime-specific, or overconfident; clustering and labeling
+   failure are separate verdict dimensions.
+
+Retain raw evidence needed to test these mechanisms instead of relying on the final silhouette or
+label score: pair overlap support, one-sided occurrence, the full per-context similarity
+distribution, family-conditioned means and lower tails, context-conditioned nearest-neighbor
+turnover, same-cluster pairs without direct evidence, bridge-node dependence, prompt-blocked
+cluster stability, unknown signed-node coverage, and unknown attribution mass. Text annotations
+define evaluation strata; a neuron appearing under two semantic labels is not itself proof of two
+functions unless its conditional attribution/contribution or relational evidence also differs.
 
 The adequacy trace bank is selected for this gate only. It may later supply reusable target-local
 graphs, but it is not a motif dataset and is not optimized around a conjectured witness shape.
@@ -592,15 +757,21 @@ the dense trajectories. If the gate is brittle, first establish that modificatio
 version a new method; CU5 or a context-conditional representation may motivate later engineering
 but is not an automatic replacement. The complete passing, frozen object is the **atlas**.
 
-### 1E. Adequacy decision
+### 1G. Adequacy decision
 
 Conclude Step 1 with exactly one verdict:
 
 - **robust:** proceed to a separately designed motif/witness study; reuse adequate Step-1 traces
   where they meet its later frozen inclusion rules, and add labels or traces only under a new
   manifest;
-- **brittle:** stop the witness study under this atlas version and test a separately versioned
-  context-conditional or otherwise revised representation;
+- **brittle:** stop the witness study under this atlas version and localize the failure before
+  choosing a response. Record whether it is controllable by declared corpus conditioning or
+  multiple purpose-built atlases, repairable by support-aware/robust aggregation, soft or
+  context-conditional membership, a different clustering backend, or attributable to an
+  inadequate underlying trace/profile representation. Every repair is a separately versioned
+  method that reruns the same synthetic and real adequacy battery. If the required distinctions
+  are absent even from favorable raw profiles, compare a different representation or tracing
+  method rather than tuning ADAG labels;
 - **inconclusive:** collect only the additional support needed to resolve the adequacy gate.
 
 Do not inspect dense witness trajectories, choose motif representations, mine recurrent subgraphs,
@@ -868,20 +1039,21 @@ The first frozen cohort directory (`atlas-responses-backfilled-v1`, manifest SHA
 superseded. Version 2 adds exact freeze-implementation identities and source-run bindings; only
 version 2 is admitted downstream.
 
-1. Build annotation ontology v1, deterministic suggestion rules, and the graph-blind token-aware
-   review page; inspect a stratified raw sample and correct obvious automatic-rule errors.
-2. Paint and review process and surface-reference regions, derive a balanced union target bank,
-   apply the exact
-   T5 target-context resource gate, and freeze the hashed three-class annotation manifest and
-   `Q_process` tiers.
-3. Trace the union bank once with T5; optionally trace the exact bank with CU5 in a separate,
-   sealed sidecar namespace.
-4. Freeze the cluster/label-quality metrics and natural perturbation floor before opening candidate
-   atlas outputs; run the matched semantic-composition series and decide robust/brittle/inconclusive.
-5. Specify the unknown-preserving trajectory-viewer schema and validate its three attribution-mass
-   states on small synthetic or smoke-test artifacts.
-6. Only after a passing method-quality gate, freeze the atlas and open dense trajectories for
-   witness discovery.
+1. Derive and audit the coarse selection layer from the canonical v9 machine draft, using structured
+   semantic annotation where deterministic rules are insufficient; inventory balanced and natural-
+   frequency yields without requiring exhaustive rich-axis manual review.
+2. Freeze the ordered, prompt/response/event-blocked adequacy target bank, inclusion weights,
+   composition cells, and exact T5 target-context resource tiers.
+3. Start primary T5 production; optionally trace the identical bank with CU5 in a separate sealed
+   sidecar. While production runs, refine the graph-blind descriptive layer and execute the
+   synthetic ADAG mechanism battery.
+4. Implement and parity-test the paper-faithful per-context harmonic condition; freeze the
+   released-code fidelity condition, bounded clustering comparator grid, full pair-evidence
+   outputs, metrics, and perturbation floors before opening real cluster outcomes.
+5. Run the matched real-data composition series and decide `robust`, `brittle`, or `inconclusive`,
+   localizing any brittle result before changing the method.
+6. Only after a robust verdict, design and freeze the separate motif-study sampling, graph
+   representation, recurrence rule, reserve, and additional trace requirements.
 
 ### 2026-08-13 annotation implementation checkpoint
 
@@ -909,3 +1081,17 @@ human-only. Versions 1–8 remain preserved but are superseded: v5 was too seman
 while denser v6–v8 drafts were blocked by response-stratified and contextual false-positive audits.
 Only v9 `workstation-bundle.json` is canonical for human annotation. No human review, target
 selection, or tracing has yet begun.
+
+### 2026-08-16 adequacy sequencing checkpoint
+
+The current execution order is coarse selection, target-bank freeze, then three concurrent lanes:
+T5 tracing, graph-blind descriptive refinement, and synthetic ADAG tests. Real-data adequacy fits
+follow when the required traces and annotation version are frozen. The source audit defining the
+failure mechanisms and paper/code discrepancy is
+`experiments/process_witness/ADAG_POLYSEMANTICITY_AND_CLUSTERING_AUDIT.md`.
+
+The next concrete design task is the coarse selection schema and sampling matrix. It must support
+the ordered adequacy panels and direct mechanism tests without pretending that semantic text labels
+are neuron-function ground truth. Exact trace count, class quotas, inclusion weights, partial-wave
+ordering, and resource tiers remain to be frozen from the yield inventory. No atlas cluster,
+description, motif, or dense trajectory has been opened under this design.
