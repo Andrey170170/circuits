@@ -3,6 +3,9 @@
 This directory records the execution and scientific decisions of the BonaFide process-witness
 study.
 
+The repository-root `CONTEXT.md` is the canonical terminology reference. The governing scientific
+sequence and claim boundaries are recorded in `plans/2026-08-11-bonafide-process-witness-plan.md`.
+
 - `experiment_log.jsonl` is the canonical append-only event ledger. Existing lines are never
   edited or reordered; corrections are new events that reference the superseded event ID.
 - `EXPERIMENT_LOG.md` is the concise human-readable view. It may summarize several JSONL events,
@@ -35,4 +38,3 @@ Optional structured fields include `jobs`, `artifacts`, `code`, `inputs`, `metri
 `supersedes`, `notes`, and `next_actions`. Artifact entries should include a SHA-256 identity when
 one exists. Never put credentials, environment secrets, raw model weights, or large responses in
 the ledger.
-

@@ -4,16 +4,20 @@ Status: **central protocol; the architecture and historical-reconstruction choic
 Step-0 input inventories are frozen in version 1, the bounded T5 landmark gate passed, and the
 balanced 188-response atlas-response cohort is frozen as
 `qwen3-thinking-process-witness-atlas-responses-backfilled-v2`, and its graph-blind v9 automatic
-annotation draft is frozen for human review. The cohort is not yet a fitted atlas. Before any
-witness inspection, the study will test whether ADAG's global signed-neuron
-clustering and cluster labels remain meaningful under controlled semantic mixture. Production
-tracing remains gated by graph-blind annotation, response balancing, and target-context resource
-tests.**
+annotation draft is frozen for human review. The cohort is not yet a fitted atlas. The next study
+is a standalone global-atlas adequacy test, not a combined adequacy-and-witness experiment. It will
+test whether ADAG's global signed-neuron clustering and cluster labels remain useful under
+controlled semantic mixture. Witness-specific annotation, motif-dataset construction, and dense
+trajectory production begin only after a robust adequacy verdict. Production tracing remains gated
+by graph-blind annotation, response balancing, and target-context resource tests.**
 
 This is the governing plan for the new process-witness campaign. Where it conflicts with
 `docs/ADAG_BONAFIDE_NAIVE_PILOT.md` or `docs/TRACING_CORPUS_PLAN.md`, this plan governs the new
 campaign; those documents continue to describe the earlier Qwen Instruct feasibility pilot and its
 frozen execution history.
+
+`CONTEXT.md` is the canonical glossary for outright process tasks, task-required process events,
+process families and signatures, adequacy panels, motif candidates, and witness claim levels.
 
 This is a new experiment identity. It does not modify or extend the frozen Qwen Instruct
 width-one or candidate-union corpora. Those artifacts remain engineering evidence and possible
@@ -32,14 +36,23 @@ mechanistic definition. In loose terms, that detector must eventually test two d
 The computation and its verbalization need not occur at the same token position. Exact temporal
 alignment is not assumed.
 
-The present experiment asks a narrower prerequisite question:
+The program retains the following process-recovery question:
 
 > When BonaFide tells us that a particular answer-relevant process must have occurred, can a
 > frozen ADAG atlas recover a stable and recognizable witness of that process in an ordered
 > series of attribution graphs?
 
-This is a positive-control process-recovery study. It does not yet establish either direction of
-a general faithfulness detector.
+That question is now explicitly conditional on a prior experiment:
+
+> **Global-atlas adequacy test:** Can one global signed-neuron-to-cluster mapping retain locally
+> useful process distinctions across the full outright-process distribution?
+
+Run the adequacy test first and decide it independently. Do not construct a witness-optimized motif
+dataset merely because the same traces might later be reusable. A robust adequacy verdict permits a
+separately frozen positive-control process-recovery study. A brittle verdict redirects work toward
+a context-conditional or otherwise revised representation. An inconclusive verdict permits only
+additional adequacy data. Neither experiment by itself establishes either direction of a general
+faithfulness detector.
 
 ## Scientific object
 
@@ -311,10 +324,11 @@ production tracing or atlas fitting. At freeze, every dense position not explici
 The initial trace budget is deliberately not frozen in this draft. First inventory annotated
 process-target yield and measure T5 cost on the selected model, then freeze the response-balancing
 rule, process quotas, nested process-only enlargement tiers if needed, and surface-reference quotas
-in a new corpus manifest. For broad responses, trace the selected process targets and frozen
-surface references. For dense discovery responses, trace every response position. Only dense
-targets marked `process_atlas_fit` participate in the primary atlas fit; all dense targets are
-projected after the atlas freezes.
+in a new corpus manifest. For the adequacy study, trace the selected process targets and frozen
+surface references across broad responses. Dense-discovery responses may contribute only
+predeclared adequacy targets and small fixed position-sensitivity neighborhoods at this stage. Full
+all-token dense trajectories are deferred until a robust adequacy verdict and the separate Step-2
+motif-study freeze.
 
 The annotation-yield pilot must resolve response balancing before the manifest freezes. Prefer a
 common `Q_process` supported by every admitted response, with a frozen retry or exclusion rule for
@@ -395,13 +409,14 @@ These measurements support the 1,268-token context tier only. Broad historical-f
 prefixes range from 175 to 2,631 tokens, so at least one additional long-prompt resource gate is
 required before every frozen prompt cell can contribute atlas-fit targets.
 
-## Step 1: validate atlas semantics, then build and freeze the atlas
+## Step 1: run the standalone global-atlas adequacy study
 
 ### 1A. Trace the atlas-fit corpus
 
-- Trace the frozen `process_atlas_fit` targets and `surface_reference` panels from the broad
-  completions with T5; keep surface-reference artifacts sealed from fitting and labeling.
-- Trace every response token in dense discovery A and B with T5.
+- Trace the frozen `process_atlas_fit` targets and `surface_reference` panels selected for the
+  adequacy study with T5; keep surface-reference artifacts sealed from fitting and labeling.
+- Permit dense discovery A and B to contribute only targets that satisfy a frozen adequacy-panel
+  rule. Do not trace every response token in Step 1.
 - Before tracing, freeze deterministic `process_atlas_fit` panels under the chosen response-
   balancing rule, nested process-only enlargement tiers, and a separately marked surface-reference
   panel.
@@ -416,22 +431,22 @@ and cannot be used to claim that ADAG needs modification, select the T5 quality 
 a disappointing T5 atlas post hoc. Any T5/CU5 comparison opens only after its comparison protocol
 and the T5 cluster/label-quality measurements are frozen.
 
-The primary atlas follows upstream's uniform-over-context aggregation, but its contexts are the
+The candidate atlases follow upstream's uniform-over-context aggregation, but their contexts are the
 frozen `process_atlas_fit` panels rather than uniform all-token samples. Use the response-balancing
-rule frozen at the annotation-yield gate. Audit projection coverage over the complete dense
-trajectories without examining cluster labels, surface-reference results, or candidate witnesses.
-Predeclare assignment gates using signed-node coverage, attribution-mass coverage, process-ledger
-landmark coverage, and cluster stability. If the smallest process-only panel fails those gates,
-advance to the next already frozen process-only tier. Choose the smallest passing tier; if none
-passes, stop or version a new method rather than silently admitting every dense token.
+rule frozen at the annotation-yield gate. Audit projection coverage over the held-out adequacy
+panels without examining candidate witnesses. Predeclare assignment gates using signed-node
+coverage, attribution-mass coverage, process-ledger landmark coverage, and cluster stability. If
+the smallest process-only panel fails those gates, advance to the next already frozen process-only
+tier. Choose the smallest passing tier; if none passes, stop or version a new method rather than
+silently admitting every token.
 
 This response-balanced subset is preferable to custom weights for the primary study because the
 upstream implementation uniformly averages contexts and has no family/response-weight interface.
 A separately named hierarchically weighted all-dense atlas may be implemented later as a method
 sensitivity, but it is not upstream-equivalent T5 ADAG. Cluster-label evidence must likewise use
-frozen prompt/response exemplar caps. Full dense traces are produced once and projected in Step 2
-rather than redundantly retraced. Surface-reference traces are opened for projection and comparison
-only after the primary atlas freezes.
+frozen prompt/response exemplar caps. Full dense traces are produced only in conditional Step 2.
+Surface-reference traces are opened for projection and comparison only after each candidate atlas
+state freezes.
 
 ### 1B. Fit matched candidate atlases label-blind
 
@@ -439,15 +454,15 @@ Construct input-attribution and output-contribution profiles using only the froz
 corpus. Select normalization, cluster state, and stability settings without looking for attractive
 process labels or opening the dense reserve case.
 
-Before choosing a witness atlas, fit an equal-budget composition series from the same saved trace
+To evaluate global-atlas adequacy, fit an equal-budget composition series from the same saved trace
 bank. The exact viable cells and counts freeze after the graph-blind annotation-yield inventory,
 but before any cluster or label output is opened. The intended progression is:
 
-1. one well-supported operation by one process role;
-2. the same operation across roles;
-3. multiple operations at one matched role;
-4. balanced arithmetic operations by roles;
-5. balanced arithmetic plus non-arithmetic process domains;
+1. one well-supported process signature at one matched role;
+2. the same process signature across roles or representations;
+3. multiple process signatures at one matched role;
+4. balanced process families and roles within one well-supported domain or task family;
+5. balanced process families, roles, and domains across the outright-process distribution;
 6. a separately named surface-matched mixture sensitivity.
 
 Hold total contexts and prompt/response contribution fixed within each direct comparison. Sample
@@ -463,12 +478,11 @@ cluster support, and profile coherence within the process-target fit corpus. Ret
 higher-resolution fit as a sensitivity view if support permits; do not use surface references,
 manually attractive math labels, or candidate witnesses to choose `k`.
 
-Report task-family support for every cluster. Because the initial dense cases are arithmetic or
-algorithmic while the primary corpus spans all outright tasks, optionally predeclare one arithmetic/
-algorithmic-only refit of the identical saved process-target traces as a corpus-composition
-sensitivity. It is not a replacement primary atlas and may not be promoted because it produces a
-more attractive witness; it tests whether legitimate non-math process diversity is consuming the
-available clustering resolution.
+Report task-family and process-family support for every cluster. If support permits, predeclare one
+single-domain or single-family refit of the identical saved process-target traces as a
+corpus-composition sensitivity. It is not a replacement primary atlas and may not be promoted
+because it produces more coherent labels; it tests whether legitimate process diversity is
+consuming the available clustering resolution.
 
 Retain:
 
@@ -492,6 +506,59 @@ ADAG gives each signed `(layer, neuron, polarity)` identity one global cluster a
 clusters can regroup identities but cannot give one neuron different memberships in different
 contexts. Before dense witness inspection, test whether that representation supports trustworthy
 task-conditional labels when operations, roles, and domains are mixed.
+
+Call this the **global-atlas adequacy test**. Context-dependent neuron reuse is one possible cause
+of failure, but the gate does not claim to measure intrinsic neuron polysemanticity. It measures
+whether the fitted global atlas remains useful for this process corpus.
+
+The adequacy trace bank is selected for this gate only. It may later supply reusable target-local
+graphs, but it is not a motif dataset and is not optimized around a conjectured witness shape.
+Trace selected process contexts and matched references needed by the panels below. Do not produce
+full dense trajectories merely to anticipate Step 2. Small fixed event-relative neighborhoods are
+allowed only when predeclared as position-sensitivity measurements for the adequacy gate.
+
+#### Ordered adequacy panels and their inferential jobs
+
+The panels form an evidence ladder. Each panel answers a different question and must not be pooled
+into one undifferentiated score.
+
+0. **Repeatability floor — how much movement occurs without changing the semantic problem?**
+   Repeat clustering seeds, same-composition prompt-balanced samples, prompt-blocked resamples,
+   frozen repeat traces where available, and label/exemplar resamples. This is the perturbation
+   floor against which every later degradation is measured. It does not test semantic recovery.
+1. **Best-case homology — can ADAG recover a process when given the cleanest fair conditions?**
+   Use one well-supported process signature or tightly related task-required events, balanced over
+   independent responses, with minimally varying operands, entities, or states. Fit and evaluate
+   on separate examples of that same process. This is a necessary lower-bound feasibility test,
+   not evidence of broad generalization.
+2. **Natural transport — does the recovered organization survive ordinary task variation?**
+   Hold the process family or normalized signature fixed while varying prompt, response, operands,
+   entities, state, representation, and task skin. This measures the range over which a process
+   description can legitimately transport.
+3. **Role-versus-mechanism separation — what semantic distinction is the atlas preserving?**
+   Compare the same mechanism in different textual/process roles and different mechanisms in the
+   same role. This distinguishes an atlas organized around process mechanism from one organized
+   mainly around result position, answer commitment, representation, or discourse role.
+4. **Collision stress — how much does heterogeneous process composition damage the global map?**
+   Mix distinct process signatures, families, and domains at fixed budget and prompt/response
+   balance, especially where surface forms or roles overlap. Excess degradation beyond Panels 0–3
+   is evidence that one global mapping cannot represent the required contextual distinctions.
+5. **Matched non-process specificity — are apparent process labels actually generic reasoning or
+   reporting machinery?** Compare performed/derived process spans with matched planning,
+   instruction/restatement, hypothetical work, lookup/copying, verification, correction, answer
+   serialization, and nearby unclassified discourse. This estimates semantic false-positive
+   behavior; the complement of a labeled process span is not automatically a negative.
+6. **Surface-reference specificity — are results explained by token-production form?**
+   Project matched punctuation, whitespace, delimiters, JSON syntax, function words, and numeric or
+   entity surface forms through the frozen candidate atlases. This measures surface leakage and is
+   never an atlas-fit source for the primary process comparisons.
+
+The labels required to build these panels are hierarchical. Retain task-requiredness, event
+modality, broad process family, example-specific process signature, process role, representation,
+and correctness/status as separate fields. `presented_as_executed_or_derived` is a textual claim,
+not evidence that the model performed an internal computation. The frozen v9 automatic draft is a
+suggestion source, not reviewed truth; semantic-heavy fields may use an LLM annotator followed by
+graph-blind human audit of balanced samples, conflicts, and low-confidence cases.
 
 Establish the natural perturbation floor first using repeated clustering seeds, independently
 sampled prompt-balanced panels with identical semantic composition, prompt-blocked resampling,
@@ -525,7 +592,34 @@ the dense trajectories. If the gate is brittle, first establish that modificatio
 version a new method; CU5 or a context-conditional representation may motivate later engineering
 but is not an automatic replacement. The complete passing, frozen object is the **atlas**.
 
-## Step 2: build dense bottleneck graph trajectories
+### 1E. Adequacy decision
+
+Conclude Step 1 with exactly one verdict:
+
+- **robust:** proceed to a separately designed motif/witness study; reuse adequate Step-1 traces
+  where they meet its later frozen inclusion rules, and add labels or traces only under a new
+  manifest;
+- **brittle:** stop the witness study under this atlas version and test a separately versioned
+  context-conditional or otherwise revised representation;
+- **inconclusive:** collect only the additional support needed to resolve the adequacy gate.
+
+Do not inspect dense witness trajectories, choose motif representations, mine recurrent subgraphs,
+or tune graph-similarity thresholds before recording this verdict.
+
+## Step 2, conditional on robust adequacy: construct motif-study data and dense trajectories
+
+Step 2 is a new, separately frozen experimental phase. First use the adequacy results to specify
+which process families, event windows, matched controls, annotations, and additional traces the
+motif study requires. The Step-1 adequacy bank may be reused without retracing exact target
+positions, but its existence does not determine the Step-2 sampling distribution.
+
+The initial motif hypothesis may treat a candidate as a connected attributed subgraph of labeled
+supernodes that recurs across target-local graphs. Connectedness, the graph representation,
+cluster-alignment method, similarity function, event-level aggregation, and thresholds remain
+discovery questions until actual adequacy graphs establish what objects are available. Freeze those
+choices after discovery and before opening a separately declared reserve. Similarity must be
+invariant to graph-node ordering and handle cluster-ID permutation across refits; exact paths must
+remain occurrence-continuous inside one target-local graph.
 
 Project every token-position graph in each dense discovery response onto the frozen atlas. Later,
 trace and project dense reserve A under the identical T5 and atlas configuration without refitting.

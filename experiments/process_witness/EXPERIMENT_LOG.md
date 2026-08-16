@@ -130,3 +130,18 @@ coverage is deliberately layered: `discourse_phase` 97.4%, `process_span` 35.7%,
 `event_operation` 33.7%, exact `operation` 3.1%, and `process_role` 17.9%. These are detector yields,
 not accuracy or evidence of internal computation. Human review, `usage` assignment, and the
 response-balanced trace-target conversion remain pending.
+
+## 2026-08-16 — Global-atlas adequacy separated from motif/witness study
+
+The next experiment is now a standalone **global-atlas adequacy test**: whether one frozen signed-
+neuron-to-cluster mapping retains locally useful distinctions across the heterogeneous outright-
+process distribution. Its trace bank is selected only for ordered adequacy panels: repeatability
+floor, best-case homology, natural transport, role-versus-mechanism separation, collision stress,
+matched non-process specificity, and surface specificity. Each panel has a distinct inferential
+job and must not be collapsed into one score.
+
+Motif-dataset construction, dense witness trajectories, graph-motif selection, and witness
+thresholds are deferred until the adequacy gate records `robust`. A `brittle` result redirects the
+project to a newly versioned representation; an `inconclusive` result admits only additional
+adequacy data. Existing target-local traces may later be reused when they meet a separately frozen
+motif-study manifest, but the adequacy bank is not optimized for a witness hypothesis.
