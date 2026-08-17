@@ -311,3 +311,29 @@ window per source-by-position-by-hidden-hint cell. Two arms and three identical-
 more than two additional human process-bearing false negatives; it is preferred only with at least
 five net paired admissible-agreement wins and no increase in stable high-confidence errors.
 Otherwise the arms tie and zero-shot remains the parsimonious production proposal.
+
+## 2026-08-17 — Refined zero-shot/few-shot Luna qualification completed
+
+The user granted project-wide authorization to send public BonaFide-derived task prompts and model
+responses to the OpenAI API; the durable scope and safeguards are recorded in
+`docs/BONAFIDE_EXTERNAL_API_AUTHORIZATION.md`. The run-specific immutable intent also records the
+authorization verbatim and enforced a $3.00 hard ceiling.
+
+The fresh v3 qualification used 24 unique prompt/response windows, six consecutive semantic units
+per window, two target-only full-context arms, and three identical-body replicas per arm/window.
+All 144 native-Batch requests completed successfully, yielding exact coverage of 864 physical unit
+decisions and 288 unique arm-by-target decisions. There were zero provider or validation failures,
+and all 144 provider response identities were distinct.
+
+The immutable collection manifest SHA-256 is
+`9d748de8fbf24881348eeceaea7ad92144adb08d56ff6329b61e827f95c49783`.
+Receipt-derived usage was 1,061,454 input tokens, including 707,348 cache-read and 353,674
+cache-write tokens, plus 119,525 output tokens of which 73,117 were reasoning tokens. Only 432 input
+tokens were neither cache reads nor cache writes. Actual cost was $0.12304093, well below the
+$1.96969785 conservative no-cache/full-output estimate and the $3.00 hard ceiling.
+
+The model outputs remain concealed from the human reviewer. The globally blind packet contains no
+model decisions or reveal payload; all 144 human judgments must be sealed before a separate,
+identity-bound comparison/reveal artifact can be built. Therefore the completed run establishes
+protocol execution and exact label proposals, but not which arm is more accurate or suitable for
+production sampling.
