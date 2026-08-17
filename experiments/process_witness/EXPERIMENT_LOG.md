@@ -226,3 +226,31 @@ runner records pre-call intents, raw provider receipts, resolved model, normaliz
 cost, and cumulative cost, with SDK retries disabled. No API request was sent at this checkpoint:
 the external-send safety gate requires explicit approval to transmit BonaFide-derived task prompts
 and bounded response windows to `https://api.openai.com/v1`.
+
+## 2026-08-16 — Coarse qualification executed; scale-up held for blind review
+
+After explicit approval, all 16 predeclared direct Responses requests completed successfully with
+resolved model `gpt-5.6-luna`. Every receipt, intent, parsed record, decision, event, and manifest
+binding validates, and all 96 physical decisions exactly cover their requested focal units. The
+immutable run manifest SHA-256 is
+`88a6e279d7aba0111a8c3d9386da77c87ca5fde80fedb9706ab95c3fc83cb59d`.
+
+The run exposed a cache-write accounting defect without invalidating the provider evidence. Raw
+receipts contain 28,432 total input tokens partitioned into 48 ordinary, 7,084 cache-read, and
+21,300 cache-write tokens, plus 6,873 output tokens. The frozen runner recorded $0.01265888 because
+it priced cache writes as ordinary input. A separate self-hashed audit, leaving the run untouched,
+corrects the total to $0.01372388 (delta +$0.001065). Future Responses usage normalization now
+preserves all three input buckets.
+
+The semantic smoke does not yet justify unattended scale-up. Across four body-identical repeats,
+tag agreement is 18/24 (75%), exact decision agreement is 16/24 (66.7%), and confidence agreement
+is 19/24 (79.2%). Luna emitted no `uncertain` tags and no boundary concerns, while 70/72 unique
+units received high confidence. Because no semantic threshold was frozen in advance, this is a
+conservative hold rather than a formal statistical failure.
+
+The 72 unique focal units are frozen in blind-first review packet
+`process-witness-coarse-review-v1-efd0b5d8b3ad2af6`, manifest SHA-256
+`14f9a4438a6967abd727a97920a436aad87d91d601bf28ce31806e74f59b924f`. The reviewer must lock a
+human tag before either Luna decision or repeat disagreement is revealed; later corrections remain
+separate from the blind judgment. Full-corpus labeling and wave-one target selection remain blocked
+until this review determines whether the v1 prompt is acceptable or needs a new version.

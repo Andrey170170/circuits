@@ -1,0 +1,88 @@
+{
+  "schema_version": "adag.process-witness.coarse-qualification-audit.v1",
+  "status": "hold_pending_blind_human_review",
+  "occurred_at": "2026-08-16",
+  "claim_boundary": "This is a 72-unit engineering and semantic smoke test for a sampling-only coarse annotator. It is not a population error estimate, an adequacy label set, a motif label set, or evidence of internal computation.",
+  "qualification": {
+    "manifest_sha256": "c32d1e111128afc8b78137df0897b973e8bc76872d7ac2e4a12899121e2ca5c9",
+    "unique_windows": 12,
+    "unique_focal_units": 72,
+    "repeated_windows": 4,
+    "repeated_focal_units": 24,
+    "physical_requests": 16
+  },
+  "provider_run": {
+    "status": "complete",
+    "requested_model": "gpt-5.6-luna",
+    "resolved_model": "gpt-5.6-luna",
+    "successful_requests": 16,
+    "invalid_outputs": 0,
+    "provider_incomplete": 0,
+    "run_manifest_sha256": "88a6e279d7aba0111a8c3d9386da77c87ca5fde80fedb9706ab95c3fc83cb59d",
+    "run_manifest_file_sha256": "0df4582a10db396d2956d7446df6ea9ecc5419fd3db2e3341ea2b80000b59254",
+    "events_jsonl_sha256": "a6ab2979d80e6422ef0a0fe8f3466e9d68a0890d874dae3d41ddc693ba17c68f"
+  },
+  "receipt_usage": {
+    "input_tokens_total": 28432,
+    "ordinary_input_tokens": 48,
+    "cache_read_tokens": 7084,
+    "cache_write_tokens": 21300,
+    "output_tokens": 6873,
+    "reasoning_tokens": 2014
+  },
+  "cost_accounting": {
+    "price_snapshot_id": "official-api-prices-2026-07-30",
+    "original_recorded_total_usd": 0.01265888,
+    "corrected_receipt_total_usd": 0.01372388,
+    "correction_delta_usd": 0.001065,
+    "cost_correction_audit_sha256": "f8281dbd415414f3566688286efc7e07101b7de86094ad90f1cd4a0da599a44f",
+    "note": "The frozen run remains unchanged. A post-hoc audit corrects cache-write tokens that the original normalizer priced as ordinary input."
+  },
+  "repeat_agreement": {
+    "tag_matches": 18,
+    "tag_total": 24,
+    "tag_rate": 0.75,
+    "exact_decision_matches": 16,
+    "exact_decision_total": 24,
+    "exact_decision_rate": 0.6666666666666666,
+    "confidence_matches": 19,
+    "confidence_total": 24,
+    "confidence_rate": 0.7916666666666666,
+    "per_window_tag_matches": [
+      "4/6",
+      "6/6",
+      "3/6",
+      "5/6"
+    ]
+  },
+  "unique_unit_label_counts": {
+    "active_task_work": 19,
+    "evaluation_or_revision": 13,
+    "intermediate_commitment": 17,
+    "final_answer": 1,
+    "other_semantic_text": 21,
+    "surface_or_control": 1,
+    "uncertain": 0
+  },
+  "unique_unit_confidence_counts": {
+    "high": 70,
+    "medium": 2,
+    "low": 0
+  },
+  "review_packet": {
+    "packet_id": "process-witness-coarse-review-v1-efd0b5d8b3ad2af6",
+    "manifest_sha256": "14f9a4438a6967abd727a97920a436aad87d91d601bf28ce31806e74f59b924f",
+    "review_html_sha256": "4ef70b78cc03d572bb394b0ec273f4790ecd11df089a0b96f4f724db2502a539",
+    "rows": 72,
+    "rows_with_repeat": 24,
+    "repeat_tag_disagreements": 6,
+    "ui_version": "process-witness-coarse-review-ui-v2-blind-first"
+  },
+  "decision": "Do not scale the v1 prompt unattended. Preserve the run as valid qualification evidence and complete the blind 72-unit human review before deciding whether to revise the prompt or proceed.",
+  "reasons": [
+    "Repeated identical request bodies agree on only 75 percent of tags.",
+    "The model used uncertain zero times and boundary concerns zero times despite repeat disagreements.",
+    "Seventy of 72 unique decisions were high confidence, so confidence is not currently calibrated to observed instability.",
+    "No semantic acceptance threshold was predeclared, so this is a conservative hold rather than a formal statistical failure."
+  ]
+}
