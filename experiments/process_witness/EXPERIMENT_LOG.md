@@ -412,3 +412,36 @@ responses. No provider request has been submitted. Submission remains blocked on
 full-corpus annotation remains blocked until the compatibility Batch completes, all 24 human
 decisions are globally sealed, and the provenance-bound evaluator applies the frozen human and
 model gates.
+
+## 2026-08-17 — V4 compatibility run completed; exact-label gate failed closed
+
+The v4 native-Batch run completed and collected all 45/45 Luna-medium requests with zero failures
+and exact three-vote coverage of all 24 targets. Receipt-derived cost was $0.02238693. Of 287,415
+input tokens, 182,118 were cache reads and 105,162 were cache writes; only 135 were uncached input
+tokens. The globally sealed 24-item human ledger has SHA-256
+`5690ca6d17acf302dfe708dbe2c520e1e2f93d2a9bae7beb6911baeeeb0bf96e`.
+
+The immutable compatibility result is
+`qualification-96-token-compatibility-v2-result-v1`, with manifest self-hash
+`1f9251cfd64986bc8528754ab9dfc9507180ea0b444b996dd66b6cc2575f18a8` and report self-hash
+`93c0e0b94ccc8435ca0ffef969a4b71b7394a0d0fa6861f2e7b898c11a427196`. It is `failed_closed`:
+human-admissible majority agreement was 14/20, below the frozen 17/20 threshold. Every other gate
+passed: 24/24 targets received three valid votes, there were no 1-1-1 vote patterns, mean pairwise
+tag agreement was 0.8889, the 20 gated repair/control units had zero human merge/split concerns,
+and there were zero process-bearing false negatives.
+
+This splits the result into two distinct conclusions. The quote-aware 96-token segmentation repair
+worked on the gated defects and ordinary controls, but the refined zero-shot protocol did not meet
+the predeclared exact fine-subtype agreement threshold. The six gated disagreements are primarily
+among trajectory-effect subtypes such as active work, evaluation, and intermediate commitment;
+they do not justify rewriting the sealed human ledger after model reveal. Four free-text human notes
+were preserved. Two notes identify the deliberately excluded residual diagnostics: a 99-token
+calculation and a 592-token comma-separated enumeration, confirming that a finite cap still splits
+some legitimate long semantic intervals.
+
+For later target selection, the user proposed grouping nearby atomic units that receive the same
+coarse proposal so a long list or computation is not overweighted merely because the cap produced
+several pieces. Any such grouping must be a versioned sampling-only layer that retains each atomic
+unit ID, span, vote profile, and provenance; it must not rewrite the segmentation artifact or merge
+trace artifacts. This proposal is not yet frozen, and the failed exact-label gate remains the
+authoritative v4 verdict.
