@@ -1,0 +1,62 @@
+{
+  "schema_version": "adag.process-witness.coarse-annotation-config.v4",
+  "config_id": "process-witness-coarse-openai-v4-96-token-compatibility",
+  "claim_boundary": "Coarse tags are graph-blind trace-sampling metadata only. They are not adequacy labels, motif labels, correctness judgments, or evidence of internal computation.",
+  "qualification_claim_boundary": "This bounded compatibility check tests whether the selected refined zero-shot protocol transfers to a new quote-aware 96-token segmentation policy on v3-observed defects and controls. It does not estimate population accuracy, freeze the production corpus, or qualify ADAG, motifs, or witnesses.",
+  "source": {
+    "workstation_bundle_sha256": "95a5627768b2e5f05920aaab91f6e1cd9c00688560f9d821ffc2d8d69c7ceeea",
+    "v3_qualification_manifest_sha256": "e1deb0036410b004402762e37be07752096867293fc67fc91d761bd795d978df",
+    "v3_review_packet_manifest_sha256": "4dc3b0b741574b43573b623e499b939a1708f61c5e627c44484160f4c905d6c5",
+    "v3_human_ledger_sha256": "69fa4551b38e540896ea363298968d925a1efde9431aae56809582d2aa7cf37d",
+    "v3_post_seal_corrections_sha256": "5e94376989ef9198d9d3eb40d44e00904ae709d0b9fccf51c0ebe9fe26319b8c"
+  },
+  "qualification": {
+    "unique_window_count": 12,
+    "focal_units_per_window": 2,
+    "replicas_per_window": 3,
+    "arm": "refined_zero_shot",
+    "maximum_semantic_unit_tokens": 96,
+    "segmentation_policy_id": "token-exclusive-sentence-line-quote-aware-v2"
+  },
+  "provider": {
+    "name": "openai",
+    "model": "gpt-5.6-luna",
+    "api_surface": "responses",
+    "transport": "native_batch",
+    "batch_endpoint": "/v1/responses",
+    "api_key_env": "OPENAI_API_KEY",
+    "reasoning": {"effort": "medium"},
+    "max_output_tokens": 16384,
+    "store": false,
+    "price_snapshot": "labeling/prices-2026-08-16-coarse-v2.json",
+    "input_token_overhead_per_request": 4096
+  },
+  "tags": {
+    "active_task_work": "The unit performs an operation that creates new task state or evidence, such as calculation, transformation, retrieval, traversal, lookup, comparison, selection, counting, or state update.",
+    "evaluation_or_revision": "The unit primarily assesses, rejects, validates, corrects, or replaces an already available candidate, result, or state. Merely planning to check is not evaluation.",
+    "intermediate_commitment": "The unit primarily reports or settles a derived non-final result or state without performing its derivation or evaluation in that same unit.",
+    "final_answer": "The unit commits or serializes the terminal answer.",
+    "other_semantic_text": "The unit plans future work, explains, restates, quotes, or comments without creating new task state or evidence.",
+    "surface_or_control": "The unit carries no proposition by itself and consists only of formatting, punctuation, whitespace/control, tags, or other structural material.",
+    "uncertain": "Two classifications remain defensible after applying the trajectory-effect rules, or the supplied unit boundary prevents a meaningful decision. Do not force a label."
+  },
+  "boundary_concerns": ["split_needed", "merge_previous", "merge_next", "meaning_unclear"],
+  "decision_precedence": ["final_answer", "evaluation_or_revision", "active_task_work", "intermediate_commitment", "other_semantic_text", "surface_or_control", "uncertain"],
+  "compatibility_gate": {
+    "all_24_targets_receive_three_valid_votes": true,
+    "no_one_one_one_vote_patterns": true,
+    "minimum_mean_pairwise_tag_agreement": 0.8,
+    "maximum_merge_or_split_flags_on_20_gated_units": 0,
+    "minimum_human_admissible_agreement_on_20_gated_units": 17,
+    "maximum_process_bearing_false_negatives": 2,
+    "long_diagnostic_units_excluded_from_pass_gate": 4,
+    "human_review_required_before_pass": true
+  },
+  "human_review": {
+    "response_block_randomization_seed": 2026081704,
+    "global_seal_required_before_model_reveal": true,
+    "primary_label_required": true,
+    "defensible_alternatives_optional": true,
+    "boundary_concerns_optional": true
+  }
+}
