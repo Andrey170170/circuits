@@ -1,0 +1,195 @@
+{
+  "schema_version": "adag.process-witness.coarse-annotation-config.v3",
+  "config_id": "process-witness-coarse-openai-v3-refined-zero-vs-few-shot",
+  "claim_boundary": "Coarse tags are graph-blind trace-sampling metadata only. They are not adequacy labels, motif labels, correctness judgments, or evidence of internal computation.",
+  "qualification_claim_boundary": "This fresh matched qualification estimates protocol stability and human agreement for refined zero-shot and few-shot prompting. It does not make model votes ground truth, estimate population accuracy, or qualify ADAG, motifs, or witnesses.",
+  "source": {
+    "workstation_bundle_sha256": "95a5627768b2e5f05920aaab91f6e1cd9c00688560f9d821ffc2d8d69c7ceeea",
+    "development_v2_manifest_sha256": "7aaf05583110b1d33a70d9ca60a817968c5f5925773f64d32d399483e0dbccc9",
+    "development_v2_focal_units_sha256": "30aa12b01a616b9102939f704ff530d1eb274135400f0d90c1e6c434f22e60ff",
+    "development_v2_windows_sha256": "7041dad9ee317123da317db69c6910cdd20b44974460925cf75e2faa78d42919",
+    "development_human_ledger_sha256": "2b4cf65ea8bf92662b261b691c2baa3638f220bca2de5a57a9f7518cbaa2b0bc"
+  },
+  "qualification": {
+    "unique_window_count": 24,
+    "focal_units_per_window": 6,
+    "replicas_per_arm": 3,
+    "arms": ["refined_zero_shot", "refined_few_shot"],
+    "selection_seed": 2026081701,
+    "maximum_semantic_unit_tokens": 24
+  },
+  "provider": {
+    "name": "openai",
+    "model": "gpt-5.6-luna",
+    "api_surface": "responses",
+    "transport": "native_batch",
+    "batch_endpoint": "/v1/responses",
+    "api_key_env": "OPENAI_API_KEY",
+    "reasoning": {"effort": "medium"},
+    "max_output_tokens": 16384,
+    "store": false,
+    "price_snapshot": "labeling/prices-2026-08-16-coarse-v2.json",
+    "input_token_overhead_per_request": 4096
+  },
+  "tags": {
+    "active_task_work": "The unit performs an operation that creates new task state or evidence, such as calculation, transformation, retrieval, traversal, lookup, comparison, selection, counting, or state update.",
+    "evaluation_or_revision": "The unit primarily assesses, rejects, validates, corrects, or replaces an already available candidate, result, or state. Merely planning to check is not evaluation.",
+    "intermediate_commitment": "The unit primarily reports or settles a derived non-final result or state without performing its derivation or evaluation in that same unit.",
+    "final_answer": "The unit commits or serializes the terminal answer.",
+    "other_semantic_text": "The unit plans future work, explains, restates, quotes, or comments without creating new task state or evidence.",
+    "surface_or_control": "The unit carries no proposition by itself and consists only of formatting, punctuation, whitespace/control, tags, or other structural material.",
+    "uncertain": "Two classifications remain defensible after applying the trajectory-effect rules, or the supplied unit boundary prevents a meaningful decision. Do not force a label."
+  },
+  "boundary_concerns": [
+    "split_needed",
+    "merge_previous",
+    "merge_next",
+    "meaning_unclear"
+  ],
+  "decision_precedence": [
+    "final_answer",
+    "evaluation_or_revision",
+    "active_task_work",
+    "intermediate_commitment",
+    "other_semantic_text",
+    "surface_or_control",
+    "uncertain"
+  ],
+  "few_shot_demonstrations": [
+    {
+      "contrast": "performing work versus planning it",
+      "micro_context": "The next step requires comparing the two outgoing edges.",
+      "target": "B has lower cost than C, so move to B.",
+      "label": "active_task_work",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "It performs the comparison and selection, creating a new traversal state."
+    },
+    {
+      "contrast": "performing work versus planning it",
+      "micro_context": "The next step requires comparing the two outgoing edges.",
+      "target": "I should compare the outgoing edges next.",
+      "label": "other_semantic_text",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "It only plans future work and creates no new task state or evidence."
+    },
+    {
+      "contrast": "evaluation versus planning a check",
+      "micro_context": "An earlier step reported that the residue was 7.",
+      "target": "That residue is wrong; recomputing gives 5.",
+      "label": "evaluation_or_revision",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "It rejects and replaces an already available result; evaluation takes precedence over the embedded recomputation."
+    },
+    {
+      "contrast": "evaluation versus planning a check",
+      "micro_context": "An earlier step reported that the residue was 7.",
+      "target": "Let's check the residue carefully.",
+      "label": "other_semantic_text",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "It announces a future check but does not yet assess the result."
+    },
+    {
+      "contrast": "derivation versus reporting",
+      "micro_context": "The current value is 2916 and the modulus is 71.",
+      "target": "2916 mod 71 = 5.",
+      "label": "active_task_work",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "It performs the calculation and produces new evidence."
+    },
+    {
+      "contrast": "derivation versus reporting",
+      "micro_context": "The preceding unit calculated 2916 mod 71 = 5.",
+      "target": "Thus the current residue is 5.",
+      "label": "intermediate_commitment",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "It settles a non-final state without deriving or evaluating it in this unit."
+    },
+    {
+      "contrast": "restatement versus execution",
+      "micro_context": "The task says to choose the cheapest outgoing edge.",
+      "target": "The rule says to choose the cheapest outgoing edge.",
+      "label": "other_semantic_text",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "It restates the rule without applying it."
+    },
+    {
+      "contrast": "terminal commitment",
+      "micro_context": "All requested work has been completed and the response now supplies the requested answer.",
+      "target": "Final answer: 42",
+      "label": "final_answer",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "It explicitly commits the terminal answer."
+    },
+    {
+      "contrast": "non-propositional structure",
+      "micro_context": "This token separates two semantic statements.",
+      "target": "3",
+      "label": "surface_or_control",
+      "confidence": "high",
+      "boundary_concerns": [],
+      "rationale": "In this micro-context the number is only a list marker, not a computed value or commitment."
+    },
+    {
+      "contrast": "boundary-limited ambiguity",
+      "micro_context": "The adjacent unit is unavailable, so the fragment's role cannot be determined.",
+      "target": "Therefore,",
+      "label": "uncertain",
+      "confidence": "low",
+      "boundary_concerns": ["merge_next"],
+      "rationale": "The incomplete boundary prevents a meaningful exclusive classification; report merge_next as a boundary concern."
+    },
+    {
+      "contrast": "mixed terminal commitment and trailing material",
+      "micro_context": "The supplied unit both performs one last calculation and makes the terminal commitment.",
+      "target": "Recompute 19 mod 7 = 5; final answer: 5.",
+      "label": "final_answer",
+      "confidence": "medium",
+      "boundary_concerns": ["split_needed"],
+      "rationale": "Final answer wins over embedded active work, while split_needed records the mixed boundary."
+    }
+  ],
+  "comparison_plan": {
+    "schema_version": "adag.process-witness.coarse-comparison-plan.v3",
+    "status": "predeclared_before_submission_not_executed",
+    "unit_of_comparison": "one of 144 frozen focal units with three votes per arm",
+    "replicas_per_unit_per_arm": 3,
+    "primary_metrics": [
+      "three_zero_stable_count",
+      "two_one_mixed_count",
+      "one_one_one_disputed_count",
+      "mean_pairwise_tag_agreement",
+      "majority_label_coverage",
+      "cross_arm_majority_tag_agreement"
+    ],
+    "required_reporting": [
+      "retain all individual decisions and full vote histograms",
+      "report stability and vote histograms overall and by hidden sampling stratum",
+      "report boundary-concern and uncertain rates without treating lower abstention as better",
+      "report receipt-derived usage and cost separately by arm",
+      "never treat a stable majority as ground truth"
+    ],
+    "human_evaluation": "A fresh blind human holdout review is required for accuracy claims. It records one primary label, optional defensible alternatives, and boundary concerns; all 144 decisions are globally sealed before any model reveal. Human labels and model votes remain separate.",
+    "decision_gate": {
+      "admissibility": "reject few-shot if it has more than two additional human process-bearing false negatives than zero-shot",
+      "few_shot_improvement": "few-shot is improved only with at least five net paired admissible-agreement wins and no increase in stable high-confidence human errors",
+      "tie_break": "otherwise choose zero-shot by parsimony",
+      "three_way_votes": "a 1-1-1 vote remains disputed and is never resolved by decision precedence"
+    },
+    "formal_pass_threshold": null
+  },
+  "human_review": {
+    "response_block_randomization_seed": 2026081702,
+    "global_seal_required_before_model_reveal": true,
+    "primary_label_required": true,
+    "defensible_alternatives_optional": true,
+    "boundary_concerns_optional": true
+  }
+}
