@@ -254,3 +254,34 @@ The 72 unique focal units are frozen in blind-first review packet
 human tag before either Luna decision or repeat disagreement is revealed; later corrections remain
 separate from the blind judgment. Full-corpus labeling and wave-one target selection remain blocked
 until this review determines whether the v1 prompt is acceptable or needs a new version.
+
+## 2026-08-16 — Full-context markup arms executed; neither protocol qualified automatically
+
+The v2 qualification reused the exact 12 v1 windows and 72 focal units in two matched arms. In
+`target_only_markup`, the full task prompt and complete raw response were shown, but only the six
+focal units were wrapped as targets. In `full_unit_markup`, every coarse unit in the same complete
+response was wrapped as target or context. Both arms used `gpt-5.6-luna`, medium reasoning,
+`max_output_tokens=16384`, strict structured output, and four exact repeats. The comparison plan was
+hash-frozen before submission and included within-arm repeats, cross-arm primary decisions, and
+each arm against the completed v1 baseline.
+
+All 32 native-Batch requests completed with zero provider or validation failures and exact coverage
+of 144 arm-by-target decisions. The immutable collection manifest SHA-256 is
+`1c3f9c8c8ffb670399a77ea836a6b8348b8084264b89d79203ec341c148fca15`; actual receipt-priced spend
+was $0.12362749. Target-only cost $0.01770586, while full-unit markup cost $0.10592163 because the
+unit tags expanded input from 108,757 to 1,088,487 tokens. Cache-read totals were 29,311 and 312,063
+tokens respectively.
+
+Neither arm improved exact-repeat stability enough to qualify automatically. Target-only repeat tag
+agreement was 18/24 (75.0%) and exact-decision agreement 16/24 (66.7%). Full-unit repeat tag
+agreement was 17/24 (70.8%) and exact-decision agreement 16/24 (66.7%). Across the two primary arms,
+tag agreement was 50/72 (69.4%), exact-decision agreement 43/72 (59.7%), confidence agreement 61/72
+(84.7%), and boundary agreement 68/72 (94.4%). Against v1 primaries, tag agreement was 38/72 for
+target-only and 45/72 for full-unit; these are protocol differences, not correctness measurements.
+
+The immutable comparison bundle manifest SHA-256 is
+`71865ca5afbc51e2b5ee31b11421c128b86d2bed0ab999a1ca91b85da9f33854`. It preserves all metric
+disagreements and a deterministic agreement sample without interpreting either side as correct.
+The result supports the concern that dense markup is a costly and potentially distracting
+presentation, but blind human review is still required to determine whether either arm is more
+semantically sensible. Full-corpus labeling and target-bank freeze remain blocked.
