@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import circuits.analysis.bonafide.coarse_sampling_annotation_v3 as module
@@ -23,7 +26,9 @@ from circuits.analysis.bonafide.coarse_sampling_comparison_v3 import (
     apply_human_gate,
 )
 from circuits.analysis.bonafide.coarse_sampling_review_v3 import (
+    BOUNDARY_DEFINITIONS,
     EXPORT_SCHEMA,
+    UI_VERSION,
     build_review_payload,
     render_review_html,
 )
@@ -455,6 +460,26 @@ def test_review_packet_randomizes_response_blocks_and_globally_seals_reveal() ->
     assert [item["response_id"] for item in payload["items"][::6]] != [
         f"response-{index}" for index in range(24)
     ]
-    assert "globally_sealed:true" in render_review_html(payload)
-    assert "Seal all 144 blind decisions" in render_review_html(payload)
+    assert payload["packet"]["ui_version"] == UI_VERSION
+    assert payload["packet"]["tag_definitions"] == config["tags"]
+    assert payload["packet"]["boundary_definitions"] == BOUNDARY_DEFINITIONS
+    assert payload["packet"]["decision_precedence"] == config["decision_precedence"]
+    html = render_review_html(payload)
+    assert "globally_sealed:true" in html
+    assert "Seal all 144 blind decisions" in html
+    assert "Complete exact response" in html
+    assert "Label reference" in html
+    assert "Import progress" in html
+    assert "rows.join('\\n')+'\\n'" in html
+    script = re.search(r"<script>(.*)</script>", html, re.DOTALL)
+    assert script is not None
+    node = shutil.which("node")
+    if node is not None:
+        subprocess.run(
+            [node, "--check"],
+            input=script.group(1),
+            text=True,
+            check=True,
+            capture_output=True,
+        )
     assert "reveal" not in payload
