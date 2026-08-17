@@ -1,0 +1,126 @@
+{
+  "schema_version": "adag.process-witness.coarse-annotation-config.v2",
+  "config_id": "process-witness-coarse-openai-v2-full-response-markup-arms",
+  "claim_boundary": "Coarse tags are unreviewed trace-sampling metadata only. They are not adequacy labels, motif labels, correctness judgments, or evidence of internal computation.",
+  "qualification_claim_boundary": "This matched two-arm qualification jointly changes context presentation, reasoning effort, transport, and output ceiling from v1. It qualifies a complete v2 protocol and cannot by itself causally attribute changes to one factor. The full-unit-markup arm is intentionally large and noisy.",
+  "source": {
+    "v1_qualification_manifest_sha256": "c32d1e111128afc8b78137df0897b973e8bc76872d7ac2e4a12899121e2ca5c9",
+    "v1_windows_sha256": "7041dad9ee317123da317db69c6910cdd20b44974460925cf75e2faa78d42919",
+    "v1_units_sha256": "c8f3e8a368a06ec5de746521461ef398d24b5dba6e1eb00805992cebab6116d6",
+    "workstation_bundle_sha256": "95a5627768b2e5f05920aaab91f6e1cd9c00688560f9d821ffc2d8d69c7ceeea",
+    "v1_completed_run_manifest_file_sha256": "0df4582a10db396d2956d7446df6ea9ecc5419fd3db2e3341ea2b80000b59254",
+    "v1_completed_run_manifest_sha256": "88a6e279d7aba0111a8c3d9386da77c87ca5fde80fedb9706ab95c3fc83cb59d",
+    "v1_completed_events_sha256": "a6ab2979d80e6422ef0a0fe8f3466e9d68a0890d874dae3d41ddc693ba17c68f",
+    "v1_cost_correction_audit_file_sha256": "5dba8d4e3a727a28bfb35758475893ab2b809009dee13218f1cc647cbd252ee8",
+    "v1_cost_correction_audit_sha256": "f8281dbd415414f3566688286efc7e07101b7de86094ad90f1cd4a0da599a44f"
+  },
+  "qualification": {
+    "unique_window_count": 12,
+    "focal_units_per_window": 6,
+    "physical_requests_per_arm": 16,
+    "repeat_requests_per_arm": 4,
+    "arms": ["target_only_markup", "full_unit_markup"]
+  },
+  "comparison_plan": {
+    "schema_version": "adag.process-witness.coarse-comparison-plan.v1",
+    "status": "predeclared_before_submission_not_executed",
+    "unit_of_comparison": "one frozen focal unit decision",
+    "baselines": {
+      "v2": "the request and result bindings of the containing v2 bundle",
+      "v1": {
+        "qualification_manifest_sha256": "c32d1e111128afc8b78137df0897b973e8bc76872d7ac2e4a12899121e2ca5c9",
+        "completed_run_manifest_sha256": "88a6e279d7aba0111a8c3d9386da77c87ca5fde80fedb9706ab95c3fc83cb59d",
+        "completed_events_sha256": "a6ab2979d80e6422ef0a0fe8f3466e9d68a0890d874dae3d41ddc693ba17c68f",
+        "cost_correction_audit_sha256": "f8281dbd415414f3566688286efc7e07101b7de86094ad90f1cd4a0da599a44f"
+      }
+    },
+    "normalization": {
+      "tag_agreement": "exact equality of the tag strings",
+      "confidence_agreement": "exact equality of the confidence strings",
+      "boundary_agreement": "exact equality of sorted unique boundary_concerns; boundary_note is excluded from this metric",
+      "exact_full_decision_agreement": "exact value equality of tag, confidence, boundary_concerns in provider order, and boundary_note; unit_id is the pairing key and is excluded"
+    },
+    "comparisons": [
+      {
+        "comparison_id": "within_arm_repeat",
+        "pairing": "within each arm, pair each of the four repeat requests to its repeat_of_request_id and compare the same unit_id",
+        "request_pairs_per_arm": 4,
+        "unit_pairs_per_arm": 24,
+        "arms": ["target_only_markup", "full_unit_markup"],
+        "metrics": ["tag_agreement", "exact_full_decision_agreement"]
+      },
+      {
+        "comparison_id": "cross_arm_primary",
+        "pairing": "pair target_only_markup and full_unit_markup primary requests by source_v1_request_id and compare the same unit_id",
+        "request_pairs": 12,
+        "unit_pairs": 72,
+        "metrics": ["tag_agreement", "exact_full_decision_agreement", "confidence_agreement", "boundary_agreement"]
+      },
+      {
+        "comparison_id": "each_arm_vs_v1_primary",
+        "pairing": "for each arm, pair every v2 primary request to its frozen v1 source_v1_request_id and compare the same unit_id",
+        "request_pairs_per_arm": 12,
+        "unit_pairs_per_arm": 72,
+        "arms": ["target_only_markup", "full_unit_markup"],
+        "metrics": ["tag_agreement", "exact_full_decision_agreement"]
+      },
+      {
+        "comparison_id": "each_arm_vs_v1_repeat",
+        "pairing": "for each arm, pair every v2 repeat request to its frozen v1 source_v1_request_id and compare the same unit_id",
+        "request_pairs_per_arm": 4,
+        "unit_pairs_per_arm": 24,
+        "arms": ["target_only_markup", "full_unit_markup"],
+        "metrics": ["tag_agreement", "exact_full_decision_agreement"]
+      }
+    ],
+    "required_reporting": {
+      "agreement_counts": "for every comparison and arm stratum where applicable, report expected, observed, eligible, missing, invalid, agreeing, and disagreeing unit-pair counts; never silently drop or zero-impute",
+      "confusion_matrices": "report tag confusion matrices with frozen tag order and the first named side as rows; for cross_arm_primary also report confidence confusion and per-boundary-concern 2x2 presence matrices",
+      "usage_cost_by_arm": "for each v2 arm, report physical request counts plus input, uncached-input, cache-read, cache-write, output, and reasoning token totals and missingness; report total USD cost and primary-versus-repeat strata",
+      "v1_usage_cost": "report v1 usage and cost separately when frozen receipts permit it; do not impute unavailable components or interpret protocol cost differences causally"
+    },
+    "interpretation": {
+      "formal_pass_threshold": null,
+      "threshold_note": "No formal pass or fail threshold is predeclared for this qualification. Report descriptive results before deciding a downstream threshold.",
+      "causal_attribution": "The v2 versus v1 comparison jointly changes full-response context, markup, reasoning effort, Batch transport, and output ceiling; do not attribute a difference to any one change.",
+      "human_blind_review": "deferred and not part of this frozen automated comparison"
+    }
+  },
+  "provider": {
+    "name": "openai",
+    "model": "gpt-5.6-luna",
+    "api_surface": "responses",
+    "transport": "native_batch",
+    "batch_endpoint": "/v1/responses",
+    "api_key_env": "OPENAI_API_KEY",
+    "reasoning": {"effort": "medium"},
+    "max_output_tokens": 16384,
+    "store": false,
+    "price_snapshot": "labeling/prices-2026-08-16-coarse-v2.json",
+    "input_token_overhead_per_request": 4096
+  },
+  "tags": {
+    "active_task_work": "The unit actively carries out task-relevant work: transformation, retrieval, traversal, comparison, selection, counting, calculation, or state update.",
+    "evaluation_or_revision": "The unit primarily checks, verifies, corrects, backtracks, or reconsiders work, even if it contains task operations.",
+    "intermediate_commitment": "The unit primarily settles or reports a non-final result or state without substantial task operation in that same unit.",
+    "final_answer": "The unit states or serializes the final commitment.",
+    "other_semantic_text": "The unit plans, explains, restates, describes instructions, comments, or mentions a process without carrying it out.",
+    "surface_or_control": "The unit is only formatting, punctuation, whitespace/control, a tag, JSON syntax, or other structural material.",
+    "uncertain": "The unit's primary function or boundary is genuinely unresolved; do not force another tag."
+  },
+  "boundary_concerns": [
+    "split_needed",
+    "merge_previous",
+    "merge_next",
+    "meaning_unclear"
+  ],
+  "decision_precedence": [
+    "final_answer",
+    "evaluation_or_revision",
+    "active_task_work",
+    "intermediate_commitment",
+    "other_semantic_text",
+    "surface_or_control",
+    "uncertain"
+  ]
+}

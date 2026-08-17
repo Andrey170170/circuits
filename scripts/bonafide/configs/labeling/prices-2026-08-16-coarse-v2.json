@@ -1,0 +1,39 @@
+{
+  "schema_version": "adag.labeling.prices.v1",
+  "snapshot_id": "official-openai-luna-prices-2026-08-16-coarse-v2",
+  "effective_date": "2026-08-16",
+  "currency": "USD",
+  "unit": "per_million_tokens",
+  "notes": [
+    "GPT-5.6 Luna rates were refreshed from https://developers.openai.com/api/docs/models/gpt-5.6-luna on 2026-08-16.",
+    "Native Batch rates apply the documented 50 percent Batch API discount.",
+    "Requests above 272000 input tokens are priced at 2x input and 1.5x output for the full request.",
+    "Cache writes are billed at 1.25x the corresponding uncached input rate.",
+    "The model page does not explicitly state how the Batch discount composes with the long-context multipliers. The authorization ceiling conservatively does not assume a Batch discount for requests whose byte upper bound crosses the tier; receipt accounting applies the documented multipliers to native-Batch usage."
+  ],
+  "long_context": {
+    "gpt-5.6-luna": {
+      "threshold_input_tokens_exclusive": 272000,
+      "input_multiplier": 2.0,
+      "output_multiplier": 1.5
+    }
+  },
+  "rates": {
+    "openai": {
+      "gpt-5.6-luna": {
+        "live": {
+          "input_per_million": 0.2,
+          "cache_read_per_million": 0.02,
+          "cache_write_per_million": 0.25,
+          "output_per_million": 1.2
+        },
+        "native_batch": {
+          "input_per_million": 0.1,
+          "cache_read_per_million": 0.01,
+          "cache_write_per_million": 0.125,
+          "output_per_million": 0.6
+        }
+      }
+    }
+  }
+}
