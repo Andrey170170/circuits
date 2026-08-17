@@ -98,6 +98,27 @@ early/middle/late position, and four hidden v9 selection hints, with one unique 
 six consecutive semantic units per cell. All 144 human judgments are sealed before any Luna label
 or vote stability is revealed.
 
+### Frozen v3 result and future segmentation
+
+The globally blind v3 review selected the refined zero-shot arm by the predeclared parsimony gate.
+Few-shot and zero-shot each agreed with 99/144 human primary labels and 100/144 labels after
+including the reviewer's defensible alternatives. Their paired admissible outcomes were tied:
+eight few-shot-only wins and eight zero-shot-only wins. Few-shot also produced 14 process-bearing
+false negatives versus 11 for zero-shot, so it failed the additional-false-negative guard.
+
+This result applies to v3's 24-token semantic-unit cap. That cap split some sentences and actions
+across adjacent units: the sealed ledger contains 11 `merge_next`, 12 `merge_previous`, and one
+`split_needed` concern. One reported under-split also left punctuation inside a quotation outside
+the intended unit and attached it to the following sentence. These are segmentation defects, not
+label disagreements to be resolved by voting.
+
+Future full-corpus coarse annotation must therefore use a new version with the original 96-token
+maximum while retaining the same token-exclusive sentence/line policy. Do not rewrite v3 units or
+reuse their unit identities. Before scaling, run a bounded compatibility check containing the
+observed merge pairs, the quotation-boundary failure, and ordinary short units. The 96-token policy
+should preserve semantic sentences when possible; its limit is a safety cap, not a desired unit
+length.
+
 ## Loading and saving
 
 1. Open `scripts/bonafide/process_witness_annotation_review.html` in a current browser.

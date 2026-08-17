@@ -1192,3 +1192,18 @@ human process-bearing false negatives. It is called improved only with at least 
 admissible-agreement wins and no increase in stable high-confidence errors. Otherwise the arms tie
 and zero-shot is retained by parsimony while three-vote aggregation remains. The qualification
 freezes no production coarse corpus, target bank, trace, adequacy result, motif, or witness.
+
+The sealed 144-item human review completed without model-label exposure. The v3 comparison selected
+the refined zero-shot arm by the frozen gate: both arms had 99 exact primary-label agreements and
+100 agreements allowing human defensible alternatives; paired outcomes were eight wins for each
+arm; and the prompt-blocked accuracy-difference estimate was 0.0 with a 95% percentile interval of
+[-0.0694, 0.0625]. Few-shot had 14 process-bearing false negatives versus 11 for zero-shot, failed
+the additional-false-negative guard, and did not qualify as improved.
+
+V3 also exposed a unit-policy defect. Its 24-token maximum split coherent sentences/actions across
+adjacent units, producing 11 `merge_next`, 12 `merge_previous`, and one `split_needed` concern in
+the sealed ledger; a quotation-boundary case also attached punctuation to the following sentence.
+Preserve v3 unchanged as qualification evidence. The next full-corpus coarse-annotation version
+returns to the original 96-token maximum and must receive a bounded compatibility check before
+scale-up. Because segmentation changes unit identities and label difficulty, do not represent that
+future corpus as a continuation of the v3 unit set.

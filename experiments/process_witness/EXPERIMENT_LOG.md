@@ -361,3 +361,27 @@ global sealing, reload, export enablement, sticky references, and desktop-width 
 console or runtime errors. No human judgments have yet been collected in this replacement packet,
 so no arm is selected and no labeling, tracing, adequacy, motif, witness, faithfulness, or causal
 claim follows from this freeze.
+
+## 2026-08-17 — Globally blind v3 review and arm comparison completed
+
+The uploaded sealed ledger contains all 144 exact packet items under one global seal and has
+SHA-256 `69fa4551b38e540896ea363298968d925a1efde9431aae56809582d2aa7cf37d`.
+Unlike the earlier development review, the reviewer did not see machine labels after each decision;
+the judgments are therefore a clean globally blind human reference for this frozen qualification.
+Seven items retain defensible alternative labels rather than forced certainty.
+
+The identity-bound comparison selected `refined_zero_shot`. Both arms achieved 99/144 exact
+primary-label agreements and 100/144 admissible agreements after human alternatives. Paired
+admissible outcomes were 92 both correct, eight few-shot only, eight zero-shot only, and 36 neither;
+the exact McNemar p-value was 1.0 and the prompt-blocked bootstrap difference was 0.0 with a 95%
+interval of [-0.0694, 0.0625]. Few-shot had 14 process-bearing false negatives versus 11 for
+zero-shot, so it failed the predeclared additional-false-negative guard and did not qualify as an
+improvement. Zero-shot is retained by parsimony, not declared semantic ground truth.
+
+The review separately identified a v3 segmentation limitation: its 24-token maximum produced 11
+`merge_next`, 12 `merge_previous`, and one `split_needed` concern, including a quotation-boundary
+case that left punctuation outside the intended sentence unit. V3 remains frozen and interpretable
+because the reviewer saw the full response, but future full-corpus annotation returns to the
+original 96-token maximum under a new version and receives a bounded compatibility check before
+scale-up. The immutable comparison bundle manifest self-hash is
+`6b084c569697f119248cae86ac9394f5d1bf395c9127fc989dbf9702ea083885`.
