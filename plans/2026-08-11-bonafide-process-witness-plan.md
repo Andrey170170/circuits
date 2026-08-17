@@ -1149,3 +1149,40 @@ weights, partial-wave ordering, and resource tiers remain to be frozen from the 
 Refined annotation may justify a smaller, separately frozen second tracing wave before any ADAG
 outcomes are opened. No atlas cluster, description, motif, or dense trajectory has been opened
 under this design.
+
+### 2026-08-17 coarse-label refinement and matched few-shot qualification
+
+The completed full-context human review is development evidence, not an exchangeable accuracy
+sample. Its 72 blind decisions were made in a fixed order while the reviewer learned the coarse
+boundaries, and model decisions were revealed after each lock. Preserve the original blind event
+and every post-reveal correction separately; do not rewrite either into ground truth. The uploaded
+ledger SHA-256 is `2b4cf65ea8bf92662b261b691c2baa3638f220bca2de5a57a9f7518cbaa2b0bc`.
+
+Coarse labels now use a trajectory-effect rule. `active_task_work` creates new task state or
+evidence; `evaluation_or_revision` assesses or changes an existing candidate;
+`intermediate_commitment` reports a settled non-final state without performing the operation in
+that unit; and `other_semantic_text` plans, explains, restates, quotes, or comments without
+changing task state. The fixed composite-unit precedence is final, evaluation, active,
+intermediate, other, then surface. `uncertain` positively represents a defensible tie or
+insufficient unit boundary rather than a failure to force a label.
+
+The next qualification uses a fresh graph-blind holdout and only the full-response
+`target_only_markup` presentation. It compares two matched arms:
+
+1. the refined definitions with no demonstrations;
+2. the identical definitions plus a frozen pack of short contrastive micro-context examples.
+
+The example pack may use synthetic text or the completed development set but cannot contain a
+holdout unit. Both arms use `gpt-5.6-luna`, medium reasoning, strict structured output, and the same
+frozen target groups. Each arm makes three predeclared identical-protocol requests per group. The
+complete ordered decisions remain a replica vote profile: 3-0 stable, 2-1 mixed, and 1-1-1
+disputed. A majority decision never replaces the physical votes and is not semantic truth or an
+independent-voter confidence estimate.
+
+The comparison freezes before submission: human blind agreement, paired arm wins/losses,
+replica-profile counts, tag confusions, boundary concerns, abstention, broad selection-family
+stability, usage, cache buckets, and cost. The fresh human holdout remains globally blind until
+review completion. Few-shot prompting is preferred only if its human agreement and stability
+improve without suppressing legitimate uncertainty or causing a material per-family regression.
+The qualification freezes no production coarse corpus, target bank, trace, adequacy result, motif,
+or witness.

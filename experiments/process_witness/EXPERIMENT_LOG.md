@@ -285,3 +285,22 @@ disagreements and a deterministic agreement sample without interpreting either s
 The result supports the concern that dense markup is a costly and potentially distracting
 presentation, but blind human review is still required to determine whether either arm is more
 semantically sensible. Full-corpus labeling and target-bank freeze remain blocked.
+
+## 2026-08-17 — Human review retained as development evidence; matched few-shot test accepted
+
+The uploaded full-context ledger contains 72/72 locked blind judgments and has SHA-256
+`2b4cf65ea8bf92662b261b691c2baa3638f220bca2de5a57a9f7518cbaa2b0bc`. Blind tag counts are 31
+other semantic, 20 active work, 11 evaluation/revision, seven intermediate commitments, and three
+surface/control. Nine items have separately preserved post-reveal corrections. Because the human
+reviewer learned the ontology during this ordered pass and saw model decisions after each lock,
+these records are development evidence rather than a clean estimate of model accuracy.
+
+The next qualification freezes labels by their visible trajectory effect and retains genuine
+ambiguity. Three identical-protocol Luna decisions form an ordered vote profile; 3-0, 2-1, and
+1-1-1 measure stability and never become ground truth merely through majority vote. A matched
+fresh holdout will compare refined zero-shot instructions with the same instructions plus short
+contrastive micro-context demonstrations. Both arms use the full task prompt, complete response,
+target-only inline markup, medium reasoning, strict output, and identical target groups. The
+holdout excludes the development units and remains graph-blind and globally human-blind until its
+review finishes. Dense all-unit markup is retained only as completed sensitivity evidence, not the
+new primary protocol.

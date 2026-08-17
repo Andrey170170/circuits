@@ -55,6 +55,20 @@ final answer, other semantic text, surface or control, and uncertain. A tag is r
 selection provenance but is not an adequacy label, motif label, or claim about internal work.
 _Avoid_: Process family, semantic ground truth, ADAG label
 
+**Trajectory effect**:
+The primary change a bounded text unit makes to the visible reasoning trajectory: producing new
+task state or evidence, assessing or revising an existing candidate, reporting a settled state,
+committing the final answer, adding semantic context without changing state, or adding only
+surface/control form. Coarse tags classify this effect rather than mere topical relevance.
+_Avoid_: Internal model computation, all task-related text
+
+**Replica vote profile**:
+The complete ordered set and histogram of coarse-tag decisions from predeclared identical-protocol
+model requests for one unit. A 3-0, 2-1, or 1-1-1 profile measures proposal stability; it is not a
+probability, independent-voter confidence interval, or semantic ground truth. Majority labels may
+guide sampling only while the full profile remains attached as provenance.
+_Avoid_: Gold label, posterior probability
+
 **Coarse selection layer**:
 The frozen set of coarse sampling tags, structural identities, and sampling metadata used to build
 the first tracing wave. It determines where traces are collected but does not define later

@@ -29,6 +29,32 @@ text unit exactly one of:
 | `surface_or_control` | Formatting, punctuation-only, whitespace/control, tags, JSON syntax, or structural material. |
 | `uncertain` | Meaning or boundary is genuinely unresolved. |
 
+Apply the tags by **trajectory effect**, not by asking whether a sentence is broadly relevant to
+the task:
+
+- `active_task_work` performs an operation that creates new task state or evidence, such as a
+  calculation, lookup, traversal, transformation, comparison, or selection.
+- `evaluation_or_revision` primarily assesses, rejects, verifies, or changes an already available
+  candidate or state. Announcing that a check will happen later is planning, not yet evaluation.
+- `intermediate_commitment` reports or settles a non-final state without carrying out its
+  derivation or evaluation in that same unit.
+- `other_semantic_text` plans, explains, restates, quotes, or comments without creating new task
+  state, evidence, or an assessment of an existing candidate.
+- `final_answer` and `surface_or_control` retain their observable terminal and structural meanings.
+- `uncertain` is required when two tags remain defensible after applying these rules, or when the
+  unit boundary prevents a meaningful decision. It is not an annotation failure.
+
+For a genuinely composite unit, use the fixed precedence
+`final_answer > evaluation_or_revision > active_task_work > intermediate_commitment >
+other_semantic_text > surface_or_control`. Preserve boundary concerns and plausible alternatives;
+do not use precedence to hide an unresolved boundary.
+
+Production proposal annotation uses three predeclared identical-protocol requests per semantic
+unit. Preserve the full vote profile. Record 3-0 as stable, 2-1 as mixed, and 1-1-1 as disputed;
+the majority is sampling metadata rather than truth. Downstream selection may additionally group
+active work, evaluation, intermediate commitment, and final answer as process-bearing so that a
+fine-tag disagreement does not automatically discard a useful trace candidate.
+
 These tags only improve the expected hit rate of the first tracing wave. Do not copy them into
 adequacy strata or motif definitions. Keep them only to reproduce and audit target selection.
 Wave one uses a priority-weighted mixture with process enrichment, evaluation/commitment coverage,
@@ -58,6 +84,16 @@ complexity:
 Compare these approaches on a held-out graph-blind human audit rather than assuming greater
 orchestration gives better annotations. All approaches may abstain and must remain blind to traces,
 graphs, clusters, labels, and adequacy outcomes.
+
+The next coarse qualification compares two otherwise identical full-response target-only
+protocols: refined definitions alone and the same definitions plus a frozen pack of short,
+contrastive micro-context demonstrations. Examples distinguish performing work from planning it,
+evaluation from announcing a future check, computation from reporting its result, restatement from
+execution, and a genuinely incomplete boundary. Demonstrations come only from synthetic text or
+the completed development review, never the fresh evaluation holdout. Each arm receives three
+identical-protocol replicas with Luna medium reasoning. The comparison retains vote profiles,
+human agreement, boundary behavior, abstention, usage, and cost rather than selecting a protocol
+from majority agreement alone.
 
 ## Loading and saving
 
