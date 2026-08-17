@@ -29,6 +29,7 @@ from circuits.labeling.io import (
 _BOUND_SOURCE_FILES = (
     "circuits/analysis/bonafide/coarse_sampling_annotation_v4.py",
     "circuits/analysis/bonafide/coarse_sampling_annotation_v3.py",
+    "circuits/analysis/bonafide/coarse_sampling_review_v3.py",
     "circuits/analysis/bonafide/coarse_sampling_annotation_v2.py",
     "circuits/analysis/bonafide/coarse_sampling_annotation.py",
     "circuits/analysis/bonafide/canonical.py",
@@ -155,6 +156,10 @@ def build(
         atomic_write_json(
             temporary / "segmentation-repair-audit.json", qualification["repair_audit"]
         )
+        atomic_write_json(
+            temporary / "full-corpus-segmentation-audit.json",
+            qualification["full_corpus_segmentation_audit"],
+        )
         atomic_write_json(temporary / "cost-plan.json", plan)
         atomic_write_bytes(temporary / "protocol-config.json", config_path.read_bytes())
         atomic_write_bytes(temporary / "price-snapshot.json", price_path.read_bytes())
@@ -202,10 +207,10 @@ def build(
             "source_v3_post_seal_corrections_sha256": file_sha256(correction_path),
             "counts": {
                 "arms": 1,
-                "unique_windows": 12,
+                "unique_windows": 15,
                 "unique_focal_units": 24,
-                "physical_requests": 36,
-                "replica_requests": 24,
+                "physical_requests": 45,
+                "replica_requests": 30,
             },
             "request_bindings_in_order": [
                 {

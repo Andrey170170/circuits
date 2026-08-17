@@ -39,7 +39,7 @@ def load_review_packet(root: Path) -> dict[str, Any]:
     if (
         manifest.get("schema_version") != PACKET_SCHEMA
         or manifest.get("status") != "frozen_blind_global_seal_review_packet"
-        or manifest.get("counts") != {"response_blocks": 12, "items": 24}
+        or manifest.get("counts") != {"response_blocks": 15, "items": 24}
     ):
         raise ValueError("coarse v4 review manifest contract drift")
     required = {"documents.jsonl", "items.jsonl", "packet.json", "review.html"}
@@ -74,7 +74,7 @@ def load_review_packet(root: Path) -> dict[str, Any]:
         != f"process-witness-coarse-review-v4-{canonical_sha256(identity)[:16]}"
         or packet.get("item_ids_in_order") != [item["item_id"] for item in items]
         or len(items) != 24
-        or len(documents) != 12
+        or len(documents) != 15
         or len({item["unit_id"] for item in items}) != 24
         or "reveal" in packet
     ):
@@ -150,10 +150,10 @@ def build_review_payload(
                 }
             )
     if (
-        len(review_documents) != 12
+        len(review_documents) != 15
         or len(items) != 24
         or len({item["unit_id"] for item in items}) != 24
-        or len({document["response_id"] for document in review_documents}) != 12
+        or len({document["response_id"] for document in review_documents}) != 15
     ):
         raise ValueError("coarse v4 review payload cardinality drift")
     packet_identity = {
@@ -180,7 +180,7 @@ def build_review_payload(
             "packet_id": f"process-witness-coarse-review-v4-{packet_binding_sha256[:16]}",
             "packet_binding_sha256": packet_binding_sha256,
             "status": "blind_unsealed_no_model_outputs_present",
-            "counts": {"response_blocks": 12, "items": 24},
+            "counts": {"response_blocks": 15, "items": 24},
             "global_seal_required_before_model_reveal": True,
             "model_votes_are_not_human_ground_truth": True,
         },
@@ -232,7 +232,7 @@ function current(){{return visible.includes(state.index)?DATA.items[state.index]
 function visiblePosition(){{return visible.indexOf(state.index)}}
 function refreshVisible(preferredPosition=0){{const query=el('search').value.trim().toLocaleLowerCase(),mode=el('filter').value;visible=DATA.items.map((_,i)=>i).filter(i=>{{const item=DATA.items[i],doc=docs.get(item.response_id),reviewed=!!state.decisions[item.item_id],status=mode==='all'||(mode==='reviewed'&&reviewed)||(mode==='unreviewed'&&!reviewed),hay=[item.unit_id,item.unit_text,doc.prompt,doc.response].join('\\n').toLocaleLowerCase();return status&&(!query||hay.includes(query))}});if(visible.length&&!visible.includes(state.index))state.index=visible[Math.min(Math.max(0,preferredPosition),visible.length-1)]}}
 function applyFilter(){{const position=Math.max(0,visiblePosition());refreshVisible(position);persist();render()}}
-function render(){{el('saveStatus').textContent='';const position=visiblePosition();el('prev').disabled=state.sealed||position<=0;el('next').disabled=state.sealed||position<0||position>=visible.length-1;el('jump').disabled=state.sealed||!visible.length;el('importButton').disabled=state.sealed;el('progressExport').disabled=state.sealed;if(!visible.length){{el('meta').textContent='No items match the current search/filter.';el('prompt').textContent='';el('response').textContent='';el('progress').textContent=`0 visible · saved ${{Object.keys(state.decisions).length}} / 24`;for(const control of [el('primary'),el('note'),el('save'),el('saveNext')])control.disabled=true;return}}const item=current(),doc=docs.get(item.response_id),decision=state.decisions[item.item_id]||{{primary_label:'',defensible_alternatives:[],boundary_concerns:[],note:''}};el('meta').textContent=`response block ${{item.randomized_response_block_index+1}} / 12 · unit ${{item.within_response_index+1}} / 2 · chars [${{item.core_character_span.join(', ')}}) · ${{item.unit_id}}`;el('prompt').textContent=doc.prompt;renderResponse(item,doc);el('progress').textContent=`${{position+1}} / ${{visible.length}} visible · saved ${{Object.keys(state.decisions).length}} / 24`;el('jump').value=position+1;el('jump').max=visible.length;el('primary').value=decision.primary_label;for(const i of document.querySelectorAll('input[name=alt]')){{i.checked=decision.defensible_alternatives.includes(i.value);i.disabled=state.sealed||i.value===decision.primary_label}}for(const i of document.querySelectorAll('input[name=boundary]')){{i.checked=decision.boundary_concerns.includes(i.value);i.disabled=state.sealed}}el('note').value=decision.note;for(const i of [el('primary'),el('note'),el('save'),el('saveNext')])i.disabled=state.sealed;el('seal').disabled=state.sealed||!completeDecisions(state);el('decisionsExport').disabled=!state.sealed;el('sealStatus').textContent=state.sealed?'This browser profile is sealed. You may re-export the same immutable ledger.':'';}}
+function render(){{el('saveStatus').textContent='';const position=visiblePosition();el('prev').disabled=state.sealed||position<=0;el('next').disabled=state.sealed||position<0||position>=visible.length-1;el('jump').disabled=state.sealed||!visible.length;el('importButton').disabled=state.sealed;el('progressExport').disabled=state.sealed;if(!visible.length){{el('meta').textContent='No items match the current search/filter.';el('prompt').textContent='';el('response').textContent='';el('progress').textContent=`0 visible · saved ${{Object.keys(state.decisions).length}} / 24`;for(const control of [el('primary'),el('note'),el('save'),el('saveNext')])control.disabled=true;return}}const item=current(),doc=docs.get(item.response_id),decision=state.decisions[item.item_id]||{{primary_label:'',defensible_alternatives:[],boundary_concerns:[],note:''}};el('meta').textContent=`response block ${{item.randomized_response_block_index+1}} / 15 · unit ${{item.within_response_index+1}} / ${{item.group_spans.length}} · chars [${{item.core_character_span.join(', ')}}) · ${{item.unit_id}}`;el('prompt').textContent=doc.prompt;renderResponse(item,doc);el('progress').textContent=`${{position+1}} / ${{visible.length}} visible · saved ${{Object.keys(state.decisions).length}} / 24`;el('jump').value=position+1;el('jump').max=visible.length;el('primary').value=decision.primary_label;for(const i of document.querySelectorAll('input[name=alt]')){{i.checked=decision.defensible_alternatives.includes(i.value);i.disabled=state.sealed||i.value===decision.primary_label}}for(const i of document.querySelectorAll('input[name=boundary]')){{i.checked=decision.boundary_concerns.includes(i.value);i.disabled=state.sealed}}el('note').value=decision.note;for(const i of [el('primary'),el('note'),el('save'),el('saveNext')])i.disabled=state.sealed;el('seal').disabled=state.sealed||!completeDecisions(state);el('decisionsExport').disabled=!state.sealed;el('sealStatus').textContent=state.sealed?'This browser profile is sealed. You may re-export the same immutable ledger.':'';}}
 el('primary').onchange=()=>{{for(const i of document.querySelectorAll('input[name=alt]')){{if(i.value===el('primary').value)i.checked=false;i.disabled=i.value===el('primary').value}}}};
 function saveCurrent(advance){{const item=current(),primary=el('primary').value;if(!item)return false;if(!primary){{el('saveStatus').textContent='Choose a primary label.';return false}}const originalIndex=state.index,position=Math.max(0,visiblePosition());state.decisions[item.item_id]={{unit_id:item.unit_id,primary_label:primary,defensible_alternatives:[...document.querySelectorAll('input[name=alt]:checked')].map(i=>i.value).filter(v=>v!==primary),boundary_concerns:[...document.querySelectorAll('input[name=boundary]:checked')].map(i=>i.value),note:el('note').value}};refreshVisible(position);if(advance&&visible.includes(originalIndex)){{const nextPosition=visible.indexOf(originalIndex)+1;if(nextPosition<visible.length)state.index=visible[nextPosition]}}persist();render();el('saveStatus').textContent='Saved.';return true}}
 el('save').onclick=()=>saveCurrent(false);el('saveNext').onclick=()=>saveCurrent(true);

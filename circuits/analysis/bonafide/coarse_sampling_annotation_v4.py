@@ -33,7 +33,13 @@ from circuits.analysis.bonafide.coarse_sampling_annotation_v3 import (
     ARM_ZERO_SHOT,
     _base_system_prompt,
 )
-from circuits.analysis.bonafide.process_annotation import _terminal_serialization_span
+from circuits.analysis.bonafide.coarse_sampling_review_v3 import (
+    load_review_packet as load_v3_review_packet,
+)
+from circuits.analysis.bonafide.process_annotation import (
+    _terminal_serialization_span,
+    _text_units,
+)
 from circuits.labeling.io import read_jsonl
 
 CONFIG_SCHEMA = "adag.process-witness.coarse-annotation-config.v4"
@@ -45,8 +51,8 @@ DECISION_SCHEMA_NAME = "process_witness_coarse_decisions_v4"
 OPENAI_BATCH_ENDPOINT = "/v1/responses"
 SEGMENTATION_POLICY_ID = "token-exclusive-sentence-line-quote-aware-v2"
 SEGMENTATION_CONCERNS = frozenset(("split_needed", "merge_previous", "merge_next"))
-FOCAL_UNITS_PER_WINDOW = 2
-WINDOW_COUNT = 12
+DEFECT_RESPONSE_COUNT = 12
+WINDOW_COUNT = 15
 REPLICAS_PER_WINDOW = 3
 
 
@@ -292,7 +298,9 @@ def segment_document_v4(
     return units
 
 
-def decision_json_schema_v4() -> dict[str, Any]:
+def decision_json_schema_v4(target_count: int) -> dict[str, Any]:
+    if not 1 <= target_count <= 6:
+        raise ValueError("coarse v4 request target count must be in [1,6]")
     return {
         "type": "object",
         "additionalProperties": False,
@@ -300,8 +308,8 @@ def decision_json_schema_v4() -> dict[str, Any]:
         "properties": {
             "decisions": {
                 "type": "array",
-                "minItems": FOCAL_UNITS_PER_WINDOW,
-                "maxItems": FOCAL_UNITS_PER_WINDOW,
+                "minItems": target_count,
+                "maxItems": target_count,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
@@ -345,7 +353,7 @@ def load_coarse_v4_config(path: Path) -> dict[str, Any]:
     q = value.get("qualification", {})
     if q != {
         "unique_window_count": WINDOW_COUNT,
-        "focal_units_per_window": FOCAL_UNITS_PER_WINDOW,
+        "maximum_focal_units_per_window": 6,
         "replicas_per_window": REPLICAS_PER_WINDOW,
         "arm": ARM_ZERO_SHOT,
         "maximum_semantic_unit_tokens": 96,
@@ -377,7 +385,149 @@ def load_coarse_v4_config(path: Path) -> dict[str, Any]:
         for key in required_hashes
     ):
         raise ValueError("coarse v4 source binding drift")
+    if value.get("full_corpus_segmentation_audit") != {
+        "response_count": 188,
+        "expected_changed_response_count": 77,
+        "expected_added_quote_boundaries": 162,
+        "expected_removed_legacy_boundaries": 0,
+        "all_added_boundaries_token_aligned": True,
+    }:
+        raise ValueError("coarse v4 full-corpus segmentation audit contract drift")
+    controls = value.get("unchanged_short_controls")
+    if (
+        not isinstance(controls, list)
+        or len(controls) != 6
+        or len({item.get("text") for item in controls if isinstance(item, Mapping)})
+        != 6
+        or any(
+            not isinstance(item, Mapping)
+            or set(item)
+            != {
+                "response_id",
+                "prompt_sha256",
+                "token_span",
+                "core_character_span",
+                "text",
+            }
+            for item in controls
+        )
+    ):
+        raise ValueError("coarse v4 unchanged-short control binding drift")
+    rule_controls = value.get("segmentation_rule_controls")
+    if (
+        not isinstance(rule_controls, list)
+        or len(rule_controls) != 5
+        or any(
+            not isinstance(item, Mapping)
+            or set(item) != {"text", "expected_units"}
+            or not isinstance(item["text"], str)
+            or not isinstance(item["expected_units"], list)
+            for item in rule_controls
+        )
+    ):
+        raise ValueError("coarse v4 segmentation rule control drift")
+    residuals = value.get("residual_fragment_diagnostics")
+    if not isinstance(residuals, list) or len(residuals) != 4:
+        raise ValueError("coarse v4 residual diagnostic binding drift")
+    if value.get("compatibility_gate") != {
+        "all_24_targets_receive_three_valid_votes": True,
+        "no_one_one_one_vote_patterns": True,
+        "minimum_mean_pairwise_tag_agreement": 0.8,
+        "maximum_merge_or_split_flags_on_20_gated_units": 0,
+        "minimum_human_admissible_agreement_on_20_gated_units": 17,
+        "maximum_process_bearing_false_negatives": 2,
+        "long_diagnostic_units_excluded_from_pass_gate": 4,
+        "human_review_required_before_pass": True,
+    }:
+        raise ValueError("coarse v4 compatibility gate drift")
     return value
+
+
+def full_corpus_segmentation_audit(
+    workstation_bundle: Mapping[str, Any], config: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Diff the new sentence boundaries over all authoritative responses."""
+
+    documents = workstation_bundle.get("documents")
+    if not isinstance(documents, list) or len(documents) != 188:
+        raise ValueError("coarse v4 workstation document census drift")
+    changed = []
+    additions = []
+    removed = []
+    fragment_groups = 0
+    for document in documents:
+        text = str(document["text"])
+        response_id = str(document["response_id"])
+        legacy_ends = {end for _start, end in _text_units(text)}
+        quote_aware_ends = {end for _start, end in _text_units_quote_aware(text)}
+        added = sorted(quote_aware_ends - legacy_ends)
+        lost = sorted(legacy_ends - quote_aware_ends)
+        token_boundaries = {
+            int(token[2]) for token in document["tokenization"]["tokens"]
+        }
+        additions.extend(
+            {
+                "response_id": response_id,
+                "boundary_character_offset": offset,
+                "token_aligned": offset in token_boundaries,
+                "context": text[max(0, offset - 48) : min(len(text), offset + 48)],
+            }
+            for offset in added
+        )
+        removed.extend(
+            {"response_id": response_id, "boundary_character_offset": offset}
+            for offset in lost
+        )
+        if added or lost:
+            changed.append(
+                {
+                    "response_id": response_id,
+                    "added_boundary_offsets": added,
+                    "removed_boundary_offsets": lost,
+                }
+            )
+        fragment_groups += len(
+            {
+                unit["fragment_of"]
+                for unit in segment_document_v4(document)
+                if unit["fragment_of"] is not None
+            }
+        )
+    contract = config["full_corpus_segmentation_audit"]
+    if (
+        len(changed) != contract["expected_changed_response_count"]
+        or len(additions) != contract["expected_added_quote_boundaries"]
+        or len(removed) != contract["expected_removed_legacy_boundaries"]
+        or all(item["token_aligned"] for item in additions)
+        is not contract["all_added_boundaries_token_aligned"]
+    ):
+        raise ValueError("coarse v4 full-corpus segmentation boundary diff drift")
+    rule_controls = []
+    for control in config["segmentation_rule_controls"]:
+        observed = [
+            control["text"][start:end]
+            for start, end in _text_units_quote_aware(control["text"])
+        ]
+        if observed != control["expected_units"]:
+            raise ValueError("coarse v4 segmentation rule control failed")
+        rule_controls.append({**control, "observed_units": observed, "passed": True})
+    return {
+        "schema_version": "adag.process-witness.coarse-segmentation-audit.v4",
+        "policy_id": SEGMENTATION_POLICY_ID,
+        "maximum_semantic_unit_tokens": 96,
+        "response_count": len(documents),
+        "changed_response_count": len(changed),
+        "added_quote_boundary_count": len(additions),
+        "removed_legacy_boundary_count": len(removed),
+        "all_added_boundaries_token_aligned": all(
+            item["token_aligned"] for item in additions
+        ),
+        "fragment_group_count_over_96_tokens": fragment_groups,
+        "changed_responses": changed,
+        "added_boundaries": additions,
+        "removed_boundaries": removed,
+        "rule_controls": rule_controls,
+    }
 
 
 def render_v4_user_prompt(
@@ -385,8 +535,8 @@ def render_v4_user_prompt(
     focal_units: Sequence[Mapping[str, Any]],
     all_response_units: Sequence[Mapping[str, Any]],
 ) -> tuple[str, dict[str, Any]]:
-    if len(focal_units) != FOCAL_UNITS_PER_WINDOW:
-        raise ValueError("coarse v4 requests require exactly two focal units")
+    if not 1 <= len(focal_units) <= 6:
+        raise ValueError("coarse v4 requests require one to six focal units")
     response = str(document["text"])
     prompt = str(document["task_context"]["prompt"])
     response_sha = hashlib.sha256(response.encode()).hexdigest()
@@ -416,14 +566,14 @@ def render_v4_user_prompt(
         f"{response_begin}\n{marked}\n{response_end}\n\n"
         "TARGET UNIT IDS IN RESPONSE ORDER:\n- "
         + "\n- ".join(target_ids)
-        + "\n\nReturn decisions for these two TARGET unit_ids exactly once and no others."
+        + f"\n\nReturn decisions for these {len(target_ids)} TARGET unit_ids exactly once and no others."
     )
     return content, {
         "arm_id": ARM_TARGET_ONLY,
         "full_response_sha256": response_sha,
         "raw_response_utf8_bytes": len(response.encode()),
         "response_unit_count": len(all_response_units),
-        "target_markup_count": 2,
+        "target_markup_count": len(target_ids),
         "context_markup_count": 0,
         "inserted_tag_count": len(tags),
         "lossless_reconstruction_verified": True,
@@ -454,10 +604,10 @@ def _select_windows(
     review_root: Path,
     ledger_rows: Sequence[Mapping[str, Any]],
     correction_rows: Sequence[Mapping[str, Any]],
+    config: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    review_items = {
-        row["unit_id"]: row for row in read_jsonl(review_root / "items.jsonl")
-    }
+    validated_review = load_v3_review_packet(review_root)
+    review_items = {row["unit_id"]: row for row in validated_review["items"]}
     documents = {
         str(row["response_id"]): row for row in workstation_bundle["documents"]
     }
@@ -493,7 +643,7 @@ def _select_windows(
             adjacent = tuple(map(int, group[adjacent_index]["core_character_span"]))
             group_span = (min(span[0], adjacent[0]), max(span[1], adjacent[1]))
         defect_groups_by_response.setdefault(response_id, set()).add(group_span)
-    if len(defect_rows) != 24 or len(by_response) != WINDOW_COUNT:
+    if len(defect_rows) != 24 or len(by_response) != DEFECT_RESPONSE_COUNT:
         raise ValueError("coarse v4 defect source census drift")
 
     prepared: dict[
@@ -535,97 +685,142 @@ def _select_windows(
                 f"{response_id} has {len(repaired)}"
             )
         prepared[response_id] = (document, semantic, old_spans, repaired)
-    single_repair_responses = sorted(
-        response_id
-        for response_id, (_document, _semantic, _spans, repaired) in prepared.items()
-        if len(repaired) == 1
-    )
-    if (
-        sum(len(value[3]) for value in prepared.values()) != 14
-        or len(single_repair_responses) != 10
-    ):
-        raise ValueError("coarse v4 expected 14 repair targets and ten control slots")
-    long_control_responses = set(single_repair_responses[:4])
+    if sum(len(value[3]) for value in prepared.values()) != 14:
+        raise ValueError("coarse v4 expected exactly 14 repaired targets")
+    all_units_by_response: dict[str, list[dict[str, Any]]] = {}
+
+    def all_units(response_id: str) -> list[dict[str, Any]]:
+        if response_id not in all_units_by_response:
+            all_units_by_response[response_id] = segment_document_v4(
+                documents[response_id]
+            )
+        return all_units_by_response[response_id]
+
+    targets_by_response: dict[str, dict[str, dict[str, Any]]] = {}
+    roles: dict[str, str] = {}
+    for response_id, (_document, _semantic, _spans, repaired) in prepared.items():
+        targets_by_response.setdefault(response_id, {}).update(
+            (unit["unit_id"], unit) for unit in repaired
+        )
+        roles.update((unit["unit_id"], "repair") for unit in repaired)
+
+    for binding in config["unchanged_short_controls"]:
+        response_id = str(binding["response_id"])
+        document = documents.get(response_id)
+        if document is None or document["prompt_sha256"] != binding["prompt_sha256"]:
+            raise ValueError("coarse v4 unchanged-short document binding drift")
+        match = [
+            unit
+            for unit in all_units(response_id)
+            if unit["assignment_route"] == "openai_pending"
+            and unit["token_span"] == binding["token_span"]
+            and unit["core_character_span"] == binding["core_character_span"]
+            and unit["text"] == binding["text"]
+        ]
+        legacy_match = [
+            unit
+            for unit in segment_document(document, maximum_semantic_unit_tokens=24)
+            if unit["assignment_route"] == "openai_pending"
+            and unit["token_span"] == binding["token_span"]
+            and unit["core_character_span"] == binding["core_character_span"]
+            and unit["text"] == binding["text"]
+            and unit["fragment_of"] is None
+        ]
+        if len(match) != 1 or len(legacy_match) != 1:
+            raise ValueError("coarse v4 unchanged-short unit binding drift")
+        unit = match[0]
+        targets_by_response.setdefault(response_id, {})[unit["unit_id"]] = unit
+        roles[unit["unit_id"]] = "unchanged_short"
+
+    # Residual diagnostics explicitly exercise the 96-token cap: exact first
+    # and last chunks from predeclared 99- and 592-token source intervals.
+    residual_units = []
+    fragment_ids_by_source_span: dict[tuple[str, tuple[int, int]], set[str]] = {}
+    for binding in config["residual_fragment_diagnostics"]:
+        response_id = str(binding["response_id"])
+        document = documents.get(response_id)
+        matches = [
+            unit
+            for unit in all_units(response_id)
+            if unit["token_span"] == binding["token_span"]
+            and unit["core_character_span"] == binding["core_character_span"]
+            and unit["text"] == binding["text"]
+            and unit["fragment_of"] is not None
+        ]
+        if (
+            document is None
+            or document["prompt_sha256"] != binding["prompt_sha256"]
+            or len(matches) != 1
+            or binding["source_interval_token_span"][1]
+            - binding["source_interval_token_span"][0]
+            != binding["source_interval_width_tokens"]
+        ):
+            raise ValueError("coarse v4 residual diagnostic unit binding drift")
+        unit = matches[0]
+        residual_units.append(unit)
+        key = (response_id, tuple(binding["source_interval_token_span"]))
+        fragment_ids_by_source_span.setdefault(key, set()).add(unit["fragment_of"])
+    if any(len(values) != 1 for values in fragment_ids_by_source_span.values()):
+        raise ValueError("coarse v4 residual diagnostic fragment identity drift")
+    if [u["token_span"][1] - u["token_span"][0] for u in residual_units] != [
+        96,
+        3,
+        96,
+        16,
+    ]:
+        raise ValueError("coarse v4 residual diagnostic chunk widths drift")
+    for unit in residual_units:
+        response_id = unit["response_id"]
+        targets_by_response.setdefault(response_id, {})[unit["unit_id"]] = unit
+        roles[unit["unit_id"]] = "long_diagnostic"
 
     windows: list[dict[str, Any]] = []
     focal_units: list[dict[str, Any]] = []
     audits = []
-    for window_index, response_id in enumerate(sorted(by_response)):
-        document, semantic, old_spans, repaired = prepared[response_id]
-        defect_start = min(start for start, _ in old_spans)
-        defect_end = max(end for _, end in old_spans)
-
-        selected = list(repaired)
-        candidates = [u for u in semantic if u not in selected]
-        legacy_spans = {
-            (tuple(u["token_span"]), tuple(u["core_character_span"]))
-            for u in segment_document(document, maximum_semantic_unit_tokens=24)
-            if u["assignment_route"] == "openai_pending" and u["fragment_of"] is None
-        }
-        short = [
-            u
-            for u in candidates
-            if u["token_span"][1] - u["token_span"][0] <= 24
-            and u["fragment_of"] is None
-            and (tuple(u["token_span"]), tuple(u["core_character_span"]))
-            in legacy_spans
-        ]
-        long = [u for u in candidates if u["token_span"][1] - u["token_span"][0] > 24]
-        control_kind = None
-        if len(selected) == 1:
-            control_kind = (
-                "long_diagnostic"
-                if response_id in long_control_responses
-                else "unchanged_short"
-            )
-            pool = long if control_kind == "long_diagnostic" else short
-            if not pool:
-                raise ValueError(f"coarse v4 lacks required {control_kind} control")
-            selected.append(
-                sorted(pool, key=lambda u: (u["sequence_index"], u["unit_id"]))[0]
-            )
-        if len(selected) != FOCAL_UNITS_PER_WINDOW:
-            raise ValueError("coarse v4 cannot fill deterministic compatibility window")
-        selected.sort(key=lambda u: u["sequence_index"])
+    for window_index, response_id in enumerate(sorted(targets_by_response)):
+        document = documents[response_id]
+        selected = sorted(
+            targets_by_response[response_id].values(),
+            key=lambda unit: unit["sequence_index"],
+        )
+        if not 1 <= len(selected) <= 6:
+            raise ValueError("coarse v4 response target-group size drift")
+        repaired = prepared.get(response_id, (None, None, [], []))[3]
+        old_spans = prepared.get(response_id, (None, None, [], []))[2]
         windows.append(
             {
                 "window_index": window_index,
                 "response_id": response_id,
                 "prompt_sha256": document["prompt_sha256"],
-                "focal_unit_ids": [u["unit_id"] for u in selected],
+                "focal_unit_ids": [unit["unit_id"] for unit in selected],
+                "target_roles": {
+                    unit["unit_id"]: roles[unit["unit_id"]] for unit in selected
+                },
                 "old_defect_unit_ids": sorted(
-                    item["unit_id"] for item in by_response[response_id]
+                    item["unit_id"] for item in by_response.get(response_id, [])
                 ),
-                "old_defect_character_hull": [defect_start, defect_end],
-                "repaired_unit_ids": [u["unit_id"] for u in repaired],
-                "control_unit_id": None
-                if control_kind is None
-                else next(u["unit_id"] for u in selected if u not in repaired),
-                "control_kind": control_kind,
+                "old_defect_group_spans": [list(span) for span in old_spans],
+                "repaired_unit_ids": [unit["unit_id"] for unit in repaired],
             }
         )
         focal_units.extend(selected)
         audits.append(
             {
                 "response_id": response_id,
-                "old_defect_group_spans": [list(span) for span in old_spans],
-                "old_defect_character_hull": [defect_start, defect_end],
-                "repaired_spans": [u["core_character_span"] for u in repaired],
-                "repair_unit_count": len(repaired),
-                "selected_unit_ids": [u["unit_id"] for u in selected],
+                "selected_unit_ids": [unit["unit_id"] for unit in selected],
+                "target_roles": windows[-1]["target_roles"],
                 "selected_width_tokens": [
-                    u["token_span"][1] - u["token_span"][0] for u in selected
+                    unit["token_span"][1] - unit["token_span"][0] for unit in selected
                 ],
-                "short_control_candidates": len(short),
-                "long_control_candidates": len(long),
-                "control_kind": control_kind,
             }
         )
     if (
-        len(focal_units) != 24
+        len(windows) != WINDOW_COUNT
+        or len(focal_units) != 24
         or len({u["unit_id"] for u in focal_units}) != 24
-        or sum(window["control_kind"] == "unchanged_short" for window in windows) != 6
-        or sum(window["control_kind"] == "long_diagnostic" for window in windows) != 4
+        or sum(role == "repair" for role in roles.values()) != 14
+        or sum(role == "unchanged_short" for role in roles.values()) != 6
+        or sum(role == "long_diagnostic" for role in roles.values()) != 4
     ):
         raise ValueError("coarse v4 focal unit cardinality drift")
     return (
@@ -666,7 +861,7 @@ def _request(
             "format": {
                 "type": "json_schema",
                 "name": DECISION_SCHEMA_NAME,
-                "schema": decision_json_schema_v4(),
+                "schema": decision_json_schema_v4(len(focal)),
                 "strict": True,
             }
         },
@@ -713,11 +908,13 @@ def build_v4_qualification(
         or correction_rows[0].get("original_sealed_ledger_mutated") is not False
     ):
         raise ValueError("coarse v4 post-seal correction drift")
+    corpus_audit = full_corpus_segmentation_audit(workstation_bundle, config)
     windows, focal_units, repair_audit = _select_windows(
         workstation_bundle=workstation_bundle,
         review_root=review_root,
         ledger_rows=ledger_rows,
         correction_rows=correction_rows,
+        config=config,
     )
     documents = {
         str(row["response_id"]): row for row in workstation_bundle["documents"]
@@ -762,8 +959,8 @@ def build_v4_qualification(
                 }
             )
     if (
-        len(requests) != 36
-        or sum(r["repeat_of_request_id"] is not None for r in requests) != 24
+        len(requests) != 45
+        or sum(r["repeat_of_request_id"] is not None for r in requests) != 30
     ):
         raise ValueError("coarse v4 request cardinality drift")
     return {
@@ -773,6 +970,7 @@ def build_v4_qualification(
         "batch_lines": [openai_batch_line(r) for r in requests],
         "replica_bindings": bindings,
         "repair_audit": repair_audit,
+        "full_corpus_segmentation_audit": corpus_audit,
     }
 
 
@@ -795,11 +993,11 @@ def cost_plan_v4(
     plan = cost_plan_v2(requests, config, price_snapshot)
     plan["schema_version"] = COST_PLAN_SCHEMA
     plan["campaign_shape"] = {
-        "unique_windows": 12,
+        "unique_windows": 15,
         "unique_units": 24,
         "arms": [ARM_ZERO_SHOT],
         "replicas_per_window": 3,
-        "physical_requests": 36,
+        "physical_requests": 45,
     }
     return plan
 
@@ -827,10 +1025,10 @@ def load_v4_qualification(root: Path) -> dict[str, Any]:
     _verify_self_hash(manifest, "manifest_sha256", "coarse v4 manifest")
     expected_counts = {
         "arms": 1,
-        "unique_windows": 12,
+        "unique_windows": 15,
         "unique_focal_units": 24,
-        "physical_requests": 36,
-        "replica_requests": 24,
+        "physical_requests": 45,
+        "replica_requests": 30,
     }
     if (
         manifest.get("schema_version") != BUNDLE_SCHEMA
@@ -849,6 +1047,7 @@ def load_v4_qualification(root: Path) -> dict[str, Any]:
         "replica-bindings.json",
         "requests.jsonl",
         "segmentation-repair-audit.json",
+        "full-corpus-segmentation-audit.json",
         "v3-human-ledger.jsonl",
         "v3-post-seal-corrections.jsonl",
         "windows.json",
@@ -885,26 +1084,31 @@ def load_v4_qualification(root: Path) -> dict[str, Any]:
     windows = json.loads((root / "windows.json").read_text(encoding="utf-8"))
     bindings = json.loads((root / "replica-bindings.json").read_text(encoding="utf-8"))
     repair_audit = _load_object(root / "segmentation-repair-audit.json")
+    corpus_audit = _load_object(root / "full-corpus-segmentation-audit.json")
     cost_plan = _load_object(root / "cost-plan.json")
     _verify_self_hash(cost_plan, "cost_plan_sha256", "coarse v4 cost plan")
     if not (
-        len(requests) == len(lines) == len(bindings) == 36
+        len(requests) == len(lines) == len(bindings) == 45
         and len(units) == 24
-        and len(windows) == 12
-        and len({r["request_id"] for r in requests}) == 36
-        and [r["physical_index"] for r in requests] == list(range(36))
+        and len(windows) == 15
+        and len({r["request_id"] for r in requests}) == 45
+        and [r["physical_index"] for r in requests] == list(range(45))
         and len({u["unit_id"] for u in units}) == 24
         and repair_audit.get("defect_rows") == 24
+        and corpus_audit.get("changed_response_count") == 77
+        and corpus_audit.get("added_quote_boundary_count") == 162
+        and corpus_audit.get("removed_legacy_boundary_count") == 0
+        and corpus_audit.get("all_added_boundaries_token_aligned") is True
     ):
         raise ValueError("coarse v4 payload cardinality drift")
     units_by_id = {unit["unit_id"]: unit for unit in units}
     windows_by_index = {window["window_index"]: window for window in windows}
-    if set(windows_by_index) != set(range(12)):
+    if set(windows_by_index) != set(range(15)):
         raise ValueError("coarse v4 window index drift")
     for index, window in enumerate(windows):
         if (
             window["window_index"] != index
-            or len(window["focal_unit_ids"]) != 2
+            or not 1 <= len(window["focal_unit_ids"]) <= 6
             or any(
                 units_by_id[unit_id]["response_id"] != window["response_id"]
                 for unit_id in window["focal_unit_ids"]
@@ -946,12 +1150,12 @@ def load_v4_qualification(root: Path) -> dict[str, Any]:
             request
         ):
             raise ValueError("coarse v4 provider request drift")
-    if cost_plan.get("request_count") != 36 or cost_plan.get("campaign_shape") != {
-        "unique_windows": 12,
+    if cost_plan.get("request_count") != 45 or cost_plan.get("campaign_shape") != {
+        "unique_windows": 15,
         "unique_units": 24,
         "arms": [ARM_ZERO_SHOT],
         "replicas_per_window": 3,
-        "physical_requests": 36,
+        "physical_requests": 45,
     }:
         raise ValueError("coarse v4 cost plan drift")
     return {
@@ -963,5 +1167,6 @@ def load_v4_qualification(root: Path) -> dict[str, Any]:
         "windows": windows,
         "replica_bindings": bindings,
         "repair_audit": repair_audit,
+        "full_corpus_segmentation_audit": corpus_audit,
         "cost_plan": cost_plan,
     }

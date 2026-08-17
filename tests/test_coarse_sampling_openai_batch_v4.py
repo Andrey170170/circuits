@@ -29,7 +29,9 @@ def _request(window: int, arm: str, replica: int) -> dict:
         "replica_index": replica,
         "body_sha256": canonical_sha256(body),
         "repeat_of_request_id": (None if replica == 0 else f"request-{arm}-{window}-0"),
-        "focal_unit_ids": [f"unit-{window}-{offset}" for offset in range(2)],
+        "focal_unit_ids": [
+            f"unit-{window}-{offset}" for offset in range(2 if window < 9 else 1)
+        ],
         "provider_body": body,
     }
 
@@ -87,13 +89,13 @@ def test_parser_preserves_arm_replica_and_exact_decisions() -> None:
     assert [item["unit_id"] for item in event["decisions"]] == request["focal_unit_ids"]
 
 
-def test_collect_requires_all_36_requests_and_24_unique_arm_targets(
+def test_collect_requires_all_45_requests_and_24_unique_arm_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     requests = [
         _request(window, arm, replica)
         for arm in (ARM_ZERO_SHOT,)
-        for window in range(12)
+        for window in range(15)
         for replica in range(3)
     ]
     price = ROOT / "scripts/bonafide/configs/labeling/prices-2026-08-16-coarse-v2.json"
@@ -133,9 +135,9 @@ def test_collect_requires_all_36_requests_and_24_unique_arm_targets(
     run.mkdir()
     manifest = collect_v4_batch(run_root=run, downloader=download)
     assert manifest["status"] == "complete"
-    assert manifest["success_count"] == 36
+    assert manifest["success_count"] == 45
     assert manifest["unique_arm_target_coverage"] == 24
     assert manifest["arm_success_counts"] == {
-        ARM_ZERO_SHOT: 36,
+        ARM_ZERO_SHOT: 45,
     }
     assert manifest["qualification_decisions_ready"] is True

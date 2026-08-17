@@ -74,7 +74,7 @@ def build(
             "qualification_manifest_sha256": qualification["manifest"][
                 "manifest_sha256"
             ],
-            "counts": {"response_blocks": 12, "items": 24},
+            "counts": {"response_blocks": 15, "items": 24},
             "model_reveal_policy": "all 24 human decisions globally sealed first",
             "files": files,
         }

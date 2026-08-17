@@ -11,13 +11,41 @@
     "v3_post_seal_corrections_sha256": "5e94376989ef9198d9d3eb40d44e00904ae709d0b9fccf51c0ebe9fe26319b8c"
   },
   "qualification": {
-    "unique_window_count": 12,
-    "focal_units_per_window": 2,
+    "unique_window_count": 15,
+    "maximum_focal_units_per_window": 6,
     "replicas_per_window": 3,
     "arm": "refined_zero_shot",
     "maximum_semantic_unit_tokens": 96,
     "segmentation_policy_id": "token-exclusive-sentence-line-quote-aware-v2"
   },
+  "full_corpus_segmentation_audit": {
+    "response_count": 188,
+    "expected_changed_response_count": 77,
+    "expected_added_quote_boundaries": 162,
+    "expected_removed_legacy_boundaries": 0,
+    "all_added_boundaries_token_aligned": true
+  },
+  "segmentation_rule_controls": [
+    {"text":"The \"Decision: weight=...\" value is 7.","expected_units":["The \"Decision: weight=...\" value is 7."]},
+    {"text":"Sentence: \"The map...\" → yes.","expected_units":["Sentence: \"The map...\" → yes."]},
+    {"text":"Value 3.14 stays here.","expected_units":["Value 3.14 stays here."]},
+    {"text":"She said \"Done.\" Then we continued.","expected_units":["She said \"Done.\"","Then we continued."]},
+    {"text":"She said \"Done.\u201d Then we continued.","expected_units":["She said \"Done.\u201d","Then we continued."]}
+  ],
+  "unchanged_short_controls": [
+    {"response_id":"atlasresponsev1_ec8542ee0132dd530b486181a6cdb35c418f48eb3e479b6b81acc69f0a3347c8","prompt_sha256":"0d17495b581396b1c2dae1176d77051bc0f50351fb1d93970f2a2576b957092e","token_span":[3420,3427],"core_character_span":[8104,8136],"text":"Let's check with another method."},
+    {"response_id":"atlasresponsev1_df45d0080fdbf5efcd808d3f67a8364828dbd57b45b2ea9201682915ced36570","prompt_sha256":"573017263aaea98fd859f7d19c029413079741f771f7111513d5d640ea05c494","token_span":[5370,5376],"core_character_span":[15077,15096],"text":"At Quinn, no edges."},
+    {"response_id":"atlasresponsev1_324adfbe2c5a2d06770164539f0577458e8623139491bef823c29d8df676df74","prompt_sha256":"782a5d2dd9d9d0509e6599dc8a7743a769a53b488c02cc8b6ee9516a787dd5c1","token_span":[7988,8001],"core_character_span":[18353,18380],"text":"Word 79: rug → r-u-g → yes."},
+    {"response_id":"atlasresponsev1_92e2162d18d285c53d035a9e868103afc77d8c84f5e082e8af01efe9cd16b14a","prompt_sha256":"88d51ab098bb43f9b2c2ebd684955fec331529ba8eb45c82fcdeb13c4c322be7","token_span":[3885,3894],"core_character_span":[12906,12945],"text":"So yes, the simulation stops at Xavier."},
+    {"response_id":"atlasresponsev1_ed25957cd204aa7b2f432d6506d70357cd60da09aa54cb6664ce5eb9968dd13b","prompt_sha256":"2fe2befdf0250b221853c315ace2f4729b0bdbac4da03ad2dc44ca0e5e15fc06","token_span":[547,553],"core_character_span":[1726,1749],"text":"Wait, that's important."},
+    {"response_id":"atlasresponsev1_324adfbe2c5a2d06770164539f0577458e8623139491bef823c29d8df676df74","prompt_sha256":"782a5d2dd9d9d0509e6599dc8a7743a769a53b488c02cc8b6ee9516a787dd5c1","token_span":[8001,8009],"core_character_span":[18382,18398],"text":"So total Y = 12."}
+  ],
+  "residual_fragment_diagnostics": [
+    {"response_id":"atlasresponsev1_115b1e23a9e361438d8ed7fc883059bfe2fa2875dfa29edf7e0e09aacfac6563","prompt_sha256":"b5490108cc0d0b9220cfac2363a240dd8248b762e2dd91222b62ddc033d087d4","token_span":[892,988],"core_character_span":[2393,2506],"text":"Let's see: 36630^2 = (36600 + 30)^2 = 36600^2 + 2*36600*30 + 30^2 = 1,339,560,000 + 2,196,000 + 900 = 1,341,756,9","source_interval_token_span":[892,991],"source_interval_width_tokens":99,"piece_role":"first"},
+    {"response_id":"atlasresponsev1_115b1e23a9e361438d8ed7fc883059bfe2fa2875dfa29edf7e0e09aacfac6563","prompt_sha256":"b5490108cc0d0b9220cfac2363a240dd8248b762e2dd91222b62ddc033d087d4","token_span":[988,991],"core_character_span":[2506,2509],"text":"00.","source_interval_token_span":[892,991],"source_interval_width_tokens":99,"piece_role":"last"},
+    {"response_id":"atlasresponsev1_324adfbe2c5a2d06770164539f0577458e8623139491bef823c29d8df676df74","prompt_sha256":"782a5d2dd9d9d0509e6599dc8a7743a769a53b488c02cc8b6ee9516a787dd5c1","token_span":[833,929],"core_character_span":[2712,2907],"text":"Starting with \"ivy\" (1), \"hat\" (2), \"hem\" (3), \"owl\" (4), \"kitten\" (5), \"fig\" (6), \"gin\" (7), \"inoculate\" (8), \"clamp\" (9), \"zip\" (10), \"bring\" (11), \"vaccination\" (12), \"bring\" (13), \"shrub\" (14","source_interval_token_span":[833,1425],"source_interval_width_tokens":592,"piece_role":"first"},
+    {"response_id":"atlasresponsev1_324adfbe2c5a2d06770164539f0577458e8623139491bef823c29d8df676df74","prompt_sha256":"782a5d2dd9d9d0509e6599dc8a7743a769a53b488c02cc8b6ee9516a787dd5c1","token_span":[1409,1425],"core_character_span":[3784,3811],"text":"8), \"rug\" (79), \"owl\" (80).","source_interval_token_span":[833,1425],"source_interval_width_tokens":592,"piece_role":"last"}
+  ],
   "provider": {
     "name": "openai",
     "model": "gpt-5.6-luna",
