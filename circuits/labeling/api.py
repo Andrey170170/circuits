@@ -162,14 +162,22 @@ def openai_usage(raw: Any) -> Usage:
     input_details = _get(raw, "input_tokens_details", {})
     output_details = _get(raw, "output_tokens_details", {})
     cached = _integer(_get(input_details, "cached_tokens")) or 0
+    # Responses input_tokens is the inclusive total. Cache reads and cache
+    # writes are separately priced subsets of that total, so both must be
+    # removed before assigning the ordinary-input bucket. cache_write_tokens
+    # is currently an extra field in the OpenAI Python SDK model, but _get
+    # deliberately handles both its object and serialized-dict forms.
+    cache_write = _integer(_get(input_details, "cache_write_tokens")) or 0
     reasoning = _integer(_get(output_details, "reasoning_tokens"))
     return Usage(
         input_tokens=input_tokens,
         uncached_input_tokens=(
-            max(0, input_tokens - cached) if input_tokens is not None else None
+            max(0, input_tokens - cached - cache_write)
+            if input_tokens is not None
+            else None
         ),
         cache_read_tokens=cached,
-        cache_write_tokens=0,
+        cache_write_tokens=cache_write,
         output_tokens=output_tokens,
         reasoning_tokens=reasoning,
     )

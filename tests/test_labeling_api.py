@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 from circuits.labeling.api import (
     FakeBackend,
@@ -172,12 +174,16 @@ def test_usage_normalization() -> None:
         {
             "input_tokens": 120,
             "output_tokens": 30,
-            "input_tokens_details": {"cached_tokens": 20},
+            "input_tokens_details": {
+                "cached_tokens": 20,
+                "cache_write_tokens": 30,
+            },
             "output_tokens_details": {"reasoning_tokens": 10},
         }
     )
-    assert openai.uncached_input_tokens == 100
+    assert openai.uncached_input_tokens == 70
     assert openai.cache_read_tokens == 20
+    assert openai.cache_write_tokens == 30
     assert openai.reasoning_tokens == 10
 
     anthropic = anthropic_usage(
@@ -191,3 +197,29 @@ def test_usage_normalization() -> None:
     assert anthropic.uncached_input_tokens == 100
     assert anthropic.cache_write_tokens == 5
     assert anthropic.cache_read_tokens == 20
+
+
+def test_openai_usage_normalizes_cache_write_receipt_dict_and_sdk_object() -> None:
+    fixture = json.loads(
+        Path("tests/fixtures/openai_responses_usage_cache_write.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    from_dict = openai_usage(fixture)
+    from_object = openai_usage(
+        SimpleNamespace(
+            input_tokens=fixture["input_tokens"],
+            input_tokens_details=SimpleNamespace(**fixture["input_tokens_details"]),
+            output_tokens=fixture["output_tokens"],
+            output_tokens_details=SimpleNamespace(**fixture["output_tokens_details"]),
+        )
+    )
+
+    assert from_dict == from_object
+    assert from_dict.input_tokens == 1158
+    assert from_dict.uncached_input_tokens == 3
+    assert from_dict.cache_read_tokens == 0
+    assert from_dict.cache_write_tokens == 1155
+    assert from_dict.output_tokens == 401
+    assert from_dict.reasoning_tokens == 102

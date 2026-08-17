@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from circuits.labeling.api import openai_usage
 from circuits.labeling.config import LabelingRecipe, load_recipe
 from circuits.labeling.pricing import estimate_cost, load_price_snapshot
 from circuits.labeling.schema import Usage
@@ -100,6 +101,30 @@ def test_current_openai_batch_prices_include_cache_buckets() -> None:
     )
     assert estimate.complete
     assert estimate.total_cost == pytest.approx(1.745)
+
+
+def test_live_openai_cache_write_receipt_uses_three_input_price_buckets() -> None:
+    snapshot = load_price_snapshot(CONFIG_ROOT / "prices-2026-07-30.json")
+    raw_usage = json.loads(
+        Path("tests/fixtures/openai_responses_usage_cache_write.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    estimate = estimate_cost(
+        snapshot,
+        provider="openai",
+        model="gpt-5.6-luna",
+        transport="live",
+        usage=openai_usage(raw_usage),
+    )
+
+    assert estimate.complete
+    assert estimate.input_cost == pytest.approx(0.0000006)
+    assert estimate.cache_read_cost == 0
+    assert estimate.cache_write_cost == pytest.approx(0.00028875)
+    assert estimate.output_cost == pytest.approx(0.0004812)
+    assert estimate.total_cost == pytest.approx(0.00077055)
 
 
 def test_unknown_rate_fails_open_as_incomplete_not_zero() -> None:
