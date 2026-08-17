@@ -48,17 +48,30 @@ The reusable collection of independent target-local T5 graphs selected to evalua
 panels, without being optimized for a later motif hypothesis.
 _Avoid_: Witness corpus, dense trajectory corpus
 
+**Coarse sampling tag**:
+One mutually exclusive, graph-blind region category used only to enrich the first tracing-wave
+sample. The allowed tags are active task work, evaluation or revision, intermediate commitment,
+final answer, other semantic text, surface or control, and uncertain. A tag is retained as
+selection provenance but is not an adequacy label, motif label, or claim about internal work.
+_Avoid_: Process family, semantic ground truth, ADAG label
+
 **Coarse selection layer**:
-A frozen graph-blind annotation projection used to stratify and sample adequacy targets. It records
-broad functional regime, process family, surface form, event and response identity, uncertainty,
-and provenance without claiming an internal computation.
-_Avoid_: Ground truth, final ontology, ADAG label
+The frozen set of coarse sampling tags, structural identities, and sampling metadata used to build
+the first tracing wave. It determines where traces are collected but does not define later
+adequacy strata, motif classes, or scientific endpoints.
+_Avoid_: Descriptive annotation layer, adequacy ontology, target truth
 
 **Descriptive annotation layer**:
 A versioned graph-blind set of finer token and event annotations used to condition adequacy
 measurements after target selection. It may grow while tracing runs but cannot retroactively change
 the frozen selection reason for a target.
 _Avoid_: Selection manifest, neuron interpretation
+
+**Trace wave**:
+A separately frozen set of target positions selected under one declared annotation and sampling
+policy. Wave one uses only coarse sampling tags; a smaller wave two may repair refined-label
+coverage deficits before graph or cluster outcomes are inspected.
+_Avoid_: Retry, silent extension, outcome-guided target addition
 
 **ADAG cluster description**:
 A bounded natural-language summary or abstention for one fitted cluster, evaluated separately from

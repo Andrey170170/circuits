@@ -281,14 +281,17 @@ independent, reviewable axes at both event/span and token level:
 - correctness or attempted/ambiguous status, kept separate from semantic type;
 - suggestion source, review state, annotator revision, and ambiguity notes.
 
-The plan distinguishes two graph-blind annotation products with different freeze times:
+The plan distinguishes two graph-blind annotation products with different freeze times and
+different scientific roles:
 
-1. **Coarse selection layer.** This is the minimal pre-trace contract. It assigns every candidate
-   target independent broad fields for local functional regime, process family, surface form,
-   event/span identity, response/prompt identity, confidence, and annotation provenance. It is
-   allowed to retain `unknown` and ambiguous cases. A simpler derived selection stratum and frozen
-   sampling weight are computed from these fields. This layer, its review audit, and its exact
-   target-conversion policy freeze before the adequacy target manifest or any scientific trace.
+1. **Coarse selection layer.** This is a sampling instrument only. Each text unit receives exactly
+   one coarse sampling tag: `active_task_work`, `evaluation_or_revision`,
+   `intermediate_commitment`, `final_answer`, `other_semantic_text`, `surface_or_control`, or
+   `uncertain`. The artifact also retains event/unit, response, prompt, token, confidence, and
+   annotation provenance. These tags enrich the first tracing wave and remain attached only as
+   selection provenance; they do not define adequacy strata, motif classes, semantic ground truth,
+   or scientific endpoints. This layer, its audit, and its target-conversion and sampling policy
+   freeze before the first-wave target manifest or any scientific trace.
 2. **Descriptive annotation layer.** This retains and refines the richer ontology above, including
    process signatures, detailed roles, operation/state types, modality, correctness/status, and
    event-relative structure. It may be refined in new graph-blind versions while tracing runs. It
@@ -297,12 +300,34 @@ The plan distinguishes two graph-blind annotation products with different freeze
    descriptive version and fields used by an adequacy measurement freeze before that measurement
    opens cluster assignments or labels.
 
-The frozen v9 automatic draft is a seed for both layers, not reviewed semantic truth. Exhaustive
+The frozen v9 automatic draft is evidence available to both annotation efforts, not reviewed
+semantic truth and not the coarse schema itself. Exhaustive
 manual painting of every rich axis over all 842,007 tokens is not a prerequisite for tracing.
-Semantic-heavy coarse fields may use a structured LLM annotator followed by graph-blind human audit
-of balanced examples, conflicts, rare strata, and low-confidence cases. Later descriptive versions
-may add information to already traced targets, but they cannot retroactively change why a target
-entered the frozen trace bank.
+The coarse tags may use direct structured LLM API calls followed by graph-blind human audit of
+balanced examples, conflicts, rare tags, boundary cases, and low-confidence cases. Later
+descriptive versions may add information to already traced targets, but they cannot retroactively
+change why a target entered the frozen trace bank or use coarse tags as semantic evidence.
+Luna is the expected low-cost initial annotator candidate, but the exact provider/model snapshot,
+API surface, and decoding contract freeze only after a small qualification pass.
+
+For the initial coarse annotator, prefer a narrow reproducible pipeline over a general agent:
+
+1. deterministically recover exact token offsets, serialization boundaries, surface/control
+   regions, and bounded sentence/clause/line units;
+2. issue direct structured API calls that ask for only the exclusive coarse tag on bounded units or
+   windows, with task/prompt context and limited neighboring text;
+3. run programmatic gap, overlap, boundary, and low-confidence repair calls where needed; and
+4. preserve the exact model identity, prompts, request/response bodies, unit identities,
+   confidence, validation outcome, and final proposal.
+
+The refined semantic task is deliberately tested under increasing annotation machinery rather than
+assuming an agentic harness is required. First measure raw structured API performance with one
+narrow axis or chunk per call. Then, if available and reproducibly qualified, test managed
+multi-turn or tool-calling API orchestration that incrementally writes and validates an annotation
+ledger. Build a Pi-based agentic annotator with frozen tools, prompts, iteration limits, stopping
+conditions, and full edit provenance only if the simpler approaches are insufficient. All three
+conditions remain graph-blind, preserve uncertainty, and require the same held-out human audit;
+none may inspect traces or ADAG outputs.
 
 Automatic annotation may classify observable form broadly but is not semantic ground truth. Use
 high-precision regular expressions, lexical rules, or another deterministic local classifier to
@@ -454,28 +479,46 @@ label refinement should use that time; neither waits for all traces, and neither
 scientific cluster outcomes. Real-data atlas fitting begins only when the required trace tranche and
 the exact descriptive annotation version for that measurement are both frozen.
 
-### 1A. Freeze the coarse selection layer and adequacy trace bank
+### 1A. Freeze the coarse selection layer and first-wave trace bank
 
-Derive a compact selection layer from the graph-blind annotations. Each candidate target retains
-independent fields for:
+Assign each bounded text unit one exclusive coarse sampling tag:
 
-- local functional regime: process execution, state/information retrieval,
-  verification/correction, result/answer commitment, planning/restatement/explanation,
-  structural/surface serialization, or uncertain;
-- broad process family, including arithmetic/numeric transformation, graph/relation traversal,
-  state/sequence update, comparison/selection, encoding/decoding/extraction, other task-specific
-  process, none, or unknown;
-- surface form, event/span ID, event-relative position, prompt/response identity, suggestion source,
-  confidence, and review status.
+- **`active_task_work`:** actively carries out a task-relevant transformation, traversal,
+  retrieval, selection, comparison, count, calculation, or state update;
+- **`evaluation_or_revision`:** checks, verifies, backtracks, corrects, or reconsiders work;
+- **`intermediate_commitment`:** explicitly settles or reports a non-final result/state;
+- **`final_answer`:** states or serializes the response's final commitment;
+- **`other_semantic_text`:** planning, explanation, restatement, task-description text, commentary,
+  or a process mention that is not currently executed;
+- **`surface_or_control`:** formatting, punctuation-only, whitespace/control, tags, JSON syntax, or
+  other structural material; and
+- **`uncertain`:** the exclusive fallback when the unit or its boundary cannot be assigned
+  responsibly.
 
-Use these fields to predeclare both a balanced diagnostic distribution and a natural-frequency
-distribution. Sampling need not be uniform. Oversample rare regimes and matched controls when that
-improves power, but preserve inclusion probabilities, target weights, and the population to which
-each result applies. Sample hierarchically by prompt, response, event, then token so subtokens and
-nearby targets from one event are never treated as independent evidence. Include same-surface/
-different-role and same-role/different-surface comparisons. Freeze an ordered manifest so the first
-completed trace tranches already contain usable repeatability, favorable, mixed, and specificity
-panels without making partial completion a new target-selection decision.
+These are intentionally broader than process families and roles. For example, following a graph
+edge and dividing two values are both `active_task_work`; their distinction belongs only to the
+descriptive layer. A verification sentence containing division remains `evaluation_or_revision`.
+
+Construct the target bank from a frozen mixture of proposal routes rather than stratified-uniform
+sampling:
+
+1. a process-enriched route favors `active_task_work` and observable anchors such as values,
+   entities, operators, relation symbols, and explicit task-process cues;
+2. an evaluation/commitment route gives rare checks, revisions, intermediate commitments, and final
+   answers adequate coverage;
+3. a diversity route limits domination by long responses or frequent task families and balances
+   prompt, response, coarse unit, position, and span length;
+4. a uniform reserve samples ordinary semantic and surface/control positions without enrichment;
+   and
+5. an uncertainty reserve samples ambiguous units that may hide unusual process forms.
+
+Within a selected unit, sample a bounded combination of observable anchors, unit onset/terminal,
+interior positions, and a small local halo rather than either tracing the whole span or choosing one
+uniform token. Freeze all proposal routes, caps, random seeds, inclusion probabilities, and target
+weights after the coarse-yield census. Preserve hierarchical prompt/response/unit blocking so
+nearby token graphs are not treated as independent experimental evidence. The ordered manifest
+should prioritize useful early coverage without turning partial completion into a new selection
+decision.
 
 The working planning envelope is approximately 30,000–40,000 independent T5 targets with a goal of
 finishing production within about one week. This is neither a frozen count nor launch authority.
@@ -483,10 +526,19 @@ The exact count follows the coarse-label yield inventory, target-context resourc
 array throughput, per-panel minimum support, and failure/resume policy. Reduce or expand only through
 the frozen nested target-bank tiers, never by inspecting partial scientific outcomes.
 
-The coarse annotations define context strata and selection only. They do not enter the ADAG
-similarity or clustering objective and do not assert that the model internally performed the
-painted process. Any target added after inspecting a graph or cluster belongs to a separately
-versioned discovery or follow-up bank.
+The coarse tags define selection only. They do not enter the ADAG similarity or clustering
+objective, define adequacy panels or motif classes, condition scientific endpoint estimates, or
+assert that the model internally performed the tagged work. Later analyses use only separately
+frozen descriptive annotations. The coarse tag and proposal route remain available solely to audit
+how the trace sample was obtained.
+
+After descriptive refinement, audit the already traced bank against the refined label inventory.
+If important graph-blind semantic cells are too sparse or distorted, a smaller second wave is
+permitted. Its deficit rule, targets, and manifest must freeze before any graph, cluster, or ADAG
+label outcome is inspected; it may use refined textual annotations but never preliminary ADAG
+results. Record wave identity and selection probability for every target and never silently append
+wave two to wave one. If a deficit is discovered only after scientific outcomes are opened, any
+new targets are exploratory follow-up data under a new protocol.
 
 ### 1B. Trace the atlas-fit corpus
 
@@ -1039,9 +1091,9 @@ The first frozen cohort directory (`atlas-responses-backfilled-v1`, manifest SHA
 superseded. Version 2 adds exact freeze-implementation identities and source-run bindings; only
 version 2 is admitted downstream.
 
-1. Derive and audit the coarse selection layer from the canonical v9 machine draft, using structured
-   semantic annotation where deterministic rules are insufficient; inventory balanced and natural-
-   frequency yields without requiring exhaustive rich-axis manual review.
+1. Build and audit the seven-value coarse sampling-tag layer with deterministic structure plus
+   direct structured LLM API calls; use it only to inventory and enrich wave-one target selection,
+   without requiring exhaustive rich-axis manual review.
 2. Freeze the ordered, prompt/response/event-blocked adequacy target bank, inclusion weights,
    composition cells, and exact T5 target-context resource tiers.
 3. Start primary T5 production; optionally trace the identical bank with CU5 in a separate sealed
@@ -1090,8 +1142,10 @@ follow when the required traces and annotation version are frozen. The source au
 failure mechanisms and paper/code discrepancy is
 `experiments/process_witness/ADAG_POLYSEMANTICITY_AND_CLUSTERING_AUDIT.md`.
 
-The next concrete design task is the coarse selection schema and sampling matrix. It must support
-the ordered adequacy panels and direct mechanism tests without pretending that semantic text labels
-are neuron-function ground truth. Exact trace count, class quotas, inclusion weights, partial-wave
-ordering, and resource tiers remain to be frozen from the yield inventory. No atlas cluster,
-description, motif, or dense trajectory has been opened under this design.
+The coarse schema is now a seven-value sampling-only instrument. The next concrete design task is
+its exact unit segmentation, direct-API annotation protocol, human acceptance audit, and
+priority-weighted wave-one sampling matrix. Exact trace count, proposal-route quotas, inclusion
+weights, partial-wave ordering, and resource tiers remain to be frozen from the yield inventory.
+Refined annotation may justify a smaller, separately frozen second tracing wave before any ADAG
+outcomes are opened. No atlas cluster, description, motif, or dense trajectory has been opened
+under this design.

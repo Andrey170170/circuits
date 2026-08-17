@@ -177,3 +177,29 @@ one separately named nuisance-contamination fit after the primary state freezes.
 adequacy verdict permits a separately frozen motif study. Brittle outcomes are localized into
 controllable, repairable, representation-level, or fundamental failures before any revised method
 is attempted.
+
+## 2026-08-16 — Coarse tags restricted to sampling; staged refinement retained
+
+The pre-trace coarse artifact is now explicitly a **sampling instrument**, not an early semantic
+ontology. Each bounded unit receives one exclusive tag: `active_task_work`,
+`evaluation_or_revision`, `intermediate_commitment`, `final_answer`, `other_semantic_text`,
+`surface_or_control`, or `uncertain`. The tags are retained only to reproduce and audit why targets
+entered wave one. They cannot define adequacy strata, motif classes, or scientific endpoints.
+
+Wave-one selection will be a frozen priority-weighted mixture rather than stratified-uniform
+sampling: process enrichment, evaluation/commitment coverage, prompt/response/unit diversity, a
+uniform reserve, and an uncertainty reserve. Target conversion may use observable anchors,
+unit boundaries, sampled interiors, and a small local halo. Exact quotas and the approximately
+30,000–40,000 target count remain pending the coarse-yield census and resource gates.
+
+Coarse semantics will use direct structured LLM API calls on deterministic bounded units/windows,
+with full request/response provenance and graph-blind human acceptance auditing. Rich annotation
+will compare raw narrow API calls first, then a reproducibly qualified managed multi-turn or
+tool-calling API workflow, and only then a Pi-based agentic harness if simpler approaches are
+insufficient. Luna is the expected low-cost coarse candidate; its exact model and API contract are
+not yet frozen.
+
+After descriptive refinement, a smaller second trace wave may fill refined-label coverage deficits.
+That decision must use only graph-blind annotation coverage and freeze before any ADAG graph,
+cluster, or generated label outcome is opened. The wave remains separately identified; no silent
+extension of wave one is permitted.

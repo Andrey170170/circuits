@@ -7,11 +7,57 @@ not claims about correctness, internal computation, causality, or faithfulness.
 **Current sequencing note (2026-08-16):** this workstation and its v9 draft seed the richer
 **descriptive annotation layer**. Exhaustive review of every axis is no longer a prerequisite for
 tracing. Production tracing instead waits for a separately frozen **coarse selection layer** and
-target-conversion manifest derived from broad regime, process-family, surface, event/response,
-uncertainty, and provenance fields. Descriptive review may continue graph-blind while tracing runs.
-Until that coarse schema and conversion policy freeze, do not treat UI completion or `usage` paint
-as an authoritative trace manifest. The governing sequence is in
+target-conversion manifest whose seven exclusive tags are used only to enrich wave-one sampling.
+Those tags are not adequacy labels, motif labels, or semantic ground truth. Descriptive review may
+continue graph-blind while tracing runs. Until that coarse schema and conversion policy freeze, do
+not treat UI completion or `usage` paint as an authoritative trace manifest. The governing sequence
+is in
 `plans/2026-08-11-bonafide-process-witness-plan.md`.
+
+## Coarse sampling tags
+
+The coarse artifact is separate from this rich token-painting ontology. It assigns each bounded
+text unit exactly one of:
+
+| Tag | Sampling meaning |
+| --- | --- |
+| `active_task_work` | The text is actively carrying out some task-relevant work, regardless of process family. |
+| `evaluation_or_revision` | The text checks, verifies, corrects, backtracks, or reconsiders work. |
+| `intermediate_commitment` | The text explicitly settles or reports a non-final result or state. |
+| `final_answer` | The text states or serializes the final commitment. |
+| `other_semantic_text` | Planning, explanation, restatement, task description, commentary, or a nonexecuted process mention. |
+| `surface_or_control` | Formatting, punctuation-only, whitespace/control, tags, JSON syntax, or structural material. |
+| `uncertain` | Meaning or boundary is genuinely unresolved. |
+
+These tags only improve the expected hit rate of the first tracing wave. Do not copy them into
+adequacy strata or motif definitions. Keep them only to reproduce and audit target selection.
+Wave one uses a priority-weighted mixture with process enrichment, evaluation/commitment coverage,
+prompt/response diversity, a uniform reserve, and an uncertainty reserve. After rich annotation,
+a smaller second tracing wave may fill graph-blind refined-label deficits, but it must freeze before
+any ADAG outcome is opened.
+
+The initial coarse detector uses deterministic token/serialization/unit recovery plus direct
+structured LLM API calls on bounded units or windows. The task is deliberately narrow: return one
+coarse tag, confidence, and boundary concerns. Preserve every request, raw response, model/prompt
+identity, and reconciliation decision. A balanced human audit must emphasize process-tag recall,
+boundary quality, rare tags, and low-confidence cases. Luna is the expected low-cost first
+candidate, but its exact model/API/decoding contract remains unfrozen until a small qualification
+pass succeeds.
+
+## Refinement execution options
+
+Rich annotation remains a separate experiment. Evaluate its machinery in increasing order of
+complexity:
+
+1. raw structured API calls, one narrow axis or chunk per call;
+2. a reproducibly qualified managed multi-turn or tool-calling API workflow that incrementally
+   updates and validates an annotation ledger; and
+3. only if those are inadequate, a Pi-based agentic annotator with frozen tools, prompts, iteration
+   limits, stopping conditions, and full edit provenance.
+
+Compare these approaches on a held-out graph-blind human audit rather than assuming greater
+orchestration gives better annotations. All approaches may abstain and must remain blind to traces,
+graphs, clusters, labels, and adequacy outcomes.
 
 ## Loading and saving
 
