@@ -385,3 +385,30 @@ because the reviewer saw the full response, but future full-corpus annotation re
 original 96-token maximum under a new version and receives a bounded compatibility check before
 scale-up. The immutable comparison bundle manifest self-hash is
 `6b084c569697f119248cae86ac9394f5d1bf395c9127fc989dbf9702ea083885`.
+
+## 2026-08-17 — 96-token v4 compatibility qualification frozen before submission
+
+The authoritative v4 compatibility qualification is
+`qualification-96-token-compatibility-v2`; the earlier v1 draft is preserved but superseded because
+it used duplicate short controls and did not freeze the full-corpus boundary diff or executable
+human/model gate. V4 leaves every v1-v3 artifact and unit identity unchanged. It uses the new
+`token-exclusive-sentence-line-quote-aware-v2` policy with a 96-token safety cap and records the
+user-confirmed `29.` boundary correction in a separate post-seal correction ledger rather than
+rewriting the v3 human review.
+
+The frozen panel has 24 targets in 15 full-response contexts: 14 repairs covering all 13 observed
+v3 defect groups, six diverse unchanged short controls, and four residual-fragment diagnostics
+from 99-token and 592-token source intervals. The full 188-response audit records 77 responses with
+changes, 162 conservative quote-aware boundaries added, zero legacy boundaries removed, and zero
+non-token-aligned additions. Three body-identical refined-zero-shot Luna-medium replicas per
+context produce 45 native-Batch requests. The conservative no-cache/full-output authorization
+bound is USD 0.594966.
+
+Qualification manifest self-hash is
+`2d977c8432abe15f8183acad7db731ed1e42a6e169639879a043427b1a20e0b1`; the globally blind review
+packet self-hash is `55bab283f1cdd680c50c7f29c146cc156962da10d85f0751abe34de429613e2f`.
+Both artifacts validate read-only and the review packet contains 24 items across the same 15 full
+responses. No provider request has been submitted. Submission remains blocked on launch review;
+full-corpus annotation remains blocked until the compatibility Batch completes, all 24 human
+decisions are globally sealed, and the provenance-bound evaluator applies the frozen human and
+model gates.

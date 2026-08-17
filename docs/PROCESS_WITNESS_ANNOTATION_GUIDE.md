@@ -113,11 +113,21 @@ the intended unit and attached it to the following sentence. These are segmentat
 label disagreements to be resolved by voting.
 
 Future full-corpus coarse annotation must therefore use a new version with the original 96-token
-maximum while retaining the same token-exclusive sentence/line policy. Do not rewrite v3 units or
-reuse their unit identities. Before scaling, run a bounded compatibility check containing the
-observed merge pairs, the quotation-boundary failure, and ordinary short units. The 96-token policy
-should preserve semantic sentences when possible; its limit is a safety cap, not a desired unit
-length.
+maximum and a separately identified quote-aware token-exclusive sentence/line policy. Do not
+rewrite v3 units or reuse their unit identities. The quote-aware rule adds a boundary only for
+sentence punctuation followed by a closing double quotation mark, same-line whitespace, and an
+ASCII uppercase continuation; it does not treat every quoted period as a sentence boundary.
+Before scaling, run a bounded compatibility check containing the observed merge pairs, the
+quotation-boundary failure, ordinary short units, and residual fragments from legitimate source
+sentences longer than 96 tokens. The 96-token limit is a safety cap, not a desired unit length.
+
+The frozen v4 compatibility qualification contains 24 unique targets in 15 full-response contexts:
+14 repaired units covering every v3 merge/split group, six semantically diverse unchanged short
+controls, and the first and last fragments from the shortest and longest source intervals that
+still exceed 96 tokens. The four residual-fragment diagnostics are reported separately and are not
+part of the repair gate. The selected refined-zero-shot prompt is run as three body-identical Luna
+medium replicas through native Batch. Scale-up remains blocked until all 24 blind human decisions
+are globally sealed and the identity-bound compatibility evaluator passes its frozen thresholds.
 
 ## Loading and saving
 
