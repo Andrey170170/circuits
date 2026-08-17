@@ -304,3 +304,10 @@ target-only inline markup, medium reasoning, strict output, and identical target
 holdout excludes the development units and remains graph-blind and globally human-blind until its
 review finishes. Dense all-unit markup is retained only as completed sensitivity evidence, not the
 new primary protocol.
+
+The frozen design target is 24 unique prompt/response windows and 144 semantic units, exactly one
+window per source-by-position-by-hidden-hint cell. Two arms and three identical-body replicas yield
+144 physical Batch requests and 864 physical unit decisions. Few-shot is rejected if it introduces
+more than two additional human process-bearing false negatives; it is preferred only with at least
+five net paired admissible-agreement wins and no increase in stable high-confidence errors.
+Otherwise the arms tie and zero-shot remains the parsimonious production proposal.

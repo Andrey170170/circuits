@@ -1167,7 +1167,11 @@ intermediate, other, then surface. `uncertain` positively represents a defensibl
 insufficient unit boundary rather than a failure to force a label.
 
 The next qualification uses a fresh graph-blind holdout and only the full-response
-`target_only_markup` presentation. It compares two matched arms:
+`target_only_markup` presentation. The holdout contains 24 windows of six consecutive semantic
+units: one unique prompt/response for each source type by early/middle/late position by hidden v9
+hint cell, for 144 unique units. It excludes every prompt hash used in v1/v2. Deterministic global
+matching, rather than a greedy cell walk, freezes the prompt assignment before provider calls. It
+compares two matched arms:
 
 1. the refined definitions with no demonstrations;
 2. the identical definitions plus a frozen pack of short contrastive micro-context examples.
@@ -1182,7 +1186,9 @@ independent-voter confidence estimate.
 The comparison freezes before submission: human blind agreement, paired arm wins/losses,
 replica-profile counts, tag confusions, boundary concerns, abstention, broad selection-family
 stability, usage, cache buckets, and cost. The fresh human holdout remains globally blind until
-review completion. Few-shot prompting is preferred only if its human agreement and stability
-improve without suppressing legitimate uncertainty or causing a material per-family regression.
-The qualification freezes no production coarse corpus, target bank, trace, adequacy result, motif,
-or witness.
+all 144 primary judgments are locked; review order randomizes response blocks while preserving the
+six within-response units. Few-shot prompting is rejected if it creates more than two additional
+human process-bearing false negatives. It is called improved only with at least five net paired
+admissible-agreement wins and no increase in stable high-confidence errors. Otherwise the arms tie
+and zero-shot is retained by parsimony while three-vote aggregation remains. The qualification
+freezes no production coarse corpus, target bank, trace, adequacy result, motif, or witness.

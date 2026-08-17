@@ -93,7 +93,10 @@ execution, and a genuinely incomplete boundary. Demonstrations come only from sy
 the completed development review, never the fresh evaluation holdout. Each arm receives three
 identical-protocol replicas with Luna medium reasoning. The comparison retains vote profiles,
 human agreement, boundary behavior, abstention, usage, and cost rather than selecting a protocol
-from majority agreement alone.
+from majority agreement alone. The fresh holdout is a 24-cell factorial over source type,
+early/middle/late position, and four hidden v9 selection hints, with one unique prompt/response and
+six consecutive semantic units per cell. All 144 human judgments are sealed before any Luna label
+or vote stability is revealed.
 
 ## Loading and saving
 
