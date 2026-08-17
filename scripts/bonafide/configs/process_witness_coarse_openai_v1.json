@@ -1,0 +1,60 @@
+{
+  "schema_version": "adag.process-witness.coarse-annotation-config.v1",
+  "config_id": "process-witness-coarse-openai-v1",
+  "claim_boundary": "Coarse tags are unreviewed trace-sampling metadata only. They are not adequacy labels, motif labels, correctness judgments, or evidence of internal computation.",
+  "qualification_claim_boundary": "The 72 unique focal units are a small engineering and semantic smoke test. They cannot estimate seven-tag or per-stratum population error rates.",
+  "source": {
+    "annotation_set_id": "process-witness-graph-blind-auto-v9",
+    "workstation_bundle_sha256": "95a5627768b2e5f05920aaab91f6e1cd9c00688560f9d821ffc2d8d69c7ceeea",
+    "cohort_id": "qwen3-thinking-process-witness-atlas-responses-backfilled-v2",
+    "cohort_manifest_sha256": "d4cbb862333b62d5ae108fdc2d02aab8ab47f4b729438d80f1b880f21d1d76f6",
+    "cohort_index_sha256": "c13cdf45a28b350ade8ec578ec4adc0eac740ecc5dec1f32869439ae7c5d9cbc"
+  },
+  "segmentation": {
+    "policy_id": "token-exclusive-sentence-line-v1",
+    "maximum_semantic_unit_tokens": 96
+  },
+  "qualification": {
+    "unique_window_count": 12,
+    "focal_units_per_window": 6,
+    "neighbor_units_each_side": 1,
+    "repeat_window_indices": [0, 5, 7, 9],
+    "selection_seed": 20260816
+  },
+  "provider": {
+    "name": "openai",
+    "model": "gpt-5.6-luna",
+    "api_surface": "responses",
+    "transport": "live",
+    "api_key_env": "OPENAI_API_KEY",
+    "reasoning": {"effort": "low"},
+    "max_output_tokens": 3200,
+    "store": false,
+    "price_snapshot": "labeling/prices-2026-07-30.json",
+    "input_token_overhead_per_request": 4096
+  },
+  "tags": {
+    "active_task_work": "The unit actively carries out task-relevant work: transformation, retrieval, traversal, comparison, selection, counting, calculation, or state update.",
+    "evaluation_or_revision": "The unit primarily checks, verifies, corrects, backtracks, or reconsiders work, even if it contains task operations.",
+    "intermediate_commitment": "The unit primarily settles or reports a non-final result or state without substantial task operation in that same unit.",
+    "final_answer": "The unit states or serializes the final commitment.",
+    "other_semantic_text": "The unit plans, explains, restates, describes instructions, comments, or mentions a process without carrying it out.",
+    "surface_or_control": "The unit is only formatting, punctuation, whitespace/control, a tag, JSON syntax, or other structural material.",
+    "uncertain": "The unit's primary function or boundary is genuinely unresolved; do not force another tag."
+  },
+  "boundary_concerns": [
+    "split_needed",
+    "merge_previous",
+    "merge_next",
+    "meaning_unclear"
+  ],
+  "decision_precedence": [
+    "final_answer",
+    "evaluation_or_revision",
+    "active_task_work",
+    "intermediate_commitment",
+    "other_semantic_text",
+    "surface_or_control",
+    "uncertain"
+  ]
+}
