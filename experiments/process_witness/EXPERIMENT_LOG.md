@@ -203,3 +203,26 @@ After descriptive refinement, a smaller second trace wave may fill refined-label
 That decision must use only graph-blind annotation coverage and freeze before any ADAG graph,
 cluster, or generated label outcome is opened. The wave remains separately identified; no silent
 extension of wave one is permitted.
+
+## 2026-08-16 — Coarse qualification smoke prepared; external send pending
+
+The committed `process-witness-coarse-openai-v1` implementation partitions all 842,007 frozen
+response tokens exactly once. The real-corpus census contains 94,384 units: 74,698 semantic units
+pending LLM classification, 19,500 structural/control units assigned deterministically, and 186
+exact terminal answer-serialization units. The two historical reasoning-only responses receive no
+fabricated final-answer unit.
+
+The first Luna packet is a deliberately small qualification smoke, not an error-rate study: 12
+unique windows, six focal semantic units each, and four interleaved body-identical repeats. Its 72
+unique focal units cross complex/graph sources with all four hidden v9 sampling hints and balance
+early/middle/late response positions. V9 suggestions select strata only and never enter provider
+input. The request body contains the original task prompt plus a bounded response window, and the
+strict output asks only for one coarse tag, confidence, and boundary concerns per focal unit.
+
+The immutable offline bundle has manifest SHA-256
+`c32d1e111128afc8b78137df0897b973e8bc76872d7ac2e4a12899121e2ca5c9` and binds commit
+`81f46bea1b4f79f05a0d1e9713a822e8d380aa9e`. Its conservative live ceiling is $0.0964352; the
+runner records pre-call intents, raw provider receipts, resolved model, normalized usage, per-call
+cost, and cumulative cost, with SDK retries disabled. No API request was sent at this checkpoint:
+the external-send safety gate requires explicit approval to transmit BonaFide-derived task prompts
+and bounded response windows to `https://api.openai.com/v1`.
