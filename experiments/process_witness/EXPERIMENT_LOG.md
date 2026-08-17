@@ -337,3 +337,27 @@ model decisions or reveal payload; all 144 human judgments must be sealed before
 identity-bound comparison/reveal artifact can be built. Therefore the completed run establishes
 protocol execution and exact label proposals, but not which arm is more accurate or suitable for
 production sampling.
+
+## 2026-08-17 — Full-context blind review packet v2 frozen
+
+The first v3 human-review packet (`qualification-refined-zero-vs-few-shot-v1-human-review-v1`)
+contained invalid generated JavaScript and opened as an empty page. It is preserved for provenance
+but is superseded and must not be used for human review.
+
+The authoritative replacement is
+`qualification-refined-zero-vs-few-shot-v1-human-review-v2`, built from commit `cd681d0`. It restores
+the v2-style three-column presentation: the full task prompt and exact full response with the six
+request targets highlighted, the blind judgment form, and a continuously visible reference panel
+containing all seven coarse-label definitions and four boundary-concern definitions. The page is
+self-contained; initial review requires no JSON import. Import is only for resuming an exported
+progress ledger.
+
+The replacement remains globally blind and contains no model outputs or reveal payload. Its packet
+ID is `process-witness-coarse-review-v3-b34f4ade7b74ed26`; manifest self-hash is
+`4dc3b0b741574b43573b623e499b939a1708f61c5e627c44484160f4c905d6c5`; and `review.html` SHA-256 is
+`edb331bf6b6dae71a58aad7a0bf75c9d4a6cdeeda4d253fc106d412821d0a957`. Exact-artifact browser QA
+passed full-response rendering, focus navigation, empty-filter behavior, decision persistence,
+global sealing, reload, export enablement, sticky references, and desktop-width scrolling with zero
+console or runtime errors. No human judgments have yet been collected in this replacement packet,
+so no arm is selected and no labeling, tracing, adequacy, motif, witness, faithfulness, or causal
+claim follows from this freeze.
