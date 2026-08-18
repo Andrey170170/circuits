@@ -42,6 +42,9 @@ PROPOSAL_SCHEMA = "adag.process-witness.coarse-proposal.v1"
 GROUP_SCHEMA = "adag.process-witness.coarse-sampling-group.v1"
 MAXIMUM_FOCAL_UNITS = 6
 REPLICAS = 3
+REQUEST_IDENTITY_NAMESPACE_SHA256 = (
+    "b673793a4cf2e9db254c04dac4772d6c8b9cc50de26d0f6f9a0ac36df29ba3a3"
+)
 
 BROAD_PROJECTION = {
     "active_task_work": "process_bearing",
@@ -75,6 +78,11 @@ def load_production_config(path: Path) -> dict[str, Any]:
     value = _load_object(path)
     if value.get("schema_version") != CONFIG_SCHEMA:
         raise ValueError("unsupported coarse production config schema")
+    if (
+        value.get("request_identity_namespace_sha256")
+        != REQUEST_IDENTITY_NAMESPACE_SHA256
+    ):
+        raise ValueError("coarse production request identity namespace drift")
     if tuple(value.get("tags", {})) != COARSE_TAGS:
         raise ValueError("coarse production ontology drift")
     if value.get("boundary_concerns") != list(BOUNDARY_CONCERNS):
@@ -235,7 +243,7 @@ def production_request(
         "response_id": window["response_id"],
         "replica_index": replica_index,
         "body_sha256": body_sha,
-        "config_sha256": canonical_sha256(config),
+        "config_sha256": config["request_identity_namespace_sha256"],
     }
     request_id = f"pwcoarseprodv1-{canonical_sha256(identity)[:32]}"
     return {
@@ -612,7 +620,8 @@ def _validate_bundle_topology(
     if set(shard_ids) != set(request_by_id) or len(shard_ids) != len(request_by_id):
         raise ValueError("coarse production shard union drift")
     if any(
-        request["config_sha256"] != canonical_sha256(config) for request in requests
+        request["config_sha256"] != config["request_identity_namespace_sha256"]
+        for request in requests
     ):
         raise ValueError("coarse production request config binding drift")
 

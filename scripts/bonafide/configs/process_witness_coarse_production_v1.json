@@ -1,6 +1,7 @@
 {
   "schema_version": "adag.process-witness.coarse-production-config.v1",
   "config_id": "process-witness-coarse-proposal-production-v1",
+  "request_identity_namespace_sha256": "b673793a4cf2e9db254c04dac4772d6c8b9cc50de26d0f6f9a0ac36df29ba3a3",
   "claim_boundary": "The output is graph-blind coarse trace-sampling proposal metadata. Fine or broad votes are not semantic truth, adequacy labels, motif labels, correctness judgments, or evidence of internal computation.",
   "source": {
     "annotation_set_id": "process-witness-graph-blind-auto-v9",

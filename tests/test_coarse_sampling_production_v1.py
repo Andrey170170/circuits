@@ -50,6 +50,9 @@ def _document(text: str) -> dict[str, Any]:
 
 def test_config_freezes_v4_request_shape_and_broad_projection(tmp_path: Path) -> None:
     config = load_production_config(CONFIG)
+    assert config["request_identity_namespace_sha256"] == (
+        "b673793a4cf2e9db254c04dac4772d6c8b9cc50de26d0f6f9a0ac36df29ba3a3"
+    )
     assert config["segmentation"]["maximum_semantic_unit_tokens"] == 96
     assert config["request_protocol"]["maximum_focal_units_per_window"] == 6
     assert config["request_protocol"]["replicas_per_window"] == 3
@@ -68,6 +71,11 @@ def test_config_freezes_v4_request_shape_and_broad_projection(tmp_path: Path) ->
     path = tmp_path / "drifted.json"
     path.write_text(json.dumps(drifted), encoding="utf-8")
     with pytest.raises(ValueError, match="launch-gate contract drift"):
+        load_production_config(path)
+    drifted = {**config, "request_identity_namespace_sha256": "0" * 64}
+    path = tmp_path / "identity-drifted.json"
+    path.write_text(json.dumps(drifted), encoding="utf-8")
+    with pytest.raises(ValueError, match="request identity namespace drift"):
         load_production_config(path)
 
 
