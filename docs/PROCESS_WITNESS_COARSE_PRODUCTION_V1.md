@@ -1,6 +1,8 @@
 # Coarse proposal-bank production v1 runbook
 
-Status: **v6 shard-005 calibration submitted and processing; durable archival remains pending**.
+Status: **v6 shard-005 calibration completed and collected; the immutable subset run is continued
+only through the additive lifecycle in `PROCESS_WITNESS_COARSE_CONTINUATION_V1.md`; durable archival
+remains pending**.
 
 This campaign produces graph-blind coarse proposals for trace-sampling enrichment. Fine and broad
 votes are not semantic truth, adequacy labels, motif labels, correctness judgments, or evidence of
@@ -153,7 +155,8 @@ provider snapshots, output/error JSONL, and receipt chains.
 
 Every primary mutation command refuses nonauthorized shard IDs. Collection fails closed if actual
 primary cost exceeds the acknowledged $79.53101355 strict exposure or reaches the separate $100
-primary-wave limit. No provider call, upload, initialization, or submission has occurred for v6.
+primary-wave limit. The v6 `shard-005` provider call has now completed and is preserved unchanged;
+no other original primary shard was uploaded or submitted through this subset run.
 
 ## Failed-only recovery authorization
 
