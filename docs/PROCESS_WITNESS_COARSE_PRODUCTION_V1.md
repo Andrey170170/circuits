@@ -1,7 +1,7 @@
 # Coarse proposal-bank production v1 runbook
 
-Status: **v6 frozen offline; shard-005-only primary calibration authorized, but blocked on the
-active API-tier queue limit and durable archival**.
+Status: **v6 shard-005 calibration submitted; provider validation in progress; durable archival
+remains pending**.
 
 This campaign produces graph-blind coarse proposals for trace-sampling enrichment. Fine and broad
 votes are not semantic truth, adequacy labels, motif labels, correctness judgments, or evidence of
@@ -75,13 +75,31 @@ full-corpus finalization. Recovery remains unavailable unless failures are first
 authorized shard and the user later supplies a fresh recovery-specific forecast and exact strict
 exposure acknowledgement.
 
-Do not initialize, upload, or submit until the active API tier's Batch queued-input-token limit is
-recorded and is at least the frozen `shard-005` forecast of 28,514,690 tokens. Initialization then
-records all of the following:
+The user attested that the lab account is Tier 3 or higher based on prior cumulative API payments.
+The official Luna Tier 3 Batch queue limit is 40,000,000 tokens, above the frozen `shard-005`
+forecast of 28,514,690 tokens. Initialization records all of the following:
 
 1. the exact `shard-005`-only authorization and notes above;
 2. the active OpenAI API tier's Batch queued-input-token limit; and
 3. maximum concurrency one.
+
+## Calibration launch
+
+The network-free campaign was initialized at `2026-08-18T17:30:33.911393+00:00` under run root:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/run-shard-005-calibration-v1`
+
+Campaign run SHA-256:
+`2de31f560f25d2e84748f5092657f47c52611171125972bfada65bf3545ad9fe`.
+
+Only `shard-005` was uploaded and submitted. OpenAI accepted Batch
+`batch_6a8496e69be081909cbe8353286cc3e7` with completion window `24h` at
+`2026-08-18T17:31:19.298503+00:00`. Submission SHA-256:
+`5cf37666a0e9646fff722571c918d2210bea11e57aa2a9c48e36815ab37fc860`.
+The first receipt-bound status check at `2026-08-18T17:32:08.995118+00:00` reported `validating`,
+zero completed/failed requests, and zero recorded usage. Provider acceptance establishes that the
+active queue can admit the 28,514,690-token empirical calibration reservation; it does not
+authorize any other shard or recovery.
 
 The forecast budget stops later submissions when known cost plus conservative reservations exceeds
 it; it cannot stop an already submitted Batch and is not advertised as a hard maximum. Finalization
