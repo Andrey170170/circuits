@@ -1,7 +1,6 @@
 # Coarse proposal-bank production v1 runbook
 
-Status: **v6 shard-005 calibration submitted; provider validation in progress; durable archival
-remains pending**.
+Status: **v6 shard-005 calibration submitted and processing; durable archival remains pending**.
 
 This campaign produces graph-blind coarse proposals for trace-sampling enrichment. Fine and broad
 votes are not semantic truth, adequacy labels, motif labels, correctness judgments, or evidence of
