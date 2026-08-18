@@ -14,6 +14,12 @@ These outputs remain graph-blind sampling proposals. They are not semantic truth
 an ADAG adequacy result, a motif, a witness, a computation, a faithfulness result, or causal
 evidence.
 
+The lifecycle is intentionally additive instead of refactoring production v1: the completed
+calibration revalidates hashes of its original v1 sources, so changing those files would invalidate
+the evidence being adopted. This module reuses v1 parsing, pricing, provider-validation, and
+write-or-verify primitives while defining a separately versioned receipt state machine for the new
+attempt topology.
+
 ## Frozen operational policy
 
 - Source bundle: `full-corpus-proposal-bank-v6`, manifest self-hash
@@ -43,18 +49,17 @@ evidence.
   `$1.47010105` is the calibration's all-input/cache cost and `$2.52941880` is its output cost.
   The original no-cache/full-output strict exposure is retained as theoretical metadata, not used
   as the operational admission reservation.
-- A provider queue rejection stops this campaign version and makes no scientific result. Any later
-  smaller-layout amendment must be separately versioned, reviewed, and adopt every valid result
-  already collected; that amendment is outside this implementation. An ambiguous upload/create
-  state is reconciled through bound provider evidence, never blind resubmission.
+- Any explicit provider submission rejection (`400`, `403`, `409`, `422`, or `429`) stops this
+  campaign version and makes no scientific result; `429` is additionally recorded as a possible
+  queue rejection. Any later smaller-layout amendment must be separately versioned, reviewed, and
+  adopt every valid result already collected; that amendment is outside this implementation. An
+  ambiguous upload/create state is reconciled through bound provider evidence, never blind
+  resubmission.
 
-The real offline validation produced nine primary tranches. Their maximum empirical queue
-reservation was 29,838,940 tokens, their largest calibrated cost reservation was `$4.15248624`, and
-the direct v6 forecast plus inherited cost was `$19.533064346`. The sum of inherited actual cost
-and all nine separately calibrated reservations was `$35.343170914`; this is a conservative planning
-sum rather than a simultaneous exposure because concurrency is one and each reservation is replaced
-by actual receipt cost before the next submission. These are validation observations, not provider
-submissions or actual full-run costs.
+The final committed builder must be run once offline before production. Record its exact tranche
+count, maximum queue reservation, maximum calibrated cost reservation, aggregate direct forecast,
+and aggregate calibrated reservation from the resulting manifest. These are planning observations,
+not provider submissions or actual full-run costs.
 
 ## Production build
 

@@ -493,13 +493,14 @@ def prepare_continuation(
     calibration_observed_input_tokens: int,
     calibration_forecast_input_tokens: int,
 ) -> dict[str, Any]:
-    """Prepare a network-free, non-mutating continuation artifact."""
+    """Prepare an offline continuation artifact without provider calls."""
 
     intent, bundle = _validated_calibration_source(
         bundle_root=bundle_root, calibration_run_root=calibration_run_root
     )
-    if run_root.exists():
-        raise FileExistsError(f"continuation run exists: {run_root}")
+    destination = run_root
+    if destination.exists():
+        raise FileExistsError(f"continuation run exists: {destination}")
     if (
         provider_queued_input_token_limit < 1
         or tranche_empirical_queue_cap < 1
@@ -520,7 +521,11 @@ def prepare_continuation(
         or not authorization_note.strip()
     ):
         raise ValueError("invalid continuation spend authorization")
-    run_root.mkdir(parents=True)
+    temporary = destination.parent / f".{destination.name}.preparing-{os.getpid()}"
+    if temporary.exists():
+        raise FileExistsError(f"continuation preparation staging exists: {temporary}")
+    temporary.mkdir(parents=True)
+    run_root = temporary
     try:
         inherited_tree = _copy_calibration_evidence(
             source=calibration_run_root,
@@ -557,38 +562,38 @@ def prepare_continuation(
         recovery_rows = [row for row in calibration_rows if row[0] in failure_set]
         if [row[0] for row in recovery_rows] != failure_ids:
             raise ValueError("inherited calibration failure order drift")
-        remaining_rows: list[tuple[str, bytes, dict[str, Any]]] = []
-        remaining_source_by_id: dict[str, str] = {}
+        del recovery_rows
+        del calibration_rows
+        tranches = []
         for shard in bundle["shards"]:
             shard_id = str(shard["shard_id"])
             if shard_id == "shard-005":
                 continue
-            for row in _exact_jsonl_rows(bundle_root / shard["path"]):
-                remaining_rows.append(row)
-                remaining_source_by_id[row[0]] = shard_id
-        tranches = []
-        packed = _pack_response_affinity(
-            source_rows=remaining_rows,
-            request_metadata=request_metadata,
-            bundle=bundle,
-            queue_cap=tranche_empirical_queue_cap,
-        )
-        for index, rows in enumerate(packed):
-            source_ids = list(
-                dict.fromkeys(remaining_source_by_id[row[0]] for row in rows)
-            )
-            binding = _attempt_binding(
-                run_root=run_root,
-                bundle_root=bundle_root,
+            source_rows = _exact_jsonl_rows(bundle_root / shard["path"])
+            packed = _pack_response_affinity(
+                source_rows=source_rows,
+                request_metadata=request_metadata,
                 bundle=bundle,
-                attempt_id=f"primary-tranche-{index:03d}",
-                generation="continuation-primary",
-                source_shard_ids=source_ids,
-                exact_rows=rows,
+                queue_cap=tranche_empirical_queue_cap,
             )
-            if binding["queued_input_tokens_empirical_forecast"] > tranche_empirical_queue_cap:
-                raise ValueError("continuation tranche exceeds empirical queue cap")
-            tranches.append(binding)
+            for rows in packed:
+                binding = _attempt_binding(
+                    run_root=run_root,
+                    bundle_root=bundle_root,
+                    bundle=bundle,
+                    attempt_id=f"primary-tranche-{len(tranches):03d}",
+                    generation="continuation-primary",
+                    source_shard_ids=[shard_id],
+                    exact_rows=rows,
+                )
+                if (
+                    binding["queued_input_tokens_empirical_forecast"]
+                    > tranche_empirical_queue_cap
+                ):
+                    raise ValueError("continuation tranche exceeds empirical queue cap")
+                tranches.append(binding)
+            del packed
+            del source_rows
         attempts = tranches
         direct_forecast = sum(
             float(row["direct_v4_cost_forecast_usd"]) for row in attempts
@@ -681,8 +686,14 @@ def prepare_continuation(
             run_root=run_root, manifest=manifest, trigger="inherited_calibration_adopted"
         )
         _load_continuation(run_root)
+        run_root.rename(destination)
+        try:
+            _load_continuation(destination)
+        except BaseException:
+            destination.rename(run_root)
+            raise
         return manifest
-    except BaseException:
+    except Exception:
         shutil.rmtree(run_root, ignore_errors=True)
         raise
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import circuits.analysis.bonafide.coarse_sampling_openai_batch_continuation_v1 as module
@@ -939,6 +940,117 @@ def test_failed_only_recovery_over_cap_is_atomic(
     assert not (run_root / "attempts/failed-only-recovery-000").exists()
 
 
+def test_failed_only_recovery_resumes_after_intent_and_input_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_root = tmp_path / "run"
+    bundle_root = tmp_path / "bundle"
+    primary_root = run_root / "attempts/primary-tranche-000"
+    primary_root.mkdir(parents=True)
+    (bundle_root / "batch-shards").mkdir(parents=True)
+    source_rows = {
+        "old-failure": _line("old-failure", "old failure"),
+        "new-failure": _line("new-failure", "new failure"),
+    }
+    (bundle_root / "batch-shards/shard-005.jsonl").write_bytes(
+        source_rows["old-failure"]
+    )
+    (bundle_root / "batch-shards/shard-000.jsonl").write_bytes(
+        source_rows["new-failure"]
+    )
+    primary_collection = module._hashed(
+        {"events_sha256": "p" * 64, "cost_complete": True},
+        "collection_sha256",
+    )
+    (primary_root / "collection.json").write_text(json.dumps(primary_collection))
+    primary_binding = {
+        "attempt_id": "primary-tranche-000",
+        "generation": "continuation-primary",
+    }
+    manifest = {
+        "continuation_manifest_sha256": "m" * 64,
+        "bundle_root": str(bundle_root),
+        "calibration_events_sha256": "c" * 64,
+        "inherited_failure_request_ids": ["old-failure"],
+        "tranche_empirical_queue_cap": 100,
+        "attempts": [primary_binding],
+    }
+    bundle = {
+        "config": {
+            "empirical_calibration": {
+                "source_input_tokens": 1,
+                "source_provider_body_utf8_bytes": 1,
+            },
+            "provider": {"input_token_overhead_per_request": 0},
+        },
+        "request_index": [
+            {"request_id": "old-failure"},
+            {"request_id": "new-failure"},
+        ],
+        "shards": [
+            {"shard_id": "shard-005", "path": "batch-shards/shard-005.jsonl"},
+            {"shard_id": "shard-000", "path": "batch-shards/shard-000.jsonl"},
+        ],
+    }
+    monkeypatch.setattr(module, "_load_continuation", lambda _: (manifest, bundle))
+    monkeypatch.setattr(
+        module,
+        "_validate_inherited_calibration_evidence",
+        lambda **_: (
+            {},
+            [{"request_id": "old-failure", "validation_status": "provider_error"}],
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_validate_collected_attempt",
+        lambda **_: (
+            primary_collection,
+            [{"request_id": "new-failure", "validation_status": "invalid_output"}],
+        ),
+    )
+    monkeypatch.setattr(module, "_queue_tokens", lambda **_: 10)
+    monkeypatch.setattr(
+        module,
+        "_cost_metrics",
+        lambda **_: {
+            "direct_v4_cost_forecast_usd": 0.01,
+            "strict_no_cache_full_output_exposure_usd": 1.0,
+            "calibrated_cost_reservation_usd": 0.02,
+        },
+    )
+    real_binding = module._attempt_binding
+
+    def crash_after_input(**kwargs: object) -> dict[str, object]:
+        exact_rows = kwargs["exact_rows"]
+        assert isinstance(exact_rows, list)
+        attempt_root = Path(kwargs["run_root"]) / "attempts/failed-only-recovery-000"
+        attempt_root.mkdir(parents=True)
+        module.production_v1._write_or_verify_bytes(
+            attempt_root / "input.jsonl",
+            b"".join(row[1] for row in exact_rows),
+        )
+        raise RuntimeError("simulated crash after recovery input")
+
+    monkeypatch.setattr(module, "_attempt_binding", crash_after_input)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        module.prepare_failed_only_recovery(run_root=run_root)
+    intent_path = run_root / "failed-only-recovery/preparation-intent.json"
+    input_path = run_root / "attempts/failed-only-recovery-000/input.jsonl"
+    retained_intent_sha = module.file_sha256(intent_path)
+    retained_input_sha = module.file_sha256(input_path)
+    assert not (run_root / "failed-only-recovery/manifest.json").exists()
+
+    monkeypatch.setattr(module, "_attempt_binding", real_binding)
+    recovered = module.prepare_failed_only_recovery(run_root=run_root)
+
+    assert recovered["request_count"] == 2
+    assert recovered["successful_requests_rerun"] == 0
+    assert module.file_sha256(intent_path) == retained_intent_sha
+    assert module.file_sha256(input_path) == retained_input_sha
+    assert (run_root / "attempts/failed-only-recovery-000/binding.json").is_file()
+
+
 def test_finalizer_rejects_less_than_exactly_three_replica_votes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1036,6 +1148,569 @@ def test_finalizer_rejects_less_than_exactly_three_replica_votes(
             destination=destination,
         )
     assert not destination.exists()
+
+
+def _successful_provider_row(request_id: str, unit_id: str) -> dict[str, object]:
+    decisions = {
+        "decisions": [
+            {
+                "unit_id": unit_id,
+                "tag": "active_task_work",
+                "confidence": "high",
+                "boundary_concerns": [],
+                "boundary_note": "",
+            }
+        ]
+    }
+    return {
+        "custom_id": request_id,
+        "response": {
+            "status_code": 200,
+            "request_id": f"provider-{request_id}",
+            "body": {
+                "id": f"response-{request_id}",
+                "model": "gpt-5.6-luna-2026-08-01",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "text": json.dumps(decisions)}
+                        ],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 10,
+                    "input_tokens_details": {"cached_tokens": 5},
+                    "output_tokens": 5,
+                    "output_tokens_details": {"reasoning_tokens": 1},
+                },
+            },
+        },
+        "error": None,
+    }
+
+
+def _write_tiny_collected_attempt(
+    *,
+    run_root: Path,
+    manifest: dict[str, object],
+    bundle: dict[str, object],
+    binding: dict[str, object],
+    provider_rows: list[dict[str, object]],
+    cost: float,
+) -> dict[str, object]:
+    attempt_id = str(binding["attempt_id"])
+    attempt_root = run_root / "attempts" / attempt_id
+    (attempt_root / "raw").mkdir(parents=True, exist_ok=True)
+    (attempt_root / "status").mkdir(exist_ok=True)
+    metadata = module._metadata(manifest, attempt_id, run_root)
+    submission_intent = module._hashed(
+        {
+            "schema_version": module.production_v1.SUBMISSION_SCHEMA,
+            "input_sha256": binding["input_sha256"],
+            "request_count": binding["request_count"],
+            "metadata": metadata,
+        },
+        "submission_intent_sha256",
+    )
+    module.atomic_write_json(
+        attempt_root / "submission-intent.json", submission_intent
+    )
+    upload = {
+        "schema_version": module.production_v1.UPLOAD_SCHEMA,
+        "provider": "openai",
+        "input_file_id": f"file-{attempt_id}",
+        "purpose": "batch",
+    }
+    module.atomic_write_json(attempt_root / "provider-upload-response.json", upload)
+    provider = {
+        **_provider_snapshot(
+            metadata=metadata, input_file_id=str(upload["input_file_id"])
+        ),
+        "batch_id": f"batch-{attempt_id}",
+        "status": "completed",
+        "output_file_id": f"output-{attempt_id}",
+        "error_file_id": None,
+        "request_counts": {
+            "total": len(provider_rows),
+            "completed": len(provider_rows),
+            "failed": 0,
+        },
+        "usage": None,
+    }
+    module.atomic_write_json(attempt_root / "provider-create-response.json", provider)
+    submission = module._hashed(
+        {
+            "schema_version": module.production_v1.SUBMISSION_SCHEMA,
+            "status": "submitted",
+            "continuation_manifest_sha256": manifest[
+                "continuation_manifest_sha256"
+            ],
+            "submission_intent_sha256": submission_intent[
+                "submission_intent_sha256"
+            ],
+            "provider_upload_response_sha256": module.file_sha256(
+                attempt_root / "provider-upload-response.json"
+            ),
+            "provider_response": provider,
+        },
+        "submission_sha256",
+    )
+    module.atomic_write_json(attempt_root / "submission.json", submission)
+    status = module._hashed(
+        {
+            "schema_version": module.production_v1.STATUS_SCHEMA,
+            "continuation_manifest_sha256": manifest[
+                "continuation_manifest_sha256"
+            ],
+            "submission_sha256": submission["submission_sha256"],
+            "previous_status_sha256": None,
+            "provider_response": provider,
+        },
+        "status_sha256",
+    )
+    module.atomic_write_json(attempt_root / "status/receipt-0000.json", status)
+    collection_intent = module._hashed(
+        {
+            "schema_version": module.production_v1.COLLECTION_SCHEMA,
+            "submission_sha256": submission["submission_sha256"],
+            "batch_id": provider["batch_id"],
+        },
+        "collection_intent_sha256",
+    )
+    module.atomic_write_json(
+        attempt_root / "collection-intent.json", collection_intent
+    )
+    module.atomic_write_json(attempt_root / "raw/provider-snapshot.json", provider)
+    raw_output = b"".join(
+        (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        for row in provider_rows
+    )
+    (attempt_root / "raw/output.jsonl").write_bytes(raw_output)
+    events = module._derive_events_from_provider_rows(
+        rows={str(row["custom_id"]): row for row in provider_rows},
+        binding=binding,
+        bundle=bundle,
+        snapshot=provider,
+    )
+    event_bytes = b"".join(
+        (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        for row in events
+    )
+    (attempt_root / "events.jsonl").write_bytes(event_bytes)
+    raw_bindings = [
+        {
+            "source": "provider_snapshot",
+            "file_id": None,
+            "path": str(
+                (attempt_root / "raw/provider-snapshot.json").relative_to(run_root)
+            ),
+            "sha256": module.file_sha256(
+                attempt_root / "raw/provider-snapshot.json"
+            ),
+            "bytes": (attempt_root / "raw/provider-snapshot.json").stat().st_size,
+        },
+        {
+            "source": "output",
+            "file_id": provider["output_file_id"],
+            "path": str((attempt_root / "raw/output.jsonl").relative_to(run_root)),
+            "sha256": module.file_sha256(attempt_root / "raw/output.jsonl"),
+            "bytes": (attempt_root / "raw/output.jsonl").stat().st_size,
+        },
+    ]
+    collection = module._hashed(
+        {
+            "schema_version": module.production_v1.COLLECTION_SCHEMA,
+            "status": "complete",
+            "collection_intent_sha256": collection_intent[
+                "collection_intent_sha256"
+            ],
+            "continuation_manifest_sha256": manifest[
+                "continuation_manifest_sha256"
+            ],
+            "attempt_id": attempt_id,
+            "generation": binding["generation"],
+            "request_count": len(events),
+            "success_count": len(events),
+            "failure_count": 0,
+            "known_priced_cost_usd": cost,
+            "cost_complete": True,
+            "pricing_basis": "tiny-test-pricing",
+            "provider_terminal_status": "completed",
+            "raw_file_bindings": raw_bindings,
+            "events_sha256": module.file_sha256(attempt_root / "events.jsonl"),
+        },
+        "collection_sha256",
+    )
+    module.atomic_write_json(attempt_root / "collection.json", collection)
+    return collection
+
+
+def _write_tiny_inherited_failure(
+    *,
+    run_root: Path,
+    bundle_root: Path,
+    manifest_sha: str,
+    request: dict[str, object],
+    input_bytes: bytes,
+    cost: float,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    inherited_run = run_root / "inherited-calibration-run"
+    shard_root = inherited_run / "shards/shard-005"
+    (shard_root / "raw").mkdir(parents=True)
+    (shard_root / "status").mkdir()
+    (shard_root / "input.jsonl").write_bytes(input_bytes)
+    campaign = module.production_v1._hashed(
+        {"schema_version": "tiny-source-campaign", "status": "completed"},
+        "campaign_run_sha256",
+    )
+    module.atomic_write_json(inherited_run / "campaign-intent.json", campaign)
+    metadata = module.production_v1._metadata(campaign, "shard-005", "primary")
+    submission_intent = module.production_v1._hashed(
+        {
+            "schema_version": module.production_v1.SUBMISSION_SCHEMA,
+            "input_sha256": module.file_sha256(shard_root / "input.jsonl"),
+        },
+        "submission_intent_sha256",
+    )
+    module.atomic_write_json(shard_root / "submission-intent.json", submission_intent)
+    upload = {
+        "schema_version": module.production_v1.UPLOAD_SCHEMA,
+        "provider": "openai",
+        "input_file_id": "file-inherited",
+        "purpose": "batch",
+    }
+    module.atomic_write_json(shard_root / "provider-upload-response.json", upload)
+    provider = {
+        **_provider_snapshot(metadata=metadata, input_file_id="file-inherited"),
+        "batch_id": "batch-inherited",
+        "status": "completed",
+        "output_file_id": None,
+        "error_file_id": "error-inherited",
+        "request_counts": {"total": 1, "completed": 0, "failed": 1},
+        "usage": None,
+    }
+    module.atomic_write_json(shard_root / "provider-create-response.json", provider)
+    submission = module.production_v1._hashed(
+        {
+            "schema_version": module.production_v1.SUBMISSION_SCHEMA,
+            "status": "submitted",
+            "campaign_run_sha256": campaign["campaign_run_sha256"],
+            "submission_intent_sha256": submission_intent[
+                "submission_intent_sha256"
+            ],
+            "provider_upload_response_sha256": module.file_sha256(
+                shard_root / "provider-upload-response.json"
+            ),
+            "provider_response": provider,
+        },
+        "submission_sha256",
+    )
+    module.atomic_write_json(shard_root / "submission.json", submission)
+    status = module.production_v1._hashed(
+        {
+            "schema_version": module.production_v1.STATUS_SCHEMA,
+            "previous_status_sha256": None,
+            "provider_response": provider,
+        },
+        "status_sha256",
+    )
+    module.atomic_write_json(shard_root / "status/receipt-0000.json", status)
+    collection_intent = module.production_v1._hashed(
+        {
+            "schema_version": module.production_v1.COLLECTION_SCHEMA,
+            "submission_sha256": submission["submission_sha256"],
+            "batch_id": provider["batch_id"],
+        },
+        "collection_intent_sha256",
+    )
+    module.atomic_write_json(shard_root / "collection-intent.json", collection_intent)
+    module.atomic_write_json(shard_root / "raw/provider-snapshot.json", provider)
+    error_row = {
+        "custom_id": request["request_id"],
+        "response": None,
+        "error": {"code": "credit_balance_exhausted", "message": "test"},
+    }
+    (shard_root / "raw/error.jsonl").write_text(
+        json.dumps(error_row, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+    event = module.production_v1._parse_row(error_row, request)
+    (shard_root / "events.jsonl").write_text(
+        json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+    raw_bindings = [
+        {
+            "source": "provider_snapshot",
+            "file_id": None,
+            "path": "shards/shard-005/raw/provider-snapshot.json",
+            "sha256": module.file_sha256(shard_root / "raw/provider-snapshot.json"),
+            "bytes": (shard_root / "raw/provider-snapshot.json").stat().st_size,
+        },
+        {
+            "source": "error",
+            "file_id": "error-inherited",
+            "path": "shards/shard-005/raw/error.jsonl",
+            "sha256": module.file_sha256(shard_root / "raw/error.jsonl"),
+            "bytes": (shard_root / "raw/error.jsonl").stat().st_size,
+        },
+    ]
+    collection = module.production_v1._hashed(
+        {
+            "schema_version": module.production_v1.COLLECTION_SCHEMA,
+            "status": "complete_with_failures",
+            "collection_intent_sha256": collection_intent[
+                "collection_intent_sha256"
+            ],
+            "request_count": 1,
+            "success_count": 0,
+            "failure_count": 1,
+            "known_priced_cost_usd": cost,
+            "cost_complete": True,
+            "pricing_basis": "tiny-test-pricing",
+            "provider_terminal_status": "completed",
+            "raw_file_bindings": raw_bindings,
+            "events_sha256": module.file_sha256(shard_root / "events.jsonl"),
+        },
+        "collection_sha256",
+    )
+    module.atomic_write_json(shard_root / "collection.json", collection)
+    reconciliation = module._hashed(
+        {
+            "cost_complete": True,
+            "credit_balance_exhausted_request_count": 8,
+            "usage_bearing_request_count": 6439,
+            "adopted_actual_cost_usd": cost,
+        },
+        "cost_reconciliation_sha256",
+    )
+    module.atomic_write_json(
+        run_root / "inherited-cost-reconciliation.json", reconciliation
+    )
+    return collection, event, reconciliation
+
+
+def test_tiny_finalize_relocates_and_strictly_reloads_without_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_root = tmp_path / "run"
+    bundle_root = tmp_path / "bundle"
+    (bundle_root / "batch-shards").mkdir(parents=True)
+    (bundle_root / "price-snapshot.json").write_text("{}\n")
+    (bundle_root / "bundle-marker.json").write_text('{"tiny":true}\n')
+    unit_id = "unit-0"
+    request_ids = ["request-0", "request-1", "request-2"]
+    source_rows = {
+        request_id: _line(request_id, f"payload {request_id}")
+        for request_id in request_ids
+    }
+    (bundle_root / "batch-shards/shard-005.jsonl").write_bytes(
+        source_rows["request-0"]
+    )
+    (bundle_root / "batch-shards/shard-000.jsonl").write_bytes(
+        source_rows["request-1"] + source_rows["request-2"]
+    )
+    request_index = [
+        {
+            "request_id": request_id,
+            "shard_id": "shard-005" if replica == 0 else "shard-000",
+            "window_id": "window-0",
+            "window_index": 0,
+            "response_id": "response-0",
+            "replica_index": replica,
+            "body_sha256": f"{replica + 1}" * 64,
+            "focal_unit_ids": [unit_id],
+        }
+        for replica, request_id in enumerate(request_ids)
+    ]
+    unit = {
+        "unit_id": unit_id,
+        "response_id": "response-0",
+        "sequence_index": 0,
+        "assignment_route": "openai_pending",
+        "deterministic_tag": None,
+        "fragment_of": None,
+        "token_span": [0, 1],
+        "core_character_span": [0, 1],
+        "covering_character_span": [0, 1],
+    }
+    bundle_hash = "b" * 64
+    bundle: dict[str, object] = {
+        "manifest": {"manifest_sha256": bundle_hash},
+        "config": {
+            "claim_boundary": "tiny integration fixture",
+            "provider": {"input_token_overhead_per_request": 0},
+        },
+        "shards": [
+            {"shard_id": "shard-000", "path": "batch-shards/shard-000.jsonl"},
+            {"shard_id": "shard-005", "path": "batch-shards/shard-005.jsonl"},
+        ],
+        "request_index": request_index,
+        "units": [unit],
+    }
+    primary_root = run_root / "attempts/primary-tranche-000"
+    recovery_attempt_root = run_root / "attempts/failed-only-recovery-000"
+    primary_root.mkdir(parents=True)
+    recovery_attempt_root.mkdir(parents=True)
+    primary_input = source_rows["request-1"] + source_rows["request-2"]
+    recovery_input = source_rows["request-0"]
+    (primary_root / "input.jsonl").write_bytes(primary_input)
+    (recovery_attempt_root / "input.jsonl").write_bytes(recovery_input)
+    primary_binding: dict[str, object] = {
+        "attempt_id": "primary-tranche-000",
+        "generation": "continuation-primary",
+        "input_relative_path": "attempts/primary-tranche-000/input.jsonl",
+        "input_sha256": module.file_sha256(primary_root / "input.jsonl"),
+        "request_count": 2,
+        "request_ids_in_order": ["request-1", "request-2"],
+        "source_shard_ids": ["shard-000"],
+        "queued_input_tokens_empirical_forecast": 10,
+        "calibrated_cost_reservation_usd": 0.2,
+    }
+    recovery_binding: dict[str, object] = {
+        "attempt_id": "failed-only-recovery-000",
+        "generation": "failed-only-recovery",
+        "input_relative_path": "attempts/failed-only-recovery-000/input.jsonl",
+        "input_sha256": module.file_sha256(recovery_attempt_root / "input.jsonl"),
+        "request_count": 1,
+        "request_ids_in_order": ["request-0"],
+        "source_shard_ids": ["shard-005"],
+        "queued_input_tokens_empirical_forecast": 5,
+        "calibrated_cost_reservation_usd": 0.1,
+    }
+    module.atomic_write_json(
+        primary_root / "binding.json",
+        module._hashed(primary_binding, "binding_sha256"),
+    )
+    module.atomic_write_json(
+        recovery_attempt_root / "binding.json",
+        module._hashed(recovery_binding, "binding_sha256"),
+    )
+    inherited_collection, _inherited_event, reconciliation = (
+        _write_tiny_inherited_failure(
+            run_root=run_root,
+            bundle_root=bundle_root,
+            manifest_sha="pending",
+            request=request_index[0],
+            input_bytes=source_rows["request-0"],
+            cost=0.1,
+        )
+    )
+    manifest = module._hashed(
+        {
+            "schema_version": module.CONTINUATION_SCHEMA,
+            "status": "prepared_offline_no_provider_calls",
+            "bundle_root": str(bundle_root),
+            "bundle_manifest_sha256": bundle_hash,
+            "calibration_collection_sha256": inherited_collection[
+                "collection_sha256"
+            ],
+            "calibration_events_sha256": inherited_collection["events_sha256"],
+            "calibration_known_priced_cost_usd": 0.1,
+            "inherited_cost_reconciliation_sha256": reconciliation[
+                "cost_reconciliation_sha256"
+            ],
+            "inherited_failure_request_ids": ["request-0"],
+            "warning_spend_threshold_usd": 20.0,
+            "hard_campaign_stop_usd": 40.0,
+            "attempts": [primary_binding],
+        },
+        "continuation_manifest_sha256",
+    )
+    module.atomic_write_json(run_root / "continuation-manifest.json", manifest)
+    recovery_root = run_root / "failed-only-recovery"
+    recovery_root.mkdir()
+    recovery_intent = module._hashed(
+        {
+            "continuation_manifest_sha256": manifest[
+                "continuation_manifest_sha256"
+            ],
+            "request_ids_in_order": ["request-0"],
+        },
+        "recovery_intent_sha256",
+    )
+    module.atomic_write_json(recovery_root / "preparation-intent.json", recovery_intent)
+    recovery = module._hashed(
+        {
+            "continuation_manifest_sha256": manifest[
+                "continuation_manifest_sha256"
+            ],
+            "recovery_intent_sha256": recovery_intent["recovery_intent_sha256"],
+            "recovery_wave": 0,
+            "attempt": recovery_binding,
+            "request_count": 1,
+            "successful_requests_rerun": 0,
+            "additional_recovery_waves_permitted": False,
+        },
+        "recovery_manifest_sha256",
+    )
+    module.atomic_write_json(recovery_root / "manifest.json", recovery)
+    primary_collection = _write_tiny_collected_attempt(
+        run_root=run_root,
+        manifest=manifest,
+        bundle=bundle,
+        binding=primary_binding,
+        provider_rows=[
+            _successful_provider_row("request-1", unit_id),
+            _successful_provider_row("request-2", unit_id),
+        ],
+        cost=0.1,
+    )
+    recovery_collection = _write_tiny_collected_attempt(
+        run_root=run_root,
+        manifest=manifest,
+        bundle=bundle,
+        binding=recovery_binding,
+        provider_rows=[_successful_provider_row("request-0", unit_id)],
+        cost=0.1,
+    )
+    loaded_roots: list[Path] = []
+
+    def load_bundle(path: Path, **_: object) -> dict[str, object]:
+        loaded_roots.append(path)
+        return bundle
+
+    monkeypatch.setattr(module, "load_production_bundle", load_bundle)
+    monkeypatch.setattr(module, "_load_continuation", lambda _: (manifest, bundle))
+    monkeypatch.setattr(module, "load_price_snapshot", lambda _: {})
+    monkeypatch.setattr(
+        module.production_v1,
+        "_input_byte_bound_excludes_long_context",
+        lambda **_: True,
+    )
+    monkeypatch.setattr(
+        module,
+        "_price_events",
+        lambda **kwargs: (
+            0.1,
+            True,
+            "tiny-test-pricing",
+        ),
+    )
+    destination = tmp_path / "final"
+
+    result = module.finalize_continuation(
+        run_root=run_root,
+        destination=destination,
+    )
+
+    assert result["request_count"] == 3
+    assert result["pending_units_with_exactly_three_votes"] == 1
+    assert result["actual_total_cost_usd"] == pytest.approx(0.3)
+    assert primary_collection["success_count"] == 2
+    assert recovery_collection["success_count"] == 1
+    relocated = tmp_path / "relocated-final"
+    destination.rename(relocated)
+    shutil.rmtree(run_root)
+    shutil.rmtree(bundle_root)
+
+    reloaded = module.load_frozen_continuation_proposal_bank(relocated)
+
+    assert reloaded["manifest"] == result
+    assert loaded_roots[-1] == relocated / "campaign-bundle"
+    assert not run_root.exists()
+    assert not bundle_root.exists()
 
 
 def _minimal_frozen_bank(
