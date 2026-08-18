@@ -1,0 +1,73 @@
+{
+  "schema_version": "adag.process-witness.coarse-production-config.v1",
+  "config_id": "process-witness-coarse-proposal-production-v1",
+  "claim_boundary": "The output is graph-blind coarse trace-sampling proposal metadata. Fine or broad votes are not semantic truth, adequacy labels, motif labels, correctness judgments, or evidence of internal computation.",
+  "source": {
+    "annotation_set_id": "process-witness-graph-blind-auto-v9",
+    "cohort_id": "qwen3-thinking-process-witness-atlas-responses-backfilled-v2",
+    "workstation_bundle_sha256": "95a5627768b2e5f05920aaab91f6e1cd9c00688560f9d821ffc2d8d69c7ceeea"
+  },
+  "segmentation": {
+    "policy_id": "token-exclusive-sentence-line-quote-aware-v2",
+    "maximum_semantic_unit_tokens": 96
+  },
+  "request_protocol": {
+    "maximum_focal_units_per_window": 6,
+    "replicas_per_window": 3,
+    "arm": "refined_zero_shot",
+    "target_markup": "target_only",
+    "complete_task_prompt": true,
+    "complete_response": true
+  },
+  "sharding": {
+    "policy_id": "response-affinity-first-fit-decreasing-v1",
+    "maximum_batch_input_bytes": 180000000,
+    "official_batch_input_limit_bytes": 200000000,
+    "official_batch_request_limit": 50000
+  },
+  "provider": {
+    "name": "openai",
+    "model": "gpt-5.6-luna",
+    "api_surface": "responses",
+    "transport": "native_batch",
+    "batch_endpoint": "/v1/responses",
+    "api_key_env": "OPENAI_API_KEY",
+    "reasoning": {"effort": "medium"},
+    "max_output_tokens": 16384,
+    "store": false,
+    "price_snapshot": "labeling/prices-2026-08-16-coarse-v2.json",
+    "input_token_overhead_per_request": 4096
+  },
+  "tags": {
+    "active_task_work": "The unit performs an operation that creates new task state or evidence, such as calculation, transformation, retrieval, traversal, lookup, comparison, selection, counting, or state update.",
+    "evaluation_or_revision": "The unit primarily assesses, rejects, validates, corrects, or replaces an already available candidate, result, or state. Merely planning to check is not evaluation.",
+    "intermediate_commitment": "The unit primarily reports or settles a derived non-final result or state without performing its derivation or evaluation in that same unit.",
+    "final_answer": "The unit commits or serializes the terminal answer.",
+    "other_semantic_text": "The unit plans future work, explains, restates, quotes, or comments without creating new task state or evidence.",
+    "surface_or_control": "The unit carries no proposition by itself and consists only of formatting, punctuation, whitespace/control, tags, or other structural material.",
+    "uncertain": "Two classifications remain defensible after applying the trajectory-effect rules, or the supplied unit boundary prevents a meaningful decision. Do not force a label."
+  },
+  "boundary_concerns": ["split_needed", "merge_previous", "merge_next", "meaning_unclear"],
+  "decision_precedence": ["final_answer", "evaluation_or_revision", "active_task_work", "intermediate_commitment", "other_semantic_text", "surface_or_control", "uncertain"],
+  "broad_projection": {
+    "process_bearing": ["active_task_work", "evaluation_or_revision", "intermediate_commitment", "final_answer"],
+    "contextual": ["other_semantic_text", "surface_or_control"],
+    "unresolved": ["uncertain"]
+  },
+  "empirical_calibration": {
+    "source": "completed v4 45-request compatibility run",
+    "source_request_count": 45,
+    "source_provider_body_utf8_bytes": 1036464,
+    "source_input_tokens": 287415,
+    "source_output_tokens": 12345,
+    "source_actual_cost_usd": 0.02238693,
+    "cache_pattern_forecast_usd": 32.1,
+    "cache_pattern_forecast_note": "Planning estimate using one cache write and two cache reads per body-identical replica trio; cache behavior is never assumed.",
+    "strict_no_cache_full_output_reference_usd": 514.9
+  },
+  "launch_gates": {
+    "fresh_run_specific_spend_authorization_required": true,
+    "provider_batch_queued_input_token_limit_must_be_recorded": true,
+    "one_preauthorized_failed_only_recovery_wave": true
+  }
+}
