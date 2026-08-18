@@ -454,7 +454,159 @@ def sampling_groups(
     return result
 
 
-def load_production_bundle(root: Path, *, load_units: bool = True) -> dict[str, Any]:
+def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                value = json.loads(line)
+                if not isinstance(value, dict):
+                    raise ValueError(
+                        f"JSONL row is not an object: {path}:{line_number}"
+                    )
+                yield value
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"unreadable JSONL: {path}") from error
+
+
+def _validate_bundle_topology(
+    *,
+    root: Path,
+    manifest: Mapping[str, Any],
+    config: Mapping[str, Any],
+    shards: Sequence[Mapping[str, Any]],
+    units: Sequence[Mapping[str, Any]],
+    windows: Sequence[Mapping[str, Any]],
+    requests: Sequence[Mapping[str, Any]],
+) -> None:
+    counts = manifest["counts"]
+    expected = {
+        "responses": 188,
+        "units": 94_546,
+        "provider_pending_units": 74_860,
+        "deterministic_surface_units": 19_500,
+        "deterministic_terminal_units": 186,
+        "fragment_groups_over_96_tokens": 51,
+        "windows": 12_557,
+        "physical_requests": 37_671,
+        "replica_requests": 25_114,
+        "shards": len(shards),
+    }
+    if counts != expected:
+        raise ValueError("coarse production exact census drift")
+    if len(units) != counts["units"] or len({u["unit_id"] for u in units}) != len(
+        units
+    ):
+        raise ValueError("coarse production unit coverage drift")
+    by_response: dict[str, list[Mapping[str, Any]]] = {}
+    for unit in units:
+        by_response.setdefault(str(unit["response_id"]), []).append(unit)
+    if len(by_response) != counts["responses"]:
+        raise ValueError("coarse production response coverage drift")
+    for response_units in by_response.values():
+        ordered = sorted(response_units, key=lambda u: int(u["sequence_index"]))
+        if [u["sequence_index"] for u in ordered] != list(range(len(ordered))):
+            raise ValueError("coarse production response unit order drift")
+        if [u["token_span"][0] for u in ordered[1:]] != [
+            u["token_span"][1] for u in ordered[:-1]
+        ]:
+            raise ValueError("coarse production response token partition drift")
+    pending_ids = [
+        u["unit_id"] for u in units if u["assignment_route"] == "openai_pending"
+    ]
+    window_ids = [unit_id for window in windows for unit_id in window["focal_unit_ids"]]
+    if (
+        len(windows) != counts["windows"]
+        or window_ids != pending_ids
+        or any(
+            not 1 <= len(window["focal_unit_ids"]) <= MAXIMUM_FOCAL_UNITS
+            for window in windows
+        )
+    ):
+        raise ValueError("coarse production window atom partition drift")
+    window_by_id = {window["window_id"]: window for window in windows}
+    if len(window_by_id) != len(windows):
+        raise ValueError("coarse production window identity collision")
+    if (
+        len(requests) != counts["physical_requests"]
+        or len({r["request_id"] for r in requests}) != len(requests)
+        or [r["physical_index"] for r in requests] != list(range(len(requests)))
+    ):
+        raise ValueError("coarse production physical request coverage drift")
+    by_window: dict[str, list[Mapping[str, Any]]] = {}
+    for request in requests:
+        by_window.setdefault(str(request["window_id"]), []).append(request)
+    if set(by_window) != set(window_by_id):
+        raise ValueError("coarse production request/window coverage drift")
+    for window_id, group in by_window.items():
+        group = sorted(group, key=lambda r: int(r["replica_index"]))
+        primary = group[0]
+        if (
+            len(group) != REPLICAS
+            or [r["replica_index"] for r in group] != list(range(REPLICAS))
+            or [r["physical_index"] for r in group]
+            != list(
+                range(
+                    int(primary["physical_index"]),
+                    int(primary["physical_index"]) + REPLICAS,
+                )
+            )
+            or any(r["body_sha256"] != primary["body_sha256"] for r in group)
+            or primary["repeat_of_request_id"] is not None
+            or any(
+                r["repeat_of_request_id"] != primary["request_id"] for r in group[1:]
+            )
+            or primary["focal_unit_ids"] != window_by_id[window_id]["focal_unit_ids"]
+        ):
+            raise ValueError("coarse production replica topology drift")
+    request_by_id = {request["request_id"]: request for request in requests}
+    shard_ids = []
+    response_shards: dict[str, str] = {}
+    for shard in shards:
+        path = root / shard["path"]
+        observed = []
+        previous_window = None
+        previous_replica = None
+        for line in _iter_jsonl(path):
+            request_id = line.get("custom_id")
+            request = request_by_id.get(request_id)
+            if request is None or request["shard_id"] != shard["shard_id"]:
+                raise ValueError("coarse production shard contains unknown request")
+            if line.get("method") != "POST" or line.get("url") != OPENAI_BATCH_ENDPOINT:
+                raise ValueError("coarse production Batch line method/endpoint drift")
+            if canonical_sha256(line.get("body")) != request["body_sha256"]:
+                raise ValueError("coarse production Batch line body drift")
+            response = request["response_id"]
+            prior = response_shards.setdefault(response, shard["shard_id"])
+            if prior != shard["shard_id"]:
+                raise ValueError("coarse production response affinity drift")
+            if (
+                previous_window == request["window_id"]
+                and previous_replica is not None
+                and request["replica_index"] != previous_replica + 1
+            ):
+                raise ValueError("coarse production replicas are not consecutive")
+            previous_window = request["window_id"]
+            previous_replica = request["replica_index"]
+            observed.append(request_id)
+        if (
+            observed != shard["request_ids_in_order"]
+            or len(observed) != shard["request_count"]
+        ):
+            raise ValueError("coarse production shard ordered coverage drift")
+        shard_ids.extend(observed)
+    if set(shard_ids) != set(request_by_id) or len(shard_ids) != len(request_by_id):
+        raise ValueError("coarse production shard union drift")
+    if any(
+        request["config_sha256"] != canonical_sha256(config) for request in requests
+    ):
+        raise ValueError("coarse production request config binding drift")
+
+
+def load_production_bundle(
+    root: Path, *, load_units: bool = True, strict_topology: bool = True
+) -> dict[str, Any]:
     manifest = _load_object(root / "manifest.json")
     _verify_self_hash(manifest, "manifest_sha256", "coarse production manifest")
     if (
@@ -483,19 +635,33 @@ def load_production_bundle(root: Path, *, load_units: bool = True) -> dict[str, 
             raise ValueError("coarse production shard violates internal byte guard")
         if shard["request_count"] >= config["sharding"]["official_batch_request_limit"]:
             raise ValueError("coarse production shard violates request limit")
+    windows = read_jsonl(root / "windows.jsonl")
+    request_index = read_jsonl(root / "request-index.jsonl")
+    units = read_jsonl(root / "units.jsonl") if load_units or strict_topology else None
+    if strict_topology:
+        assert units is not None
+        _validate_bundle_topology(
+            root=root,
+            manifest=manifest,
+            config=config,
+            shards=shards,
+            units=units,
+            windows=windows,
+            requests=request_index,
+        )
     return {
         "manifest": manifest,
         "config": config,
         "shards": shards,
-        "windows": read_jsonl(root / "windows.jsonl"),
-        "request_index": read_jsonl(root / "request-index.jsonl"),
-        "units": read_jsonl(root / "units.jsonl") if load_units else None,
+        "windows": windows,
+        "request_index": request_index,
+        "units": units if load_units else None,
         "cost_plan": _load_object(root / "cost-plan.json"),
     }
 
 
 def iter_shard_requests(root: Path, shard_id: str) -> Iterable[dict[str, Any]]:
-    loaded = load_production_bundle(root, load_units=False)
+    loaded = load_production_bundle(root, load_units=False, strict_topology=False)
     shard = next((s for s in loaded["shards"] if s["shard_id"] == shard_id), None)
     if shard is None:
         raise ValueError(f"unknown coarse production shard: {shard_id}")
