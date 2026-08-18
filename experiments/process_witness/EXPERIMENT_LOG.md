@@ -445,3 +445,26 @@ several pieces. Any such grouping must be a versioned sampling-only layer that r
 unit ID, span, vote profile, and provenance; it must not rewrite the segmentation artifact or merge
 trace artifacts. This proposal is not yet frozen, and the failed exact-label gate remains the
 authoritative v4 verdict.
+
+## 2026-08-17 — Production proposal-bank v3 supersedes blocked lifecycle drafts
+
+The authoritative offline full-corpus proposal bank is now
+`full-corpus-proposal-bank-v3`, built from commit `9830876`. Its manifest self-hash is
+`c62d057204e3826d32856dea16e7cdf9d49237f502c5cb1b3ea62cb16138864e` and its cost-plan self-hash is
+`d7e00efe88c49d65321a3272e52ab6727434eaa4c046119cc2656a13ce2cb5b2`. A strict read reconstructed
+94,546 units, 12,557 windows, 37,671 physical requests, and six response-affinity shards; all
+directories are `0555` and files `0444`. No provider call occurred.
+
+V1 and v2 remain immutable but are superseded and must not launch. V3 preserves their exact
+scientific request universe and six Batch-shard hashes while replacing the lifecycle with reviewed
+atomic submission/collection gates, upload-before-create receipts and safe ambiguity reconciliation,
+terminal whole-Batch recovery materialization, conservative usage/cost reconciliation, fresh
+recovery-specific authorization, transitive runtime/source bindings, and self-contained final
+evidence. The direct primary forecast remains $18.740845334; it is not a hard cap. A fresh launch
+must separately authorize a forecast budget and acknowledge the exact $514.45756665 primary strict
+exposure. Any failed-only recovery wave requires its own later forecast and exact strict-exposure
+authorization.
+
+The only recorded v3 copy is on VAST scratch, which is subject to a 60-day inactivity purge.
+Read-only permissions are not archival. A verified durable copy to group storage or Pando is
+required before scientific reliance, but no large copy was made without separate authority.
