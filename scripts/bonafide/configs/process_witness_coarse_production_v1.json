@@ -68,6 +68,7 @@
   "launch_gates": {
     "fresh_run_specific_spend_authorization_required": true,
     "provider_batch_queued_input_token_limit_must_be_recorded": true,
-    "one_preauthorized_failed_only_recovery_wave": true
+    "maximum_failed_only_recovery_waves": 1,
+    "fresh_recovery_authorization_required": true
   }
 }

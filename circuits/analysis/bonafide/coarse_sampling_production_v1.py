@@ -120,6 +120,13 @@ def load_production_config(path: Path) -> dict[str, Any]:
         or sharding.get("official_batch_request_limit") != 50_000
     ):
         raise ValueError("coarse production sharding contract drift")
+    if value.get("launch_gates") != {
+        "fresh_run_specific_spend_authorization_required": True,
+        "provider_batch_queued_input_token_limit_must_be_recorded": True,
+        "maximum_failed_only_recovery_waves": 1,
+        "fresh_recovery_authorization_required": True,
+    }:
+        raise ValueError("coarse production launch-gate contract drift")
     return value
 
 
@@ -292,8 +299,14 @@ def assign_response_shards(
         if destination is None:
             destination = {"bytes": 0, "blocks": []}
             bins.append(destination)
-        destination["blocks"].append(block)
-        destination["bytes"] += int(block["bytes"])
+        destination_blocks = destination["blocks"]
+        destination_bytes = destination["bytes"]
+        if not isinstance(destination_blocks, list) or not isinstance(
+            destination_bytes, int
+        ):
+            raise ValueError("coarse production shard bin state drift")
+        destination_blocks.append(block)
+        destination["bytes"] = destination_bytes + int(block["bytes"])
     return [
         sorted(value["blocks"], key=lambda item: int(item["response_index"]))
         for value in bins

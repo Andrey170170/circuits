@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 from circuits.analysis.bonafide.canonical import canonical_sha256
@@ -23,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "scripts/bonafide/configs/process_witness_coarse_production_v1.json"
 
 
-def _document(text: str) -> dict:
+def _document(text: str) -> dict[str, Any]:
     tokens = [
         [index, match.start(), match.end()]
         for index, match in enumerate(re.finditer(r"\S+", text))
@@ -47,15 +48,27 @@ def _document(text: str) -> dict:
     }
 
 
-def test_config_freezes_v4_request_shape_and_broad_projection() -> None:
+def test_config_freezes_v4_request_shape_and_broad_projection(tmp_path: Path) -> None:
     config = load_production_config(CONFIG)
     assert config["segmentation"]["maximum_semantic_unit_tokens"] == 96
     assert config["request_protocol"]["maximum_focal_units_per_window"] == 6
     assert config["request_protocol"]["replicas_per_window"] == 3
     assert config["sharding"]["maximum_batch_input_bytes"] == 180_000_000
+    assert config["launch_gates"] == {
+        "fresh_run_specific_spend_authorization_required": True,
+        "provider_batch_queued_input_token_limit_must_be_recorded": True,
+        "maximum_failed_only_recovery_waves": 1,
+        "fresh_recovery_authorization_required": True,
+    }
     assert broad_family("active_task_work") == "process_bearing"
     assert broad_family("other_semantic_text") == "contextual"
     assert broad_family("uncertain") == "unresolved"
+    drifted = {**config, "launch_gates": {**config["launch_gates"]}}
+    drifted["launch_gates"]["fresh_recovery_authorization_required"] = False
+    path = tmp_path / "drifted.json"
+    path.write_text(json.dumps(drifted), encoding="utf-8")
+    with pytest.raises(ValueError, match="launch-gate contract drift"):
+        load_production_config(path)
 
 
 def test_windows_are_response_local_consecutive_and_replicas_are_body_identical() -> (
