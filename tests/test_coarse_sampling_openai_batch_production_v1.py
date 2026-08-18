@@ -68,7 +68,7 @@ def test_initialize_requires_queue_capacity_for_requested_concurrency(
         "manifest": {"manifest_sha256": "m" * 64},
         "cost_plan": {
             "cost_plan_sha256": "c" * 64,
-            "strict_no_cache_full_output_exposure_usd": 514.0,
+            "strict_no_cache_full_output_exposure_usd": 30.0,
         },
         "shards": shards,
     }
@@ -79,10 +79,12 @@ def test_initialize_requires_queue_capacity_for_requested_concurrency(
         initialize_campaign_run(
             bundle_root=bundle_root,
             run_root=tmp_path / "too-small",
+            authorized_primary_shard_ids=["shard-0", "shard-1", "shard-2"],
             forecast_budget_usd=20,
             forecast_budget_authorization_note="test forecast budget",
-            acknowledged_strict_worst_case_exposure_usd=514.0,
+            acknowledged_strict_worst_case_exposure_usd=30.0,
             strict_exposure_acknowledgement_note="actual may exceed forecast",
+            primary_actual_spend_limit_usd=31.0,
             provider_queued_input_token_limit=100,
             maximum_concurrent_shards=2,
         )
@@ -90,20 +92,24 @@ def test_initialize_requires_queue_capacity_for_requested_concurrency(
         initialize_campaign_run(
             bundle_root=bundle_root,
             run_root=tmp_path / "wrong-exposure",
+            authorized_primary_shard_ids=["shard-0", "shard-1", "shard-2"],
             forecast_budget_usd=20,
             forecast_budget_authorization_note="test forecast budget",
             acknowledged_strict_worst_case_exposure_usd=513.0,
             strict_exposure_acknowledgement_note="wrong exposure",
+            primary_actual_spend_limit_usd=514.0,
             provider_queued_input_token_limit=110,
             maximum_concurrent_shards=2,
         )
     intent = initialize_campaign_run(
         bundle_root=bundle_root,
         run_root=tmp_path / "run",
+        authorized_primary_shard_ids=["shard-0", "shard-1", "shard-2"],
         forecast_budget_usd=20,
         forecast_budget_authorization_note="test forecast budget",
-        acknowledged_strict_worst_case_exposure_usd=514.0,
+        acknowledged_strict_worst_case_exposure_usd=30.0,
         strict_exposure_acknowledgement_note="actual may exceed forecast",
+        primary_actual_spend_limit_usd=31.0,
         provider_queued_input_token_limit=110,
         maximum_concurrent_shards=2,
     )
@@ -111,7 +117,8 @@ def test_initialize_requires_queue_capacity_for_requested_concurrency(
     assert intent["provider_queued_input_token_limit"] == 110
     assert intent["network_calls_made"] == 0
     assert intent["forecast_budget_is_hard_spend_cap"] is False
-    assert intent["strict_worst_case_exposure_usd"] == 514.0
+    assert intent["strict_worst_case_exposure_usd"] == 30.0
+    assert intent["full_campaign_authorized"] is True
 
 
 def test_runtime_environment_rejects_sdk_and_provider_identity_drift(
@@ -135,6 +142,113 @@ def test_runtime_environment_rejects_sdk_and_provider_identity_drift(
         module._validate_runtime_environment(current)
 
 
+def test_calibration_scope_binds_one_shard_and_rejects_other_primary_surfaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    shards = []
+    for index, (forecast, strict, queue) in enumerate(
+        ((1.0, 10.0, 60), (2.0, 20.0, 20))
+    ):
+        path = bundle_root / f"shard-{index}.jsonl"
+        path.write_text("{}\n", encoding="utf-8")
+        shards.append(
+            {
+                "shard_id": f"shard-{index}",
+                "path": path.name,
+                "sha256": module.file_sha256(path),
+                "bytes": path.stat().st_size,
+                "request_count": 1,
+                "request_ids_in_order": [f"request-{index}"],
+                "direct_v4_cost_forecast_usd": forecast,
+                "strict_no_cache_full_output_exposure_usd": strict,
+                "queued_input_tokens_empirical_forecast": queue,
+            }
+        )
+    loaded = {
+        "manifest": {"manifest_sha256": "m" * 64},
+        "cost_plan": {
+            "cost_plan_sha256": "c" * 64,
+            "strict_no_cache_full_output_exposure_usd": 30.0,
+        },
+        "shards": shards,
+    }
+    monkeypatch.setattr(
+        module, "load_production_bundle", lambda *args, **kwargs: loaded
+    )
+    run_root = tmp_path / "run"
+    intent = initialize_campaign_run(
+        bundle_root=bundle_root,
+        run_root=run_root,
+        authorized_primary_shard_ids=["shard-1"],
+        forecast_budget_usd=2.0,
+        forecast_budget_authorization_note="calibration forecast",
+        acknowledged_strict_worst_case_exposure_usd=20.0,
+        strict_exposure_acknowledgement_note="calibration strict exposure",
+        primary_actual_spend_limit_usd=100.0,
+        provider_queued_input_token_limit=20,
+        maximum_concurrent_shards=1,
+    )
+    assert intent["authorized_primary_shard_ids"] == ["shard-1"]
+    assert intent["authorized_primary_direct_v4_cost_forecast_usd"] == 2.0
+    assert intent["strict_worst_case_exposure_usd"] == 20.0
+    assert intent["primary_actual_spend_limit_usd"] == 100.0
+    assert intent["full_campaign_authorized"] is False
+    assert [row["shard_id"] for row in intent["shards"]] == ["shard-1"]
+    assert not (run_root / "shards/shard-0").exists()
+    assert (run_root / "shards/shard-1/input.jsonl").is_file()
+    monkeypatch.setattr(module, "_campaign", lambda *_: (intent, loaded))
+    for action in (
+        lambda: submit_shard(
+            run_root=run_root,
+            shard_id="shard-0",
+            uploader=lambda _: (_ for _ in ()).throw(AssertionError("uploaded")),
+        ),
+        lambda: recover_shard_submission(
+            run_root=run_root,
+            shard_id="shard-0",
+            uploader=lambda _: (_ for _ in ()).throw(AssertionError("uploaded")),
+        ),
+        lambda: module.check_shard(run_root=run_root, shard_id="shard-0"),
+        lambda: collect_shard(run_root=run_root, shard_id="shard-0"),
+    ):
+        with pytest.raises(ValueError, match="not authorized"):
+            action()
+    with pytest.raises(ValueError, match="cannot finalize"):
+        module.finalize_campaign(run_root=run_root, destination=tmp_path / "final")
+    with pytest.raises(ValueError, match="authorization scope drift"):
+        module._validate_primary_authorization_scope(
+            {**intent, "authorized_primary_shard_ids": ["shard-0", "shard-1"]},
+            loaded,
+        )
+    for drifted in (
+        {**intent, "maximum_concurrent_shards": 2},
+        {**intent, "provider_queued_input_token_limit": 19},
+        {
+            **intent,
+            "shards": [
+                {**intent["shards"][0], "queued_input_tokens_empirical_forecast": 1}
+            ],
+        },
+    ):
+        with pytest.raises(ValueError, match="authoriz"):
+            module._validate_primary_authorization_scope(drifted, loaded)
+    with pytest.raises(ValueError, match="finite"):
+        initialize_campaign_run(
+            bundle_root=bundle_root,
+            run_root=tmp_path / "nan-run",
+            authorized_primary_shard_ids=["shard-1"],
+            forecast_budget_usd=float("nan"),
+            forecast_budget_authorization_note="invalid nan",
+            acknowledged_strict_worst_case_exposure_usd=20.0,
+            strict_exposure_acknowledgement_note="calibration strict exposure",
+            primary_actual_spend_limit_usd=100.0,
+            provider_queued_input_token_limit=20,
+            maximum_concurrent_shards=1,
+        )
+
+
 def test_submit_persists_intent_and_fails_closed_on_ambiguous_provider_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -144,8 +258,11 @@ def test_submit_persists_intent_and_fails_closed_on_ambiguous_provider_state(
     (shard_root / "input.jsonl").write_text('{"body":{}}\n', encoding="utf-8")
     intent = {
         "campaign_run_sha256": "c" * 64,
+        "authorized_primary_shard_ids": ["shard-000"],
         "bundle_root": str(tmp_path / "bundle"),
         "forecast_budget_usd": 20.0,
+        "strict_worst_case_exposure_usd": 80.0,
+        "primary_actual_spend_limit_usd": 100.0,
         "maximum_concurrent_shards": 1,
         "provider_queued_input_token_limit": 1000,
         "shards": [
@@ -302,6 +419,8 @@ def test_submit_reserves_completed_but_uncollected_cost(
     intent = {
         "campaign_run_sha256": "c" * 64,
         "forecast_budget_usd": 1.5,
+        "strict_worst_case_exposure_usd": 80.0,
+        "primary_actual_spend_limit_usd": 100.0,
         "maximum_concurrent_shards": 2,
         "provider_queued_input_token_limit": 1000,
         "shards": [
@@ -344,6 +463,8 @@ def test_submit_reserves_cross_shard_queue_capacity(
     intent = {
         "campaign_run_sha256": "c" * 64,
         "forecast_budget_usd": 10.0,
+        "strict_worst_case_exposure_usd": 80.0,
+        "primary_actual_spend_limit_usd": 100.0,
         "maximum_concurrent_shards": 2,
         "provider_queued_input_token_limit": 150,
         "shards": [
@@ -378,6 +499,8 @@ def test_submit_refuses_while_collection_materialization_is_reserved(
     intent = {
         "campaign_run_sha256": "c" * 64,
         "forecast_budget_usd": 10.0,
+        "strict_worst_case_exposure_usd": 80.0,
+        "primary_actual_spend_limit_usd": 100.0,
         "maximum_concurrent_shards": 2,
         "provider_queued_input_token_limit": 1_000,
         "shards": [
@@ -431,6 +554,11 @@ def test_simultaneous_collect_is_locked_through_materialization(
         return {"status": "complete"}
 
     monkeypatch.setattr(module, "_collect_shard_locked", materialize)
+    monkeypatch.setattr(
+        module,
+        "_campaign",
+        lambda *_: ({"shards": [{"shard_id": "shard-000"}]}, {}),
+    )
 
     def first() -> None:
         try:
@@ -461,6 +589,8 @@ def test_simultaneous_same_shard_submit_calls_provider_once(
     intent = {
         "campaign_run_sha256": "c" * 64,
         "forecast_budget_usd": 2.0,
+        "strict_worst_case_exposure_usd": 80.0,
+        "primary_actual_spend_limit_usd": 100.0,
         "maximum_concurrent_shards": 1,
         "provider_queued_input_token_limit": 1000,
         "shards": [
@@ -560,25 +690,63 @@ def test_strict_final_loader_binds_raw_provider_evidence(
     raw.mkdir(parents=True)
     (root / "campaign-bundle").mkdir()
     bundle_hash = "b" * 64
+    (attempt / "input.jsonl").write_text("{}\n")
+    input_sha256 = module.file_sha256(attempt / "input.jsonl")
+    bundle = {
+        "manifest": {"manifest_sha256": bundle_hash},
+        "cost_plan": {"strict_no_cache_full_output_exposure_usd": 10.0},
+        "shards": [
+            {
+                "shard_id": "shard-000",
+                "sha256": input_sha256,
+                "bytes": (attempt / "input.jsonl").stat().st_size,
+                "request_count": 1,
+                "direct_v4_cost_forecast_usd": 1.0,
+                "strict_no_cache_full_output_exposure_usd": 10.0,
+                "queued_input_tokens_empirical_forecast": 100,
+            }
+        ],
+    }
     monkeypatch.setattr(
-        module,
-        "load_production_bundle",
-        lambda *_args, **_kwargs: {"manifest": {"manifest_sha256": bundle_hash}},
+        module, "load_production_bundle", lambda *_args, **_kwargs: bundle
     )
     campaign = module._hashed(
         {
             "schema_version": module.CAMPAIGN_RUN_SCHEMA,
             "status": "initialized_no_provider_calls",
+            "authorization_scope_schema_version": "adag.process-witness.coarse-production-primary-scope.v1",
+            "authorization_scope": "explicit_primary_shard_subset",
+            "authorized_primary_shard_ids": ["shard-000"],
+            "authorized_primary_direct_v4_cost_forecast_usd": 1.0,
+            "full_campaign_authorized": True,
+            "full_campaign_strict_worst_case_exposure_usd": 10.0,
             "forecast_budget_usd": 1.0,
+            "forecast_budget_authorization_note": "test forecast budget",
             "forecast_budget_is_hard_spend_cap": False,
             "strict_worst_case_exposure_usd": 10.0,
             "acknowledged_strict_worst_case_exposure_usd": 10.0,
             "strict_exposure_acknowledgement_note": "test strict exposure",
+            "primary_actual_spend_limit_usd": 11.0,
+            "primary_actual_spend_must_be_strictly_below_limit": True,
+            "primary_actual_limit_protected_by_frozen_request_caps": True,
+            "maximum_concurrent_shards": 1,
+            "provider_queued_input_token_limit": 100,
+            "shards": [
+                {
+                    "shard_id": "shard-000",
+                    "input_relative_path": "shards/shard-000/input.jsonl",
+                    "input_sha256": input_sha256,
+                    "bytes": (attempt / "input.jsonl").stat().st_size,
+                    "request_count": 1,
+                    "direct_v4_cost_forecast_usd": 1.0,
+                    "strict_no_cache_full_output_exposure_usd": 10.0,
+                    "queued_input_tokens_empirical_forecast": 100,
+                }
+            ],
         },
         "campaign_run_sha256",
     )
     module.atomic_write_json(root / "campaign-intent.json", campaign)
-    (attempt / "input.jsonl").write_text("{}\n")
     submission_intent = module._hashed(
         {
             "schema_version": module.SUBMISSION_SCHEMA,
@@ -689,6 +857,8 @@ def test_strict_final_loader_binds_raw_provider_evidence(
             "primary_forecast_budget_usd": 1.0,
             "primary_forecast_budget_is_hard_spend_cap": False,
             "primary_strict_worst_case_exposure_usd": 10.0,
+            "primary_actual_spend_limit_usd": 11.0,
+            "authorized_primary_shard_ids": ["shard-000"],
             "recovery_actual_cost_usd": 0.0,
             "actual_total_cost_usd": 0.0,
             "recovery_authorization": None,
@@ -735,8 +905,11 @@ def test_terminal_failed_batch_materializes_recovery_events_and_priced_zero(
     )
     intent = {
         "campaign_run_sha256": "c" * 64,
+        "authorized_primary_shard_ids": ["shard-000"],
         "bundle_root": str(tmp_path / "bundle"),
         "forecast_budget_usd": 10.0,
+        "strict_worst_case_exposure_usd": 79.53101355,
+        "primary_actual_spend_limit_usd": 100.0,
         "shards": [{"shard_id": "shard-000"}],
     }
     request = {
@@ -762,6 +935,7 @@ def test_terminal_failed_batch_materializes_recovery_events_and_priced_zero(
         ).read_text()
     )
     monkeypatch.setattr(module, "_submission", lambda *_: (intent, submission))
+    monkeypatch.setattr(module, "_campaign", lambda *_: (intent, {"shards": []}))
     monkeypatch.setattr(module, "iter_shard_requests", lambda *_: [request])
     monkeypatch.setattr(module, "load_price_snapshot", lambda *_: prices)
     monkeypatch.setattr(
@@ -952,6 +1126,115 @@ def test_terminal_failed_batch_materializes_recovery_events_and_priced_zero(
     assert recovered["cumulative_known_priced_cost_usd"] > 0
 
 
+def test_calibration_collection_above_strict_below_limit_blocks_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "run"
+    shard_root = run / "shards/shard-005"
+    shard_root.mkdir(parents=True)
+    (shard_root / "input.jsonl").write_text('{"body":{}}\n')
+    metadata = {
+        "campaign": ("c" * 64)[:40],
+        "shard": "shard-005",
+        "generation": "primary",
+    }
+    provider = _provider(metadata)
+    submission = module._hashed(
+        {
+            "schema_version": module.SUBMISSION_SCHEMA,
+            "status": "submitted",
+            "campaign_run_sha256": "c" * 64,
+            "submission_intent_sha256": "i" * 64,
+            "provider_response": provider,
+        },
+        "submission_sha256",
+    )
+    intent = {
+        "campaign_run_sha256": "c" * 64,
+        "authorized_primary_shard_ids": ["shard-005"],
+        "bundle_root": str(tmp_path / "bundle"),
+        "forecast_budget_usd": 3.207300838,
+        "strict_worst_case_exposure_usd": 79.53101355,
+        "primary_actual_spend_limit_usd": 100.0,
+        "shards": [{"shard_id": "shard-005"}],
+    }
+    request = {
+        "request_id": "request-005",
+        "shard_id": "shard-005",
+        "window_id": "window-1",
+        "window_index": 0,
+        "response_id": "response-1",
+        "replica_index": 0,
+        "body_sha256": "b" * 64,
+        "focal_unit_ids": ["unit-1"],
+    }
+    prices = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "scripts/bonafide/configs/labeling/prices-2026-08-16-coarse-v2.json"
+        ).read_text()
+    )
+    config = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "scripts/bonafide/configs/process_witness_coarse_production_v1.json"
+        ).read_text()
+    )
+    monkeypatch.setattr(module, "_submission", lambda *_: (intent, submission))
+    monkeypatch.setattr(module, "_campaign", lambda *_: (intent, {"shards": []}))
+    monkeypatch.setattr(module, "iter_shard_requests", lambda *_: [request])
+    monkeypatch.setattr(module, "load_price_snapshot", lambda *_: prices)
+    monkeypatch.setattr(
+        module,
+        "load_production_bundle",
+        lambda *_args, **_kwargs: {"config": config},
+    )
+    monkeypatch.setattr(
+        module,
+        "_price_events",
+        lambda **_kwargs: (90.0, True, "priced_test_fixture"),
+    )
+    failed = {
+        **provider,
+        "status": "failed",
+        "request_counts": {"total": 1, "completed": 0, "failed": 1},
+        "usage": None,
+        "errors": {"data": [{"code": "provider_error", "message": "failed"}]},
+    }
+    collection = collect_shard(
+        run_root=run,
+        shard_id="shard-005",
+        downloader=lambda _batch: (failed, {}),
+    )
+    assert collection["known_priced_cost_usd"] == 90.0
+    assert collection["primary_strict_exposure_exceeded"] is True
+    assert collection["primary_actual_spend_limit_exceeded"] is False
+    assert collection["status"] == "failed_closed_primary_strict_exposure_exceeded"
+
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    source = bundle_root / "shard-005.jsonl"
+    source.write_text(
+        json.dumps({"custom_id": "request-005", "body": {"model": "gpt-5.6-luna"}})
+        + "\n"
+    )
+    bundle = {
+        "shards": [
+            {
+                "shard_id": "shard-005",
+                "path": source.name,
+                "request_ids_in_order": ["request-005"],
+            }
+        ],
+        "config": config,
+    }
+    intent["bundle_root"] = str(bundle_root)
+    monkeypatch.setattr(module, "_campaign", lambda *_: (intent, bundle))
+    with pytest.raises(ValueError, match="strict exposure"):
+        prepare_failed_only_recovery(run_root=run)
+    assert not (run / "recovery-000").exists()
+
+
 @pytest.mark.parametrize(
     ("status", "counts", "errors"),
     [
@@ -1012,6 +1295,116 @@ def test_zero_aggregate_cost_requires_proven_preexecution_failure(
     assert basis == "cost_incomplete_per_request_and_aggregate_usage"
 
 
+@pytest.mark.parametrize(
+    "tamper",
+    ["foreign_request", "body", "primary_shard", "queue", "forecast", "strict"],
+)
+def test_recovery_tampering_is_rejected_before_provider_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tamper: str
+) -> None:
+    run_root = tmp_path / "run"
+    primary_root = run_root / "shards/shard-005"
+    primary_root.mkdir(parents=True)
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    original = {
+        "custom_id": "request-005",
+        "body": {"model": "gpt-5.6-luna", "input": "authorized"},
+    }
+    foreign = {
+        "custom_id": "request-004",
+        "body": {"model": "gpt-5.6-luna", "input": "foreign"},
+    }
+    module.atomic_write_jsonl(bundle_root / "shard-005.jsonl", [original])
+    module.atomic_write_jsonl(bundle_root / "shard-004.jsonl", [foreign])
+    shutil.copyfile(
+        Path(__file__).resolve().parents[1]
+        / "scripts/bonafide/configs/labeling/prices-2026-08-16-coarse-v2.json",
+        bundle_root / "price-snapshot.json",
+    )
+    events_path = primary_root / "events.jsonl"
+    module.atomic_write_jsonl(
+        events_path,
+        [{"request_id": "request-005", "validation_status": "provider_error"}],
+    )
+    collection = module._hashed(
+        {
+            "events_sha256": module.file_sha256(events_path),
+            "cost_complete": True,
+            "known_priced_cost_usd": 0.0,
+        },
+        "collection_sha256",
+    )
+    module.atomic_write_json(primary_root / "collection.json", collection)
+    config = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "scripts/bonafide/configs/process_witness_coarse_production_v1.json"
+        ).read_text()
+    )
+    bundle = {
+        "config": config,
+        "shards": [
+            {
+                "shard_id": "shard-004",
+                "path": "shard-004.jsonl",
+                "request_ids_in_order": ["request-004"],
+            },
+            {
+                "shard_id": "shard-005",
+                "path": "shard-005.jsonl",
+                "request_ids_in_order": ["request-005"],
+            },
+        ],
+    }
+    intent = {
+        "campaign_run_sha256": "c" * 64,
+        "bundle_root": str(bundle_root),
+        "authorized_primary_shard_ids": ["shard-005"],
+        "strict_worst_case_exposure_usd": 79.53101355,
+        "primary_actual_spend_limit_usd": 100.0,
+        "shards": [{"shard_id": "shard-005"}],
+    }
+    monkeypatch.setattr(module, "_campaign", lambda *_: (intent, bundle))
+    manifest = prepare_failed_only_recovery(run_root=run_root)
+    recovery_root = run_root / "recovery-000"
+    tampered = json.loads(json.dumps(manifest))
+    tampered.pop("recovery_manifest_sha256")
+    binding = tampered["shards"][0]
+    input_path = run_root / binding["input_relative_path"]
+    if tamper in {"foreign_request", "body"}:
+        row = (
+            foreign
+            if tamper == "foreign_request"
+            else {**original, "body": {**original["body"], "input": "tampered"}}
+        )
+        module.atomic_write_jsonl(input_path, [row], overwrite=True)
+        binding["input_sha256"] = module.file_sha256(input_path)
+        binding["bytes"] = input_path.stat().st_size
+        binding["request_ids_in_order"] = [row["custom_id"]]
+    elif tamper == "primary_shard":
+        binding["shard_id"] = "shard-004"
+    elif tamper == "queue":
+        binding["queued_input_tokens_empirical_forecast"] = 0
+    elif tamper == "forecast":
+        binding["direct_v4_cost_forecast_usd"] = 0.0
+    else:
+        binding["strict_no_cache_full_output_exposure_usd"] = 0.0
+    module.atomic_write_json(
+        recovery_root / "manifest.json",
+        module._hashed(tampered, "recovery_manifest_sha256"),
+        overwrite=True,
+    )
+    with pytest.raises(ValueError, match="recovery"):
+        submit_recovery_shard(
+            run_root=run_root,
+            shard_id="shard-005",
+            uploader=lambda _: (_ for _ in ()).throw(
+                AssertionError("provider uploader must not run")
+            ),
+        )
+
+
 def test_missing_upload_receipt_recovery_requires_zero_batches_then_reuploads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1019,7 +1412,10 @@ def test_missing_upload_receipt_recovery_requires_zero_batches_then_reuploads(
     shard_root = run / "shards" / "shard-000"
     shard_root.mkdir(parents=True)
     (shard_root / "input.jsonl").write_text("{}\n")
-    intent = {"campaign_run_sha256": "c" * 64}
+    intent = {
+        "campaign_run_sha256": "c" * 64,
+        "shards": [{"shard_id": "shard-000"}],
+    }
     monkeypatch.setattr(module, "_campaign", lambda *_: (intent, {"shards": []}))
     submission_intent = module._hashed(
         {
@@ -1118,10 +1514,10 @@ def test_recovery_missing_upload_receipt_uses_same_safe_reupload_protocol(
 
 
 @pytest.mark.parametrize(
-    ("recovery_budget", "queue_limit", "message"),
+    ("recovery_budget", "queue_limit", "prior_actual_cost", "message"),
     [
-        (1.5, 1_000, "actual-or-reserved recovery cost"),
-        (10.0, 150, "queued-input-token capacity"),
+        (2.0, 1_000, 1.5, "actual-or-reserved recovery cost"),
+        (10.0, 150, None, "queued-input-token capacity"),
     ],
 )
 def test_recovery_submit_reserves_cross_shard_budget_and_queue(
@@ -1129,6 +1525,7 @@ def test_recovery_submit_reserves_cross_shard_budget_and_queue(
     monkeypatch: pytest.MonkeyPatch,
     recovery_budget: float,
     queue_limit: int,
+    prior_actual_cost: float | None,
     message: str,
 ) -> None:
     run = tmp_path / "run"
@@ -1146,13 +1543,26 @@ def test_recovery_submit_reserves_cross_shard_budget_and_queue(
                 "direct_v4_cost_forecast_usd": 1.0,
                 "strict_no_cache_full_output_exposure_usd": 10.0,
                 "queued_input_tokens_empirical_forecast": 100,
+                "request_ids_in_order": [f"request-{shard_id}"],
             }
         )
-    (recovery_root / "shards" / "shard-000" / "submission-intent.json").write_text(
-        "{}\n"
-    )
+    first_root = recovery_root / "shards" / "shard-000"
+    if prior_actual_cost is None:
+        (first_root / "submission-intent.json").write_text("{}\n")
+    else:
+        module.atomic_write_json(
+            first_root / "collection.json",
+            module._hashed(
+                {
+                    "cost_complete": True,
+                    "known_priced_cost_usd": prior_actual_cost,
+                },
+                "collection_sha256",
+            ),
+        )
     intent = {
         "campaign_run_sha256": "c" * 64,
+        "authorized_primary_shard_ids": ["shard-000", "shard-001"],
         "maximum_concurrent_shards": 2,
         "provider_queued_input_token_limit": queue_limit,
     }
@@ -1160,7 +1570,11 @@ def test_recovery_submit_reserves_cross_shard_budget_and_queue(
         {
             "schema_version": "adag.process-witness.coarse-production-recovery.v1",
             "campaign_run_sha256": intent["campaign_run_sha256"],
+            "authorized_primary_shard_ids": intent["authorized_primary_shard_ids"],
             "strict_no_cache_full_output_exposure_usd": 20.0,
+            "direct_v4_cost_forecast_usd": 2.0,
+            "shard_count": 2,
+            "request_count": 2,
             "shards": shard_rows,
         },
         "recovery_manifest_sha256",
@@ -1197,11 +1611,25 @@ def test_recovery_submit_reserves_cross_shard_budget_and_queue(
 
 
 def test_recovery_authorization_self_hash_is_not_enough() -> None:
-    intent = {"campaign_run_sha256": "c" * 64}
+    intent = {
+        "campaign_run_sha256": "c" * 64,
+        "authorized_primary_shard_ids": ["shard-000"],
+    }
     manifest = module._hashed(
         {
             "campaign_run_sha256": intent["campaign_run_sha256"],
+            "authorized_primary_shard_ids": intent["authorized_primary_shard_ids"],
             "strict_no_cache_full_output_exposure_usd": 20.0,
+            "direct_v4_cost_forecast_usd": 1.0,
+            "shard_count": 1,
+            "request_count": 1,
+            "shards": [
+                {
+                    "shard_id": "shard-000",
+                    "request_count": 1,
+                    "request_ids_in_order": ["request-0"],
+                }
+            ],
         },
         "recovery_manifest_sha256",
     )

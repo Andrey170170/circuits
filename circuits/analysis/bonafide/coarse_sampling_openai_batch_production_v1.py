@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import shutil
@@ -20,7 +21,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
+from circuits.analysis.bonafide.canonical import (
+    canonical_json,
+    canonical_sha256,
+    file_sha256,
+)
 from circuits.analysis.bonafide.coarse_sampling_annotation import validate_decisions
 from circuits.analysis.bonafide.coarse_sampling_openai_batch_v4 import (
     _estimate_v4_actual_cost,
@@ -213,10 +218,12 @@ def initialize_campaign_run(
     *,
     bundle_root: Path,
     run_root: Path,
+    authorized_primary_shard_ids: list[str],
     forecast_budget_usd: float,
     forecast_budget_authorization_note: str,
     acknowledged_strict_worst_case_exposure_usd: float,
     strict_exposure_acknowledgement_note: str,
+    primary_actual_spend_limit_usd: float,
     provider_queued_input_token_limit: int,
     maximum_concurrent_shards: int,
 ) -> dict[str, Any]:
@@ -225,12 +232,51 @@ def initialize_campaign_run(
     bundle = load_production_bundle(bundle_root, load_units=False)
     if run_root.exists():
         raise FileExistsError(f"coarse production run exists: {run_root}")
-    strict_exposure = float(
+    full_campaign_strict_exposure = float(
         bundle["cost_plan"]["strict_no_cache_full_output_exposure_usd"]
     )
+    if (
+        not authorized_primary_shard_ids
+        or any(not isinstance(value, str) for value in authorized_primary_shard_ids)
+        or len(authorized_primary_shard_ids) != len(set(authorized_primary_shard_ids))
+    ):
+        raise ValueError(
+            "coarse production requires a nonempty unique authorized primary shard subset"
+        )
+    requested = set(authorized_primary_shard_ids)
+    known = {str(shard["shard_id"]) for shard in bundle["shards"]}
+    if not requested <= known:
+        raise ValueError("authorized primary shard subset contains unknown shard")
+    selected_shards = [
+        shard for shard in bundle["shards"] if shard["shard_id"] in requested
+    ]
+    frozen_authorized_ids = [str(shard["shard_id"]) for shard in selected_shards]
+    subset_forecast = sum(
+        float(shard["direct_v4_cost_forecast_usd"]) for shard in selected_shards
+    )
+    strict_exposure = sum(
+        float(shard["strict_no_cache_full_output_exposure_usd"])
+        for shard in selected_shards
+    )
+    if not all(
+        math.isfinite(value)
+        for value in (
+            forecast_budget_usd,
+            acknowledged_strict_worst_case_exposure_usd,
+            primary_actual_spend_limit_usd,
+            subset_forecast,
+            strict_exposure,
+            full_campaign_strict_exposure,
+        )
+    ):
+        raise ValueError("coarse production authorization costs must be finite")
     if forecast_budget_usd <= 0 or not forecast_budget_authorization_note.strip():
         raise ValueError(
             "coarse production requires an explicit positive forecast budget"
+        )
+    if forecast_budget_usd + 1e-9 < subset_forecast:
+        raise ValueError(
+            "coarse production forecast budget is below the frozen authorized subset forecast"
         )
     if (
         abs(acknowledged_strict_worst_case_exposure_usd - strict_exposure) > 1e-9
@@ -240,12 +286,20 @@ def initialize_campaign_run(
             "coarse production requires exact acknowledgement that actual spend may "
             "exceed the forecast budget up to the strict worst-case exposure"
         )
-    if not 1 <= maximum_concurrent_shards <= len(bundle["shards"]):
-        raise ValueError("maximum concurrent shards is outside the frozen shard census")
+    if primary_actual_spend_limit_usd <= strict_exposure:
+        raise ValueError(
+            "primary actual spend limit must be strictly above the frozen subset strict exposure"
+        )
+    if not 1 <= maximum_concurrent_shards <= len(selected_shards):
+        raise ValueError(
+            "maximum concurrent shards is outside the authorized primary subset"
+        )
+    if requested != known and maximum_concurrent_shards != 1:
+        raise ValueError("primary shard-subset authorization requires concurrency one")
     largest_forecasts = sorted(
         (
             int(shard["queued_input_tokens_empirical_forecast"])
-            for shard in bundle["shards"]
+            for shard in selected_shards
         ),
         reverse=True,
     )[:maximum_concurrent_shards]
@@ -256,7 +310,7 @@ def initialize_campaign_run(
     run_root.mkdir(parents=True)
     try:
         shard_bindings = []
-        for shard in bundle["shards"]:
+        for shard in selected_shards:
             shard_root = run_root / "shards" / shard["shard_id"]
             shard_root.mkdir(parents=True)
             source = bundle_root / shard["path"]
@@ -288,6 +342,16 @@ def initialize_campaign_run(
                 "bundle_root": str(bundle_root.resolve()),
                 "bundle_manifest_sha256": bundle["manifest"]["manifest_sha256"],
                 "cost_plan_sha256": bundle["cost_plan"]["cost_plan_sha256"],
+                "authorization_scope_schema_version": (
+                    "adag.process-witness.coarse-production-primary-scope.v1"
+                ),
+                "authorization_scope": "explicit_primary_shard_subset",
+                "authorized_primary_shard_ids": frozen_authorized_ids,
+                "authorized_primary_direct_v4_cost_forecast_usd": subset_forecast,
+                "full_campaign_authorized": requested == known,
+                "full_campaign_strict_worst_case_exposure_usd": (
+                    full_campaign_strict_exposure
+                ),
                 "forecast_budget_usd": forecast_budget_usd,
                 "forecast_budget_authorization_note": forecast_budget_authorization_note,
                 "forecast_budget_is_hard_spend_cap": False,
@@ -298,6 +362,9 @@ def initialize_campaign_run(
                 "strict_exposure_acknowledgement_note": (
                     strict_exposure_acknowledgement_note
                 ),
+                "primary_actual_spend_limit_usd": primary_actual_spend_limit_usd,
+                "primary_actual_spend_must_be_strictly_below_limit": True,
+                "primary_actual_limit_protected_by_frozen_request_caps": True,
                 "provider_queued_input_token_limit": provider_queued_input_token_limit,
                 "maximum_concurrent_shards": maximum_concurrent_shards,
                 "queue_policy": "active frozen shards must fit recorded concurrency and queued-token cap",
@@ -357,6 +424,7 @@ def _campaign(run_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     )
     if bundle["manifest"]["manifest_sha256"] != intent["bundle_manifest_sha256"]:
         raise ValueError("coarse production run/bundle binding drift")
+    _validate_primary_authorization_scope(intent, bundle)
     _validate_runtime_environment(intent.get("environment"))
     repo_root = Path(__file__).resolve().parents[3]
     for binding in bundle["manifest"]["source_revision"]["files"]:
@@ -370,6 +438,136 @@ def _campaign(run_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         if file_sha256(path) != binding["input_sha256"]:
             raise ValueError("coarse production run input drift")
     return intent, bundle
+
+
+def _validate_primary_authorization_scope(
+    intent: Mapping[str, Any], bundle: Mapping[str, Any]
+) -> None:
+    raw_authorized_ids = intent.get("authorized_primary_shard_ids")
+    raw_bindings = intent.get("shards")
+    if (
+        not isinstance(raw_authorized_ids, list)
+        or not raw_authorized_ids
+        or any(not isinstance(value, str) for value in raw_authorized_ids)
+        or not isinstance(raw_bindings, list)
+        or any(not isinstance(binding, Mapping) for binding in raw_bindings)
+    ):
+        raise ValueError("coarse production primary authorization scope drift")
+    authorized_ids = [value for value in raw_authorized_ids if isinstance(value, str)]
+    bindings = [binding for binding in raw_bindings if isinstance(binding, Mapping)]
+    if (
+        intent.get("authorization_scope_schema_version")
+        != "adag.process-witness.coarse-production-primary-scope.v1"
+        or intent.get("authorization_scope") != "explicit_primary_shard_subset"
+        or len(authorized_ids) != len(set(authorized_ids))
+        or [binding.get("shard_id") for binding in bindings] != authorized_ids
+    ):
+        raise ValueError("coarse production primary authorization scope drift")
+    by_id = {str(shard["shard_id"]): shard for shard in bundle["shards"]}
+    if any(
+        not isinstance(value, str) or value not in by_id for value in authorized_ids
+    ):
+        raise ValueError("coarse production authorized primary shard identity drift")
+    selected = [by_id[value] for value in authorized_ids]
+    expected_order = [
+        str(shard["shard_id"])
+        for shard in bundle["shards"]
+        if shard["shard_id"] in set(authorized_ids)
+    ]
+    subset_forecast = sum(
+        float(shard["direct_v4_cost_forecast_usd"]) for shard in selected
+    )
+    subset_strict = sum(
+        float(shard["strict_no_cache_full_output_exposure_usd"]) for shard in selected
+    )
+    full_ids = {str(shard["shard_id"]) for shard in bundle["shards"]}
+    numeric_scope_values = (
+        intent.get("authorized_primary_direct_v4_cost_forecast_usd"),
+        intent.get("strict_worst_case_exposure_usd"),
+        intent.get("acknowledged_strict_worst_case_exposure_usd"),
+        intent.get("full_campaign_strict_worst_case_exposure_usd"),
+        intent.get("primary_actual_spend_limit_usd"),
+        intent.get("forecast_budget_usd"),
+    )
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        for value in numeric_scope_values
+    ):
+        raise ValueError("coarse production primary authorization cost drift")
+    maximum_concurrent = intent.get("maximum_concurrent_shards")
+    queued_limit = intent.get("provider_queued_input_token_limit")
+    largest_queue_reservations = sorted(
+        (int(shard["queued_input_tokens_empirical_forecast"]) for shard in selected),
+        reverse=True,
+    )[: maximum_concurrent if isinstance(maximum_concurrent, int) else 0]
+    if (
+        authorized_ids != expected_order
+        or abs(
+            float(intent.get("authorized_primary_direct_v4_cost_forecast_usd", -1))
+            - subset_forecast
+        )
+        > 1e-9
+        or abs(float(intent.get("strict_worst_case_exposure_usd", -1)) - subset_strict)
+        > 1e-9
+        or abs(
+            float(intent.get("acknowledged_strict_worst_case_exposure_usd", -1))
+            - subset_strict
+        )
+        > 1e-9
+        or intent.get("full_campaign_authorized") != (set(authorized_ids) == full_ids)
+        or not isinstance(maximum_concurrent, int)
+        or not 1 <= maximum_concurrent <= len(selected)
+        or (set(authorized_ids) != full_ids and maximum_concurrent != 1)
+        or not isinstance(queued_limit, int)
+        or queued_limit < sum(largest_queue_reservations)
+        or float(intent.get("forecast_budget_usd", -1)) + 1e-9 < subset_forecast
+        or not isinstance(intent.get("forecast_budget_authorization_note"), str)
+        or not intent["forecast_budget_authorization_note"].strip()
+        or not isinstance(intent.get("strict_exposure_acknowledgement_note"), str)
+        or not intent["strict_exposure_acknowledgement_note"].strip()
+        or abs(
+            float(intent.get("full_campaign_strict_worst_case_exposure_usd", -1))
+            - float(bundle["cost_plan"]["strict_no_cache_full_output_exposure_usd"])
+        )
+        > 1e-9
+        or float(intent.get("primary_actual_spend_limit_usd", -1)) <= subset_strict
+        or intent.get("primary_actual_spend_must_be_strictly_below_limit") is not True
+        or intent.get("primary_actual_limit_protected_by_frozen_request_caps")
+        is not True
+    ):
+        raise ValueError("coarse production primary authorization semantics drift")
+    for binding, shard in zip(bindings, selected, strict=True):
+        if (
+            binding.get("input_relative_path")
+            != f"shards/{shard['shard_id']}/input.jsonl"
+            or binding.get("input_sha256") != shard["sha256"]
+            or binding.get("bytes") != shard["bytes"]
+            or binding.get("request_count") != shard["request_count"]
+            or abs(
+                float(binding.get("direct_v4_cost_forecast_usd", -1))
+                - float(shard["direct_v4_cost_forecast_usd"])
+            )
+            > 1e-9
+            or abs(
+                float(binding.get("strict_no_cache_full_output_exposure_usd", -1))
+                - float(shard["strict_no_cache_full_output_exposure_usd"])
+            )
+            > 1e-9
+            or binding.get("queued_input_tokens_empirical_forecast")
+            != shard["queued_input_tokens_empirical_forecast"]
+        ):
+            raise ValueError("coarse production authorized primary binding drift")
+
+
+def _authorized_primary_shard(
+    intent: Mapping[str, Any], shard_id: str
+) -> Mapping[str, Any]:
+    for shard in intent["shards"]:
+        if shard["shard_id"] == shard_id:
+            return shard
+    raise ValueError(f"primary shard is not authorized for this run: {shard_id}")
 
 
 def _metadata(
@@ -519,6 +717,7 @@ def submit_shard(
     creator: Callable[..., dict[str, Any]] = _create_provider,
 ) -> dict[str, Any]:
     intent, bundle = _campaign(run_root)
+    intent_shard = _authorized_primary_shard(intent, shard_id)
     shard = next((s for s in bundle["shards"] if s["shard_id"] == shard_id), None)
     if shard is None:
         raise ValueError("unknown coarse production shard")
@@ -536,9 +735,12 @@ def submit_shard(
         attempted_cost, cost_complete = _attempted_primary_forecast(run_root, intent)
         if not cost_complete:
             raise ValueError("prior collected campaign cost is not fully priced")
-        intent_shard = next(
-            item for item in intent["shards"] if item["shard_id"] == shard_id
-        )
+        if attempted_cost > float(intent["strict_worst_case_exposure_usd"]):
+            raise ValueError(
+                "prior primary actual cost exceeds acknowledged strict exposure"
+            )
+        if attempted_cost >= float(intent["primary_actual_spend_limit_usd"]):
+            raise ValueError("prior primary actual cost reached its strict spend limit")
         candidate_cost = float(intent_shard["direct_v4_cost_forecast_usd"])
         if attempted_cost + candidate_cost > float(intent["forecast_budget_usd"]):
             raise ValueError(
@@ -749,6 +951,7 @@ def recover_shard_submission(
     creator: Callable[..., dict[str, Any]] = _create_provider,
 ) -> dict[str, Any]:
     intent, _bundle = _campaign(run_root)
+    _authorized_primary_shard(intent, shard_id)
     with _submission_gate(run_root):
         return _recover_submission_failure(
             shard_root=run_root / "shards" / shard_id,
@@ -763,6 +966,7 @@ def recover_shard_submission(
 
 def _submission(run_root: Path, shard_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     intent, _bundle = _campaign(run_root)
+    _authorized_primary_shard(intent, shard_id)
     value = _load_object(run_root / "shards" / shard_id / "submission.json")
     _verify(value, "submission_sha256", "coarse production submission")
     if value["campaign_run_sha256"] != intent["campaign_run_sha256"]:
@@ -1294,16 +1498,30 @@ def _collect_shard_locked(
     forecast_budget_exceeded = complete_cost and cumulative_cost > float(
         intent["forecast_budget_usd"]
     )
+    primary_actual_limit_exceeded = complete_cost and cumulative_cost >= float(
+        intent["primary_actual_spend_limit_usd"]
+    )
+    primary_strict_exposure_exceeded = complete_cost and cumulative_cost > float(
+        intent["strict_worst_case_exposure_usd"]
+    )
     result = _hashed(
         {
             "schema_version": COLLECTION_SCHEMA,
             "status": (
-                "complete_forecast_budget_exceeded_stop_further_primary_submission"
-                if forecast_budget_exceeded
+                "failed_closed_primary_actual_spend_limit_exceeded"
+                if primary_actual_limit_exceeded
                 else (
-                    "complete"
-                    if success == len(events) and complete_cost
-                    else "complete_with_failed_requests_recovery_eligible"
+                    "failed_closed_primary_strict_exposure_exceeded"
+                    if primary_strict_exposure_exceeded
+                    else (
+                        "complete_forecast_budget_exceeded_stop_further_primary_submission"
+                        if forecast_budget_exceeded
+                        else (
+                            "complete"
+                            if success == len(events) and complete_cost
+                            else "complete_with_failed_requests_recovery_eligible"
+                        )
+                    )
                 )
             ),
             "completed_at": _now(),
@@ -1319,6 +1537,13 @@ def _collect_shard_locked(
             "forecast_budget_usd": intent["forecast_budget_usd"],
             "forecast_budget_is_hard_spend_cap": False,
             "forecast_budget_exceeded": forecast_budget_exceeded,
+            "primary_actual_spend_limit_usd": intent["primary_actual_spend_limit_usd"],
+            "primary_actual_spend_must_be_strictly_below_limit": True,
+            "primary_actual_spend_limit_exceeded": primary_actual_limit_exceeded,
+            "primary_strict_worst_case_exposure_usd": intent[
+                "strict_worst_case_exposure_usd"
+            ],
+            "primary_strict_exposure_exceeded": primary_strict_exposure_exceeded,
             "raw_file_bindings": raw_bindings,
             "events_sha256": file_sha256(shard_root / "events.jsonl"),
         },
@@ -1336,6 +1561,8 @@ def collect_shard(
         [str], tuple[dict[str, Any], dict[str, dict[str, Any]]]
     ] = _download,
 ) -> dict[str, Any]:
+    intent, _bundle = _campaign(run_root)
+    _authorized_primary_shard(intent, shard_id)
     shard_root = run_root / "shards" / shard_id
     with _collection_gate(shard_root), _submission_gate(run_root):
         return _collect_shard_locked(
@@ -1352,15 +1579,19 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
     recovery_root = run_root / "recovery-000"
     if recovery_root.exists():
         raise FileExistsError("coarse production recovery wave already exists")
+    authorized_ids = [str(shard["shard_id"]) for shard in intent["shards"]]
+    by_id = {str(shard["shard_id"]): shard for shard in bundle["shards"]}
+    authorized_shards = [by_id[shard_id] for shard_id in authorized_ids]
     failed = []
     successful = set()
-    for shard in bundle["shards"]:
+    primary_actual_cost = 0.0
+    for shard in authorized_shards:
         shard_root = run_root / "shards" / shard["shard_id"]
         events_path = shard_root / "events.jsonl"
         collection_path = shard_root / "collection.json"
         if not events_path.exists() or not collection_path.exists():
             raise ValueError(
-                "all primary shards must be collected before recovery freeze"
+                "all authorized primary shards must be collected before recovery freeze"
             )
         collection = _load_object(collection_path)
         _verify(collection, "collection_sha256", "coarse production collection")
@@ -1369,18 +1600,25 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
             or not collection["cost_complete"]
         ):
             raise ValueError("primary collection is not recovery-eligible")
+        primary_actual_cost += float(collection["known_priced_cost_usd"])
         for event in read_jsonl(events_path):
             if event["validation_status"] == "success":
                 successful.add(event["request_id"])
             else:
                 failed.append(event["request_id"])
+    if primary_actual_cost > float(intent["strict_worst_case_exposure_usd"]):
+        raise ValueError(
+            "primary actual cost exceeds acknowledged strict exposure; recovery forbidden"
+        )
+    if primary_actual_cost >= float(intent["primary_actual_spend_limit_usd"]):
+        raise ValueError("primary actual cost reached its strict spend limit")
     failed_set = set(failed)
     if not failed_set or failed_set & successful:
         raise ValueError(
             "recovery requires failed-only non-overlapping request identities"
         )
     source_lines: dict[str, tuple[str, dict[str, Any]]] = {}
-    for shard in bundle["shards"]:
+    for shard in authorized_shards:
         for line in read_jsonl(Path(intent["bundle_root"]) / shard["path"]):
             if line["custom_id"] in failed_set:
                 source_lines[line["custom_id"]] = (shard["shard_id"], line)
@@ -1390,7 +1628,7 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
     recovery_shards = []
     recovery_direct_forecast_total = 0.0
     recovery_strict_exposure_total = 0.0
-    for primary in bundle["shards"]:
+    for primary in authorized_shards:
         ordered = [
             source_lines[request_id][1]
             for request_id in primary["request_ids_in_order"]
@@ -1457,6 +1695,7 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
             "status": "prepared_offline_failed_only",
             "created_at": _now(),
             "campaign_run_sha256": intent["campaign_run_sha256"],
+            "authorized_primary_shard_ids": authorized_ids,
             "recovery_wave": 0,
             "request_count": len(failed_set),
             "shard_count": len(recovery_shards),
@@ -1484,16 +1723,35 @@ def authorize_recovery_wave(
     acknowledged_strict_worst_case_exposure_usd: float,
     strict_exposure_acknowledgement_note: str,
 ) -> dict[str, Any]:
-    intent, _bundle = _campaign(run_root)
+    intent, bundle = _campaign(run_root)
     recovery_root = run_root / "recovery-000"
     manifest = _load_object(recovery_root / "manifest.json")
     _verify(manifest, "recovery_manifest_sha256", "coarse production recovery")
+    _validate_recovery_manifest_inputs(
+        run_root=run_root,
+        authoritative_bundle_root=Path(intent["bundle_root"]),
+        intent=intent,
+        bundle=bundle,
+        manifest=manifest,
+    )
     path = recovery_root / "authorization.json"
     if path.exists():
         raise FileExistsError("coarse production recovery authorization exists")
     strict_exposure = float(manifest["strict_no_cache_full_output_exposure_usd"])
+    direct_forecast = float(manifest["direct_v4_cost_forecast_usd"])
+    if not all(
+        math.isfinite(value)
+        for value in (
+            recovery_forecast_budget_usd,
+            acknowledged_strict_worst_case_exposure_usd,
+            strict_exposure,
+            direct_forecast,
+        )
+    ):
+        raise ValueError("recovery authorization costs must be finite")
     if (
         recovery_forecast_budget_usd <= 0
+        or recovery_forecast_budget_usd + 1e-12 < direct_forecast
         or not forecast_budget_authorization_note.strip()
     ):
         raise ValueError("recovery requires a positive explicit forecast budget")
@@ -1539,22 +1797,28 @@ def _validate_recovery_authorization(
     manifest: Mapping[str, Any],
     intent: Mapping[str, Any],
 ) -> None:
+    _validate_recovery_manifest_scope(manifest=manifest, intent=intent)
     _verify(
         authorization,
         "recovery_authorization_sha256",
         "recovery authorization",
     )
     strict_exposure = float(manifest["strict_no_cache_full_output_exposure_usd"])
+    direct_forecast = float(manifest["direct_v4_cost_forecast_usd"])
+    recovery_budget = authorization.get("recovery_forecast_budget_usd")
     if (
         authorization.get("schema_version")
         != "adag.process-witness.coarse-production-recovery-authorization.v1"
         or authorization.get("campaign_run_sha256") != intent["campaign_run_sha256"]
         or authorization.get("recovery_manifest_sha256")
         != manifest["recovery_manifest_sha256"]
-        or not isinstance(
-            authorization.get("recovery_forecast_budget_usd"), (int, float)
-        )
-        or float(authorization["recovery_forecast_budget_usd"]) <= 0
+        or isinstance(recovery_budget, bool)
+        or not isinstance(recovery_budget, (int, float))
+        or not math.isfinite(float(recovery_budget))
+        or float(recovery_budget) <= 0
+        or float(recovery_budget) + 1e-12 < direct_forecast
+        or not math.isfinite(strict_exposure)
+        or not math.isfinite(direct_forecast)
         or not isinstance(authorization.get("forecast_budget_authorization_note"), str)
         or not authorization["forecast_budget_authorization_note"].strip()
         or authorization.get("forecast_budget_is_hard_spend_cap") is not False
@@ -1569,12 +1833,221 @@ def _validate_recovery_authorization(
         raise ValueError("recovery authorization semantic drift")
 
 
+def _validate_recovery_manifest_scope(
+    *, manifest: Mapping[str, Any], intent: Mapping[str, Any]
+) -> None:
+    authorized = intent.get("authorized_primary_shard_ids")
+    recovery_shards = manifest.get("shards")
+    recovery_shard_ids = []
+    request_ids = []
+    if isinstance(recovery_shards, list):
+        for shard in recovery_shards:
+            if isinstance(shard, Mapping):
+                recovery_shard_ids.append(shard.get("shard_id"))
+                shard_request_ids = shard.get("request_ids_in_order")
+                if isinstance(shard_request_ids, list):
+                    request_ids.extend(shard_request_ids)
+    if (
+        manifest.get("campaign_run_sha256") != intent.get("campaign_run_sha256")
+        or manifest.get("authorized_primary_shard_ids") != authorized
+        or not isinstance(authorized, list)
+        or not isinstance(recovery_shards, list)
+        or not recovery_shards
+        or any(not isinstance(shard_id, str) for shard_id in recovery_shard_ids)
+        or len(recovery_shard_ids) != len(set(recovery_shard_ids))
+        or any(not isinstance(request_id, str) for request_id in request_ids)
+        or len(request_ids) != len(set(request_ids))
+        or manifest.get("shard_count") != len(recovery_shards)
+        or manifest.get("request_count") != len(request_ids)
+        or any(
+            not isinstance(shard, Mapping)
+            or shard.get("shard_id") not in authorized
+            or not isinstance(shard.get("request_ids_in_order"), list)
+            or shard.get("request_count") != len(shard["request_ids_in_order"])
+            for shard in recovery_shards
+        )
+    ):
+        raise ValueError("coarse production recovery primary-scope drift")
+
+
+def _validate_recovery_manifest_inputs(
+    *,
+    run_root: Path,
+    authoritative_bundle_root: Path,
+    intent: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> None:
+    """Bind recovery rows to failed events and frozen rows before provider mutation."""
+
+    _validate_recovery_manifest_scope(manifest=manifest, intent=intent)
+    bundle_by_id = {str(shard["shard_id"]): shard for shard in bundle["shards"]}
+    failed_by_shard: dict[str, list[str]] = {}
+    original_by_id: dict[str, tuple[str, dict[str, Any]]] = {}
+    primary_actual_cost = 0.0
+    for shard_id in intent["authorized_primary_shard_ids"]:
+        primary_root = run_root / "shards" / shard_id
+        collection = _load_object(primary_root / "collection.json")
+        _verify(collection, "collection_sha256", "primary recovery source collection")
+        events_path = primary_root / "events.jsonl"
+        if (
+            file_sha256(events_path) != collection.get("events_sha256")
+            or collection.get("cost_complete") is not True
+        ):
+            raise ValueError("recovery primary source collection binding drift")
+        primary_actual_cost += float(collection["known_priced_cost_usd"])
+        failed_by_shard[shard_id] = [
+            str(event["request_id"])
+            for event in read_jsonl(events_path)
+            if event.get("validation_status") != "success"
+        ]
+        frozen_shard = bundle_by_id[shard_id]
+        for row in read_jsonl(authoritative_bundle_root / frozen_shard["path"]):
+            request_id = row.get("custom_id")
+            if not isinstance(request_id, str) or request_id in original_by_id:
+                raise ValueError("recovery frozen primary request identity drift")
+            original_by_id[request_id] = (shard_id, row)
+    if primary_actual_cost > float(intent["strict_worst_case_exposure_usd"]):
+        raise ValueError(
+            "primary actual cost exceeds acknowledged strict exposure; recovery forbidden"
+        )
+    if primary_actual_cost >= float(intent["primary_actual_spend_limit_usd"]):
+        raise ValueError("primary actual cost reached its strict spend limit")
+    expected_failed = {
+        request_id
+        for shard_request_ids in failed_by_shard.values()
+        for request_id in shard_request_ids
+    }
+    expected_recovery_shard_ids = [
+        shard_id
+        for shard_id in intent["authorized_primary_shard_ids"]
+        if failed_by_shard[shard_id]
+    ]
+    if [binding["shard_id"] for binding in manifest["shards"]] != (
+        expected_recovery_shard_ids
+    ):
+        raise ValueError("recovery shard order/coverage drift")
+    empirical = bundle["config"]["empirical_calibration"]
+    prices = load_price_snapshot(authoritative_bundle_root / "price-snapshot.json")
+    expected_direct_total = 0.0
+    expected_strict_total = 0.0
+    observed_failed: set[str] = set()
+    for binding in manifest["shards"]:
+        shard_id = str(binding["shard_id"])
+        expected_relative_path = f"recovery-000/shards/{shard_id}/input.jsonl"
+        if binding.get("input_relative_path") != expected_relative_path:
+            raise ValueError("recovery input path binding drift")
+        input_path = run_root / str(binding["input_relative_path"])
+        if (
+            not input_path.is_file()
+            or file_sha256(input_path) != binding.get("input_sha256")
+            or input_path.stat().st_size != binding.get("bytes")
+        ):
+            raise ValueError("recovery input file binding drift")
+        rows = read_jsonl(input_path)
+        request_ids = [row.get("custom_id") for row in rows]
+        if (
+            request_ids != binding["request_ids_in_order"]
+            or len(rows) != binding["request_count"]
+            or request_ids
+            != [
+                request_id
+                for request_id in failed_by_shard[shard_id]
+                if request_id in set(binding["request_ids_in_order"])
+            ]
+        ):
+            raise ValueError("recovery failed request order/subset drift")
+        provider_body_byte_values = [len(canonical_json(row["body"])) for row in rows]
+        provider_body_bytes = sum(provider_body_byte_values)
+        expected_direct = (
+            float(empirical["source_actual_cost_usd"])
+            * len(rows)
+            / int(empirical["source_request_count"])
+        )
+        expected_strict = _strict_exposure_for_provider_bodies(
+            config=bundle["config"],
+            prices=prices,
+            body_bytes=provider_body_byte_values,
+        )
+        expected_queue = round(
+            provider_body_bytes
+            * float(empirical["source_input_tokens"])
+            / float(empirical["source_provider_body_utf8_bytes"])
+        )
+        if (
+            not math.isclose(
+                float(binding.get("direct_v4_cost_forecast_usd", math.nan)),
+                expected_direct,
+                rel_tol=0,
+                abs_tol=1e-12,
+            )
+            or not math.isclose(
+                float(
+                    binding.get("strict_no_cache_full_output_exposure_usd", math.nan)
+                ),
+                expected_strict,
+                rel_tol=0,
+                abs_tol=1e-12,
+            )
+            or binding.get("queued_input_tokens_empirical_forecast") != expected_queue
+        ):
+            raise ValueError("recovery shard forecast/exposure/queue binding drift")
+        expected_direct_total += expected_direct
+        expected_strict_total += expected_strict
+        for request_id, row in zip(request_ids, rows, strict=True):
+            if (
+                not isinstance(request_id, str)
+                or request_id not in original_by_id
+                or original_by_id[request_id][0] != shard_id
+                or canonical_json(original_by_id[request_id][1]) != canonical_json(row)
+            ):
+                raise ValueError("recovery request body or primary-shard binding drift")
+            observed_failed.add(request_id)
+    if observed_failed != expected_failed:
+        raise ValueError(
+            "recovery manifest does not exactly cover failed primary requests"
+        )
+    if (
+        manifest.get("schema_version")
+        != "adag.process-witness.coarse-production-recovery.v1"
+        or manifest.get("status") != "prepared_offline_failed_only"
+        or manifest.get("recovery_wave") != 0
+        or not math.isclose(
+            float(manifest.get("direct_v4_cost_forecast_usd", math.nan)),
+            expected_direct_total,
+            rel_tol=0,
+            abs_tol=1e-12,
+        )
+        or not math.isclose(
+            float(manifest.get("strict_no_cache_full_output_exposure_usd", math.nan)),
+            expected_strict_total,
+            rel_tol=0,
+            abs_tol=1e-12,
+        )
+        or manifest.get("successful_requests_rerun") != 0
+        or manifest.get("provider_bodies_byte_identical") is not True
+        or manifest.get(
+            "fresh_recovery_forecast_budget_and_strict_exposure_ack_required"
+        )
+        is not True
+        or manifest.get("additional_recovery_waves_permitted") is not False
+    ):
+        raise ValueError("recovery manifest forecast/exposure semantics drift")
+
+
 def _recovery_binding(
     run_root: Path, shard_id: str
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Path]:
     intent, bundle = _campaign(run_root)
     manifest = _load_object(run_root / "recovery-000" / "manifest.json")
     _verify(manifest, "recovery_manifest_sha256", "coarse production recovery")
+    _validate_recovery_manifest_inputs(
+        run_root=run_root,
+        authoritative_bundle_root=Path(intent["bundle_root"]),
+        intent=intent,
+        bundle=bundle,
+        manifest=manifest,
+    )
     if manifest["campaign_run_sha256"] != intent["campaign_run_sha256"]:
         raise ValueError("coarse production recovery campaign drift")
     authorization = _load_object(run_root / "recovery-000" / "authorization.json")
@@ -2130,8 +2603,13 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
         or manifest.get("primary_forecast_budget_is_hard_spend_cap") is not False
         or manifest.get("primary_strict_worst_case_exposure_usd")
         != intent.get("strict_worst_case_exposure_usd")
+        or manifest.get("primary_actual_spend_limit_usd")
+        != intent.get("primary_actual_spend_limit_usd")
+        or manifest.get("authorized_primary_shard_ids")
+        != intent.get("authorized_primary_shard_ids")
     ):
         raise ValueError("proposal copied campaign binding drift")
+    _validate_primary_authorization_scope(intent, bundle)
     recovery_binding = manifest.get("recovery_authorization")
     recovery_root = root / "recovery-000"
     if (recovery_binding is None) != (not recovery_root.exists()):
@@ -2139,6 +2617,13 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
     if recovery_binding is not None:
         recovery = _load_object(recovery_root / "manifest.json")
         _verify(recovery, "recovery_manifest_sha256", "copied recovery manifest")
+        _validate_recovery_manifest_inputs(
+            run_root=root,
+            authoritative_bundle_root=root / "campaign-bundle",
+            intent=intent,
+            bundle=bundle,
+            manifest=recovery,
+        )
         authorization = _load_object(recovery_root / "authorization.json")
         _validate_recovery_authorization(
             authorization=authorization,
@@ -2324,8 +2809,13 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
 def _enforce_actual_within_strict_exposure(
     *, actual_cost_usd: float, strict_exposure_usd: float, generation: str
 ) -> None:
-    if actual_cost_usd < 0 or strict_exposure_usd < 0:
-        raise ValueError("coarse production exposure values must be nonnegative")
+    if (
+        not math.isfinite(actual_cost_usd)
+        or not math.isfinite(strict_exposure_usd)
+        or actual_cost_usd < 0
+        or strict_exposure_usd < 0
+    ):
+        raise ValueError("coarse production exposure values must be finite nonnegative")
     if actual_cost_usd > strict_exposure_usd:
         raise ValueError(
             f"coarse production {generation} actual cost exceeds acknowledged strict exposure"
@@ -2336,6 +2826,10 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
     """Union complete primary results and freeze atom proposals plus sampling groups."""
 
     intent, bundle = _campaign(run_root)
+    if intent.get("full_campaign_authorized") is not True:
+        raise ValueError(
+            "calibration/subset run cannot finalize the full production proposal corpus"
+        )
     if destination.exists():
         raise FileExistsError(
             f"coarse production proposal destination exists: {destination}"
@@ -2490,6 +2984,8 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
             "primary_strict_worst_case_exposure_usd": intent[
                 "strict_worst_case_exposure_usd"
             ],
+            "primary_actual_spend_limit_usd": intent["primary_actual_spend_limit_usd"],
+            "authorized_primary_shard_ids": intent["authorized_primary_shard_ids"],
             "recovery_authorization": recovery_authorization_binding,
             "effective_events_sha256": file_sha256(
                 temporary / "effective-events.jsonl"

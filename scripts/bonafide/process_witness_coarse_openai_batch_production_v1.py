@@ -29,12 +29,18 @@ def main() -> None:
     initialize = commands.add_parser("initialize")
     initialize.add_argument("--bundle-root", type=Path, required=True)
     initialize.add_argument("--run-root", type=Path, required=True)
+    initialize.add_argument(
+        "--authorized-primary-shard-id", action="append", required=True
+    )
     initialize.add_argument("--forecast-budget-usd", type=float, required=True)
     initialize.add_argument("--forecast-budget-authorization-note", required=True)
     initialize.add_argument(
         "--acknowledged-strict-worst-case-exposure-usd", type=float, required=True
     )
     initialize.add_argument("--strict-exposure-acknowledgement-note", required=True)
+    initialize.add_argument(
+        "--primary-actual-spend-limit-usd", type=float, required=True
+    )
     initialize.add_argument(
         "--provider-queued-input-token-limit", type=int, required=True
     )
@@ -76,6 +82,7 @@ def main() -> None:
         result = initialize_campaign_run(
             bundle_root=args.bundle_root.resolve(),
             run_root=args.run_root.resolve(),
+            authorized_primary_shard_ids=args.authorized_primary_shard_id,
             forecast_budget_usd=args.forecast_budget_usd,
             forecast_budget_authorization_note=(
                 args.forecast_budget_authorization_note
@@ -86,6 +93,7 @@ def main() -> None:
             strict_exposure_acknowledgement_note=(
                 args.strict_exposure_acknowledgement_note
             ),
+            primary_actual_spend_limit_usd=args.primary_actual_spend_limit_usd,
             provider_queued_input_token_limit=args.provider_queued_input_token_limit,
             maximum_concurrent_shards=args.maximum_concurrent_shards,
         )
