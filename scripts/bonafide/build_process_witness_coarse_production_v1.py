@@ -390,6 +390,9 @@ def build(
                 raise ValueError("coarse production shard request order drift")
             if path.stat().st_size != sum(int(block["bytes"]) for block in blocks):
                 raise ValueError("coarse production shard byte census drift")
+            shard_body_bytes = sum(
+                int(block["provider_body_utf8_bytes"]) for block in blocks
+            )
             shard_records.append(
                 {
                     "shard_id": shard_id,
@@ -397,11 +400,14 @@ def build(
                     "bytes": path.stat().st_size,
                     "sha256": file_sha256(path),
                     "request_count": len(request_ids),
-                    "provider_body_utf8_bytes": sum(
-                        int(block["provider_body_utf8_bytes"]) for block in blocks
+                    "provider_body_utf8_bytes": shard_body_bytes,
+                    "direct_v4_cost_forecast_usd": (
+                        float(config["empirical_calibration"]["source_actual_cost_usd"])
+                        * len(request_ids)
+                        / int(config["empirical_calibration"]["source_request_count"])
                     ),
                     "queued_input_tokens_empirical_forecast": round(
-                        sum(int(block["provider_body_utf8_bytes"]) for block in blocks)
+                        shard_body_bytes
                         * float(config["empirical_calibration"]["source_input_tokens"])
                         / float(
                             config["empirical_calibration"][

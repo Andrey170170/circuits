@@ -14,6 +14,7 @@ import platform
 import shutil
 from collections import defaultdict
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ SUBMISSION_SCHEMA = "adag.process-witness.coarse-production-submission.v1"
 STATUS_SCHEMA = "adag.process-witness.coarse-production-status.v1"
 COLLECTION_SCHEMA = "adag.process-witness.coarse-production-collection.v1"
 EVENT_SCHEMA = "adag.process-witness.coarse-production-event.v1"
+UPLOAD_SCHEMA = "adag.process-witness.coarse-production-upload.v1"
 
 
 def _now() -> str:
@@ -78,6 +80,34 @@ def _readonly_tree(root: Path) -> None:
     for path in sorted(root.rglob("*"), reverse=True):
         path.chmod(0o555 if path.is_dir() else 0o444)
     root.chmod(0o555)
+
+
+@contextmanager
+def _submission_gate(run_root: Path):
+    """Serialize spend/queue checks and submission-intent creation across processes."""
+
+    lock = run_root / ".submission-gate"
+    try:
+        lock.mkdir()
+    except FileExistsError as error:
+        raise RuntimeError(
+            "coarse production submission gate is already held or stale; "
+            "inspect provider state before manual lock removal"
+        ) from error
+    try:
+        atomic_write_json(
+            lock / "owner.json",
+            {
+                "schema_version": "adag.process-witness.coarse-production-lock.v1",
+                "created_at": _now(),
+                "hostname": platform.node(),
+                "pid": os.getpid(),
+            },
+        )
+        yield
+    finally:
+        (lock / "owner.json").unlink(missing_ok=True)
+        lock.rmdir()
 
 
 def initialize_campaign_run(
@@ -129,6 +159,9 @@ def initialize_campaign_run(
                     "input_sha256": shard["sha256"],
                     "bytes": shard["bytes"],
                     "request_count": shard["request_count"],
+                    "direct_v4_cost_forecast_usd": shard[
+                        "direct_v4_cost_forecast_usd"
+                    ],
                     "queued_input_tokens_empirical_forecast": shard[
                         "queued_input_tokens_empirical_forecast"
                     ],
@@ -208,18 +241,40 @@ def _metadata(
     }
 
 
-def _submit_provider(path: Path, *, metadata: dict[str, str]) -> dict[str, Any]:
+def _upload_provider(path: Path) -> dict[str, Any]:
     with path.open("rb") as handle:
         uploaded = _openai_client().files.create(file=handle, purpose="batch")
+    return {
+        "schema_version": UPLOAD_SCHEMA,
+        "provider": "openai",
+        "input_file_id": uploaded.id,
+        "purpose": "batch",
+    }
+
+
+def _create_provider(
+    input_file_id: str, *, metadata: dict[str, str]
+) -> dict[str, Any]:
     batch = _openai_client().batches.create(
-        input_file_id=uploaded.id,
+        input_file_id=input_file_id,
         endpoint="/v1/responses",
         completion_window="24h",
         metadata=metadata,
     )
-    if getattr(batch, "input_file_id", None) != uploaded.id:
+    if getattr(batch, "input_file_id", None) != input_file_id:
         raise ValueError("coarse production created Batch input file id drift")
     return _provider_batch_dict(batch)
+
+
+def _validate_upload(value: Mapping[str, Any]) -> None:
+    if (
+        value.get("schema_version") != UPLOAD_SCHEMA
+        or value.get("provider") != "openai"
+        or value.get("purpose") != "batch"
+        or not isinstance(value.get("input_file_id"), str)
+        or not value["input_file_id"]
+    ):
+        raise ValueError("coarse production provider upload snapshot drift")
 
 
 def _validate_snapshot(
@@ -227,6 +282,7 @@ def _validate_snapshot(
     *,
     metadata: Mapping[str, str],
     batch_id: str | None = None,
+    input_file_id: str | None = None,
 ) -> None:
     if (
         value.get("provider") != "openai"
@@ -236,119 +292,167 @@ def _validate_snapshot(
         or not isinstance(value.get("input_file_id"), str)
         or not isinstance(value.get("batch_id"), str)
         or (batch_id is not None and value.get("batch_id") != batch_id)
+        or (
+            input_file_id is not None
+            and value.get("input_file_id") != input_file_id
+        )
     ):
         raise ValueError("coarse production provider snapshot drift")
+
+
+def _attempted_primary_forecast(
+    run_root: Path, intent: Mapping[str, Any]
+) -> tuple[float, bool]:
+    """Return actual-or-reserved primary spend and whether every receipt is priced."""
+
+    total = 0.0
+    complete = True
+    for shard in intent["shards"]:
+        root = run_root / "shards" / shard["shard_id"]
+        collection_path = root / "collection.json"
+        if collection_path.exists():
+            collection = _load_object(collection_path)
+            _verify(collection, "collection_sha256", "coarse production collection")
+            total += float(collection["known_priced_cost_usd"])
+            complete = complete and bool(collection["cost_complete"])
+        elif (root / "submission-intent.json").exists():
+            total += float(shard["direct_v4_cost_forecast_usd"])
+    return total, complete
+
+
+def _active_primary_queue(
+    run_root: Path, intent: Mapping[str, Any]
+) -> tuple[list[str], int]:
+    active: list[str] = []
+    queued_tokens = 0
+    terminal = {"completed", "failed", "expired", "cancelled"}
+    for shard in intent["shards"]:
+        root = run_root / "shards" / shard["shard_id"]
+        if (root / "collection.json").exists():
+            continue
+        state = None
+        status_paths = sorted((root / "status").glob("*.json"))
+        if status_paths:
+            state = _load_object(status_paths[-1])["provider_response"].get("status")
+        elif (root / "submission.json").exists():
+            state = _load_object(root / "submission.json")["provider_response"].get(
+                "status"
+            )
+        attempted = (root / "submission-intent.json").exists()
+        if attempted and state not in terminal:
+            active.append(str(shard["shard_id"]))
+            queued_tokens += int(shard["queued_input_tokens_empirical_forecast"])
+    return active, queued_tokens
 
 
 def submit_shard(
     *,
     run_root: Path,
     shard_id: str,
-    submitter: Callable[..., dict[str, Any]] = _submit_provider,
+    uploader: Callable[[Path], dict[str, Any]] = _upload_provider,
+    creator: Callable[..., dict[str, Any]] = _create_provider,
 ) -> dict[str, Any]:
     intent, bundle = _campaign(run_root)
     shard = next((s for s in bundle["shards"] if s["shard_id"] == shard_id), None)
     if shard is None:
         raise ValueError("unknown coarse production shard")
     shard_root = run_root / "shards" / shard_id
-    if (shard_root / "submission-intent.json").exists():
-        raise FileExistsError(
-            "coarse production shard submission was already attempted"
+    with _submission_gate(run_root):
+        if (shard_root / "submission-intent.json").exists():
+            raise FileExistsError(
+                "coarse production shard submission was already attempted"
+            )
+        attempted_cost, cost_complete = _attempted_primary_forecast(run_root, intent)
+        if not cost_complete:
+            raise ValueError("prior collected campaign cost is not fully priced")
+        intent_shard = next(
+            item for item in intent["shards"] if item["shard_id"] == shard_id
         )
-    collected_cost = 0.0
-    active = []
-    active_queue_tokens = 0
-    for other in intent["shards"]:
-        other_root = run_root / "shards" / other["shard_id"]
-        collection_path = other_root / "collection.json"
-        if collection_path.exists():
-            collection = _load_object(collection_path)
-            _verify(collection, "collection_sha256", "coarse production collection")
-            collected_cost += float(collection["known_priced_cost_usd"])
-        status_paths = sorted((other_root / "status").glob("*.json"))
-        state = None
-        if status_paths:
-            state = _load_object(status_paths[-1])["provider_response"].get("status")
-        elif (other_root / "submission.json").exists() and not collection_path.exists():
-            state = _load_object(other_root / "submission.json")[
-                "provider_response"
-            ].get("status")
-        if state is not None and state in {
-            "validating",
-            "in_progress",
-            "finalizing",
-            "cancelling",
-        }:
-            active.append(other["shard_id"])
-            active_queue_tokens += int(other["queued_input_tokens_empirical_forecast"])
-    if collected_cost >= float(intent["maximum_authorized_cost_usd"]):
-        raise ValueError("collected campaign cost has exhausted the authorization")
-    if len(active) >= int(intent["maximum_concurrent_shards"]):
-        raise ValueError(f"recorded shard concurrency is already full: {active}")
-    this_forecast = next(
-        int(item["queued_input_tokens_empirical_forecast"])
-        for item in intent["shards"]
-        if item["shard_id"] == shard_id
-    )
-    if active_queue_tokens + this_forecast > int(
-        intent["provider_queued_input_token_limit"]
-    ):
-        raise ValueError("recorded queued-input-token capacity would be exceeded")
-    metadata = _metadata(intent, shard_id, "primary")
-    input_path = shard_root / "input.jsonl"
-    submission_intent = _hashed(
-        {
-            "schema_version": SUBMISSION_SCHEMA,
-            "status": "intent_persisted_before_provider_calls",
-            "created_at": _now(),
-            "campaign_run_sha256": intent["campaign_run_sha256"],
-            "shard_id": shard_id,
-            "generation": "primary",
-            "input_sha256": file_sha256(input_path),
-            "request_count": shard["request_count"],
-            "metadata": metadata,
-        },
-        "submission_intent_sha256",
-    )
-    atomic_write_json(shard_root / "submission-intent.json", submission_intent)
-    try:
-        provider = submitter(input_path, metadata=metadata)
-        atomic_write_json(shard_root / "provider-create-response.json", provider)
-        _validate_snapshot(provider, metadata=metadata)
-        receipt = _hashed(
+        candidate_cost = float(intent_shard["direct_v4_cost_forecast_usd"])
+        if attempted_cost + candidate_cost > float(
+            intent["maximum_authorized_cost_usd"]
+        ):
+            raise ValueError(
+                "prospective actual-or-reserved campaign cost exceeds authorization"
+            )
+        active, active_queue_tokens = _active_primary_queue(run_root, intent)
+        if len(active) >= int(intent["maximum_concurrent_shards"]):
+            raise ValueError(f"recorded shard concurrency is already full: {active}")
+        this_queue = int(intent_shard["queued_input_tokens_empirical_forecast"])
+        if active_queue_tokens + this_queue > int(
+            intent["provider_queued_input_token_limit"]
+        ):
+            raise ValueError("recorded queued-input-token capacity would be exceeded")
+        metadata = _metadata(intent, shard_id, "primary")
+        input_path = shard_root / "input.jsonl"
+        submission_intent = _hashed(
             {
                 "schema_version": SUBMISSION_SCHEMA,
-                "status": "submitted",
-                "recorded_at": _now(),
+                "status": "intent_persisted_before_provider_calls",
+                "created_at": _now(),
                 "campaign_run_sha256": intent["campaign_run_sha256"],
-                "submission_intent_sha256": submission_intent[
-                    "submission_intent_sha256"
-                ],
-                "provider_response": provider,
+                "shard_id": shard_id,
+                "generation": "primary",
+                "input_sha256": file_sha256(input_path),
+                "request_count": shard["request_count"],
+                "direct_v4_cost_forecast_usd": candidate_cost,
+                "prospective_campaign_cost_usd": attempted_cost + candidate_cost,
+                "metadata": metadata,
             },
-            "submission_sha256",
+            "submission_intent_sha256",
         )
-        atomic_write_json(shard_root / "submission.json", receipt)
-        return receipt
-    except BaseException as error:
-        failure = _hashed(
-            {
-                "schema_version": SUBMISSION_SCHEMA,
-                "status": "failed_closed_indeterminate_provider_state",
-                "recorded_at": _now(),
-                "submission_intent_sha256": submission_intent[
-                    "submission_intent_sha256"
-                ],
-                "error_type": type(error).__name__,
-                "error_message": str(error)[:2000],
-                "automatic_retry_permitted": False,
-            },
-            "submission_failure_sha256",
-        )
-        atomic_write_json(shard_root / "submission-failure.json", failure)
-        raise RuntimeError(
-            "provider state is indeterminate; automatic retry is forbidden"
-        ) from error
+        atomic_write_json(shard_root / "submission-intent.json", submission_intent)
+        try:
+            upload = uploader(input_path)
+            _validate_upload(upload)
+            atomic_write_json(shard_root / "provider-upload-response.json", upload)
+            provider = creator(upload["input_file_id"], metadata=metadata)
+            atomic_write_json(shard_root / "provider-create-response.json", provider)
+            _validate_snapshot(
+                provider,
+                metadata=metadata,
+                input_file_id=upload["input_file_id"],
+            )
+            receipt = _hashed(
+                {
+                    "schema_version": SUBMISSION_SCHEMA,
+                    "status": "submitted",
+                    "recorded_at": _now(),
+                    "campaign_run_sha256": intent["campaign_run_sha256"],
+                    "submission_intent_sha256": submission_intent[
+                        "submission_intent_sha256"
+                    ],
+                    "provider_upload_response_sha256": file_sha256(
+                        shard_root / "provider-upload-response.json"
+                    ),
+                    "provider_response": provider,
+                },
+                "submission_sha256",
+            )
+            atomic_write_json(shard_root / "submission.json", receipt)
+            return receipt
+        except BaseException as error:
+            failure = _hashed(
+                {
+                    "schema_version": SUBMISSION_SCHEMA,
+                    "status": "failed_closed_indeterminate_provider_state",
+                    "recorded_at": _now(),
+                    "submission_intent_sha256": submission_intent[
+                        "submission_intent_sha256"
+                    ],
+                    "upload_receipt_persisted": (
+                        shard_root / "provider-upload-response.json"
+                    ).exists(),
+                    "error_type": type(error).__name__,
+                    "error_message": str(error)[:2000],
+                    "automatic_retry_permitted": False,
+                },
+                "submission_failure_sha256",
+            )
+            atomic_write_json(shard_root / "submission-failure.json", failure)
+            raise RuntimeError(
+                "provider state is indeterminate; automatic retry is forbidden"
+            ) from error
 
 
 def recover_shard_submission(
@@ -363,6 +467,8 @@ def recover_shard_submission(
         raise FileExistsError("coarse production submission receipt already exists")
     submission_intent = _load_object(shard_root / "submission-intent.json")
     _verify(submission_intent, "submission_intent_sha256", "submission intent")
+    upload = _load_object(shard_root / "provider-upload-response.json")
+    _validate_upload(upload)
     metadata = _metadata(intent, shard_id, "primary")
     create = shard_root / "provider-create-response.json"
     if create.exists():
@@ -386,7 +492,9 @@ def recover_shard_submission(
         provider = matches[0]
         atomic_write_json(create, provider)
         recovered_by = "unique_provider_metadata_discovery"
-    _validate_snapshot(provider, metadata=metadata)
+    _validate_snapshot(
+        provider, metadata=metadata, input_file_id=upload["input_file_id"]
+    )
     receipt = _hashed(
         {
             "schema_version": SUBMISSION_SCHEMA,
@@ -409,8 +517,17 @@ def _submission(run_root: Path, shard_id: str) -> tuple[dict[str, Any], dict[str
     _verify(value, "submission_sha256", "coarse production submission")
     if value["campaign_run_sha256"] != intent["campaign_run_sha256"]:
         raise ValueError("coarse production submission campaign drift")
+    upload_path = run_root / "shards" / shard_id / "provider-upload-response.json"
+    upload = _load_object(upload_path)
+    _validate_upload(upload)
+    if file_sha256(upload_path) != value["provider_upload_response_sha256"]:
+        raise ValueError("coarse production submission upload binding drift")
     metadata = _metadata(intent, shard_id, "primary")
-    _validate_snapshot(value["provider_response"], metadata=metadata)
+    _validate_snapshot(
+        value["provider_response"],
+        metadata=metadata,
+        input_file_id=upload["input_file_id"],
+    )
     return intent, value
 
 
@@ -429,7 +546,12 @@ def check_shard(
 
     observed = retriever(provider["batch_id"])
     metadata = _metadata(intent, shard_id, "primary")
-    _validate_snapshot(observed, metadata=metadata, batch_id=provider["batch_id"])
+    _validate_snapshot(
+        observed,
+        metadata=metadata,
+        batch_id=provider["batch_id"],
+        input_file_id=provider["input_file_id"],
+    )
     status_root = run_root / "shards" / shard_id / "status"
     status_root.mkdir(exist_ok=True)
     prior = sorted(status_root.glob("receipt-*.json"))
@@ -556,6 +678,71 @@ def _parse_row(row: Mapping[str, Any], request: Mapping[str, Any]) -> dict[str, 
     }
 
 
+def _price_events(
+    *,
+    events: list[dict[str, Any]],
+    snapshot: Mapping[str, Any],
+    prices: dict[str, Any],
+) -> tuple[float, bool, str]:
+    """Price a Batch from aggregate usage, or typed per-row/zero evidence."""
+
+    aggregate_usage = openai_usage(snapshot.get("usage"))
+    aggregate_cost, aggregate_long = _estimate_v4_actual_cost(
+        prices, model="gpt-5.6-luna", usage=aggregate_usage
+    )
+    event_total = 0.0
+    event_complete = True
+    for event in events:
+        usage = Usage.model_validate(event["usage"])
+        cost, long_context = _estimate_v4_actual_cost(
+            prices, model="gpt-5.6-luna", usage=usage
+        )
+        if cost.total_cost is None and event["validation_status"] in {
+            "provider_error",
+            "missing",
+        }:
+            # No provider response/usage exists for this request. The provider Batch
+            # receipt is the evidence that it did not produce a billable model result.
+            zero = Usage(
+                input_tokens=0,
+                uncached_input_tokens=0,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                output_tokens=0,
+                reasoning_tokens=0,
+            )
+            cost, long_context = _estimate_v4_actual_cost(
+                prices, model="gpt-5.6-luna", usage=zero
+            )
+            event["pricing_basis"] = "no_provider_result_or_usage_priced_zero"
+        else:
+            event["pricing_basis"] = "request_usage"
+        event["cost"] = cost.model_dump(mode="json")
+        event["long_context_price_multiplier_applied"] = long_context
+        if cost.total_cost is None:
+            event_complete = False
+        else:
+            event_total += float(cost.total_cost)
+    if aggregate_cost.complete and aggregate_cost.total_cost is not None:
+        total = float(aggregate_cost.total_cost)
+        complete = True
+        basis = "provider_batch_aggregate_usage"
+        for event in events:
+            event["collection_pricing_basis"] = basis
+            event["batch_aggregate_long_context_price_multiplier_applied"] = (
+                aggregate_long
+            )
+    else:
+        total = event_total
+        complete = event_complete
+        basis = "request_usage_plus_typed_zero_for_no_provider_result"
+        for event in events:
+            event["collection_pricing_basis"] = basis
+    for event in events:
+        event["event_sha256"] = canonical_sha256(event)
+    return total, complete, basis
+
+
 def collect_shard(
     *,
     run_root: Path,
@@ -585,14 +772,24 @@ def collect_shard(
         snapshot,
         metadata=_metadata(intent, shard_id, "primary"),
         batch_id=provider["batch_id"],
+        input_file_id=provider["input_file_id"],
     )
-    if snapshot.get("status") != "completed":
-        raise ValueError("coarse production Batch is not completed")
+    terminal_status = snapshot.get("status")
+    if terminal_status not in {"completed", "failed", "expired", "cancelled"}:
+        raise ValueError("coarse production Batch is not terminal")
     raw_root = shard_root / "raw"
     raw_root.mkdir(exist_ok=True)
     atomic_write_json(raw_root / "provider-snapshot.json", snapshot)
     rows = {}
-    raw_bindings = []
+    raw_bindings = [
+        {
+            "source": "provider_snapshot",
+            "file_id": None,
+            "path": str((raw_root / "provider-snapshot.json").relative_to(run_root)),
+            "sha256": file_sha256(raw_root / "provider-snapshot.json"),
+            "bytes": (raw_root / "provider-snapshot.json").stat().st_size,
+        }
+    ]
     for source, item in files.items():
         content = item["content"]
         if item["file_id"] != snapshot.get(f"{source}_file_id"):
@@ -620,8 +817,6 @@ def collect_shard(
         raise ValueError("coarse production provider output contains unknown custom_id")
     prices = load_price_snapshot(Path(intent["bundle_root"]) / "price-snapshot.json")
     events = []
-    total = 0.0
-    complete_cost = True
     for request in requests:
         if request["request_id"] not in rows:
             event = {
@@ -635,24 +830,16 @@ def collect_shard(
                 "body_sha256": request["body_sha256"],
                 "focal_unit_ids": request["focal_unit_ids"],
                 "validation_status": "missing",
-                "error_type": "missing_provider_row",
+                "error_type": f"terminal_batch_{terminal_status}_without_request_row",
                 "usage": openai_usage(None).model_dump(mode="json"),
                 "decisions": None,
             }
         else:
             event = _parse_row(rows[request["request_id"]], request)
-        usage = Usage.model_validate(event["usage"])
-        cost, long_context = _estimate_v4_actual_cost(
-            prices, model="gpt-5.6-luna", usage=usage
-        )
-        event["cost"] = cost.model_dump(mode="json")
-        event["long_context_price_multiplier_applied"] = long_context
-        event["event_sha256"] = canonical_sha256(event)
         events.append(event)
-        if cost.total_cost is None:
-            complete_cost = False
-        else:
-            total += float(cost.total_cost)
+    total, complete_cost, pricing_basis = _price_events(
+        events=events, snapshot=snapshot, prices=prices
+    )
     atomic_write_jsonl(shard_root / "events.jsonl", events)
     success = sum(e["validation_status"] == "success" for e in events)
     prior_cost = 0.0
@@ -686,6 +873,8 @@ def collect_shard(
             "known_priced_cost_usd": total,
             "cumulative_known_priced_cost_usd": cumulative_cost,
             "cost_complete": complete_cost,
+            "pricing_basis": pricing_basis,
+            "provider_terminal_status": terminal_status,
             "maximum_authorized_cost_usd": intent["maximum_authorized_cost_usd"],
             "authorization_exceeded": authorization_exceeded,
             "raw_file_bindings": raw_bindings,
@@ -707,11 +896,21 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
     failed = []
     successful = set()
     for shard in bundle["shards"]:
-        events_path = run_root / "shards" / shard["shard_id"] / "events.jsonl"
-        if not events_path.exists():
+        shard_root = run_root / "shards" / shard["shard_id"]
+        events_path = shard_root / "events.jsonl"
+        collection_path = shard_root / "collection.json"
+        if not events_path.exists() or not collection_path.exists():
             raise ValueError(
                 "all primary shards must be collected before recovery freeze"
             )
+        collection = _load_object(collection_path)
+        _verify(collection, "collection_sha256", "coarse production collection")
+        if (
+            file_sha256(events_path) != collection["events_sha256"]
+            or not collection["cost_complete"]
+            or collection["authorization_exceeded"]
+        ):
+            raise ValueError("primary collection is not recovery-eligible")
         for event in read_jsonl(events_path):
             if event["validation_status"] == "success":
                 successful.add(event["request_id"])
@@ -746,6 +945,19 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
         input_path = shard_root / "input.jsonl"
         if input_path.stat().st_size >= 180_000_000:
             raise ValueError("coarse production recovery shard violates byte guard")
+        provider_body_bytes = sum(
+            len(
+                json.dumps(
+                    row["body"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode("utf-8")
+            )
+            for row in ordered
+        )
+        empirical = bundle["config"]["empirical_calibration"]
         recovery_shards.append(
             {
                 "shard_id": recovery_shard_id,
@@ -753,6 +965,16 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
                 "input_sha256": file_sha256(input_path),
                 "bytes": input_path.stat().st_size,
                 "request_count": len(ordered),
+                "direct_v4_cost_forecast_usd": (
+                    float(empirical["source_actual_cost_usd"])
+                    * len(ordered)
+                    / int(empirical["source_request_count"])
+                ),
+                "queued_input_tokens_empirical_forecast": round(
+                    provider_body_bytes
+                    * float(empirical["source_input_tokens"])
+                    / float(empirical["source_provider_body_utf8_bytes"])
+                ),
                 "request_ids_in_order": [row["custom_id"] for row in ordered],
             }
         )
@@ -797,78 +1019,136 @@ def submit_recovery_shard(
     *,
     run_root: Path,
     shard_id: str,
-    submitter: Callable[..., dict[str, Any]] = _submit_provider,
+    uploader: Callable[[Path], dict[str, Any]] = _upload_provider,
+    creator: Callable[..., dict[str, Any]] = _create_provider,
 ) -> dict[str, Any]:
     intent, _bundle, binding, shard_root = _recovery_binding(run_root, shard_id)
-    if (shard_root / "submission-intent.json").exists():
-        raise FileExistsError(
-            "coarse production recovery submission was already attempted"
-        )
-    primary_cost = sum(
-        float(_load_object(path)["known_priced_cost_usd"])
-        for path in run_root.glob("shards/*/collection.json")
-    )
-    recovery_cost = sum(
-        float(_load_object(path)["known_priced_cost_usd"])
-        for path in run_root.glob("recovery-000/shards/*/collection.json")
-    )
-    if primary_cost + recovery_cost >= float(intent["maximum_authorized_cost_usd"]):
-        raise ValueError("collected campaign cost has exhausted recovery authorization")
-    metadata = _metadata(intent, shard_id, "recovery-000")
-    input_path = shard_root / "input.jsonl"
-    submission_intent = _hashed(
-        {
-            "schema_version": SUBMISSION_SCHEMA,
-            "status": "intent_persisted_before_provider_calls",
-            "created_at": _now(),
-            "campaign_run_sha256": intent["campaign_run_sha256"],
-            "shard_id": shard_id,
-            "generation": "recovery-000",
-            "input_sha256": binding["input_sha256"],
-            "request_count": binding["request_count"],
-            "metadata": metadata,
-        },
-        "submission_intent_sha256",
-    )
-    atomic_write_json(shard_root / "submission-intent.json", submission_intent)
-    try:
-        provider = submitter(input_path, metadata=metadata)
-        atomic_write_json(shard_root / "provider-create-response.json", provider)
-        _validate_snapshot(provider, metadata=metadata)
-        receipt = _hashed(
+    with _submission_gate(run_root):
+        if (shard_root / "submission-intent.json").exists():
+            raise FileExistsError(
+                "coarse production recovery submission was already attempted"
+            )
+        primary_cost, primary_complete = _attempted_primary_forecast(run_root, intent)
+        if not primary_complete:
+            raise ValueError("primary campaign cost is not fully priced")
+        recovery_manifest = _load_object(run_root / "recovery-000" / "manifest.json")
+        recovery_cost = 0.0
+        active: list[str] = []
+        active_queue = 0
+        terminal = {"completed", "failed", "expired", "cancelled"}
+        for other in recovery_manifest["shards"]:
+            other_root = run_root / "recovery-000" / "shards" / other["shard_id"]
+            collection_path = other_root / "collection.json"
+            if collection_path.exists():
+                collection = _load_object(collection_path)
+                _verify(collection, "collection_sha256", "recovery collection")
+                if not collection["cost_complete"]:
+                    raise ValueError("prior recovery cost is not fully priced")
+                recovery_cost += float(collection["known_priced_cost_usd"])
+                continue
+            if (other_root / "submission-intent.json").exists():
+                recovery_cost += float(other["direct_v4_cost_forecast_usd"])
+                state = None
+                statuses = sorted((other_root / "status").glob("*.json"))
+                if statuses:
+                    state = _load_object(statuses[-1])["provider_response"].get(
+                        "status"
+                    )
+                elif (other_root / "submission.json").exists():
+                    state = _load_object(other_root / "submission.json")[
+                        "provider_response"
+                    ].get("status")
+                if state not in terminal:
+                    active.append(other["shard_id"])
+                    active_queue += int(
+                        other["queued_input_tokens_empirical_forecast"]
+                    )
+        candidate_cost = float(binding["direct_v4_cost_forecast_usd"])
+        if primary_cost + recovery_cost + candidate_cost > float(
+            intent["maximum_authorized_cost_usd"]
+        ):
+            raise ValueError(
+                "prospective actual-or-reserved recovery cost exceeds authorization"
+            )
+        if len(active) >= int(intent["maximum_concurrent_shards"]):
+            raise ValueError(f"recorded recovery concurrency is already full: {active}")
+        candidate_queue = int(binding["queued_input_tokens_empirical_forecast"])
+        if active_queue + candidate_queue > int(
+            intent["provider_queued_input_token_limit"]
+        ):
+            raise ValueError("recovery queued-input-token capacity would be exceeded")
+        metadata = _metadata(intent, shard_id, "recovery-000")
+        input_path = shard_root / "input.jsonl"
+        submission_intent = _hashed(
             {
                 "schema_version": SUBMISSION_SCHEMA,
-                "status": "submitted",
-                "recorded_at": _now(),
+                "status": "intent_persisted_before_provider_calls",
+                "created_at": _now(),
                 "campaign_run_sha256": intent["campaign_run_sha256"],
-                "submission_intent_sha256": submission_intent[
-                    "submission_intent_sha256"
-                ],
-                "provider_response": provider,
+                "shard_id": shard_id,
+                "generation": "recovery-000",
+                "input_sha256": binding["input_sha256"],
+                "request_count": binding["request_count"],
+                "direct_v4_cost_forecast_usd": candidate_cost,
+                "prospective_campaign_cost_usd": (
+                    primary_cost + recovery_cost + candidate_cost
+                ),
+                "metadata": metadata,
             },
-            "submission_sha256",
+            "submission_intent_sha256",
         )
-        atomic_write_json(shard_root / "submission.json", receipt)
-        return receipt
-    except BaseException as error:
-        failure = _hashed(
-            {
-                "schema_version": SUBMISSION_SCHEMA,
-                "status": "failed_closed_indeterminate_provider_state",
-                "recorded_at": _now(),
-                "submission_intent_sha256": submission_intent[
-                    "submission_intent_sha256"
-                ],
-                "error_type": type(error).__name__,
-                "error_message": str(error)[:2000],
-                "automatic_retry_permitted": False,
-            },
-            "submission_failure_sha256",
-        )
-        atomic_write_json(shard_root / "submission-failure.json", failure)
-        raise RuntimeError(
-            "recovery provider state is indeterminate; automatic retry is forbidden"
-        ) from error
+        atomic_write_json(shard_root / "submission-intent.json", submission_intent)
+        try:
+            upload = uploader(input_path)
+            _validate_upload(upload)
+            atomic_write_json(shard_root / "provider-upload-response.json", upload)
+            provider = creator(upload["input_file_id"], metadata=metadata)
+            atomic_write_json(shard_root / "provider-create-response.json", provider)
+            _validate_snapshot(
+                provider,
+                metadata=metadata,
+                input_file_id=upload["input_file_id"],
+            )
+            receipt = _hashed(
+                {
+                    "schema_version": SUBMISSION_SCHEMA,
+                    "status": "submitted",
+                    "recorded_at": _now(),
+                    "campaign_run_sha256": intent["campaign_run_sha256"],
+                    "submission_intent_sha256": submission_intent[
+                        "submission_intent_sha256"
+                    ],
+                    "provider_upload_response_sha256": file_sha256(
+                        shard_root / "provider-upload-response.json"
+                    ),
+                    "provider_response": provider,
+                },
+                "submission_sha256",
+            )
+            atomic_write_json(shard_root / "submission.json", receipt)
+            return receipt
+        except BaseException as error:
+            failure = _hashed(
+                {
+                    "schema_version": SUBMISSION_SCHEMA,
+                    "status": "failed_closed_indeterminate_provider_state",
+                    "recorded_at": _now(),
+                    "submission_intent_sha256": submission_intent[
+                        "submission_intent_sha256"
+                    ],
+                    "upload_receipt_persisted": (
+                        shard_root / "provider-upload-response.json"
+                    ).exists(),
+                    "error_type": type(error).__name__,
+                    "error_message": str(error)[:2000],
+                    "automatic_retry_permitted": False,
+                },
+                "submission_failure_sha256",
+            )
+            atomic_write_json(shard_root / "submission-failure.json", failure)
+            raise RuntimeError(
+                "recovery provider state is indeterminate; automatic retry is forbidden"
+            ) from error
 
 
 def recover_recovery_submission(
@@ -882,6 +1162,8 @@ def recover_recovery_submission(
         raise FileExistsError("coarse production recovery receipt already exists")
     submission_intent = _load_object(shard_root / "submission-intent.json")
     _verify(submission_intent, "submission_intent_sha256", "recovery submission intent")
+    upload = _load_object(shard_root / "provider-upload-response.json")
+    _validate_upload(upload)
     metadata = _metadata(intent, shard_id, "recovery-000")
     create = shard_root / "provider-create-response.json"
     if create.exists():
@@ -905,7 +1187,9 @@ def recover_recovery_submission(
         provider = matches[0]
         atomic_write_json(create, provider)
         recovered_by = "unique_provider_metadata_discovery"
-    _validate_snapshot(provider, metadata=metadata)
+    _validate_snapshot(
+        provider, metadata=metadata, input_file_id=upload["input_file_id"]
+    )
     receipt = _hashed(
         {
             "schema_version": SUBMISSION_SCHEMA,
@@ -931,6 +1215,11 @@ def check_recovery_shard(
     intent, _bundle, _binding, shard_root = _recovery_binding(run_root, shard_id)
     submission = _load_object(shard_root / "submission.json")
     _verify(submission, "submission_sha256", "recovery submission")
+    upload_path = shard_root / "provider-upload-response.json"
+    upload = _load_object(upload_path)
+    _validate_upload(upload)
+    if file_sha256(upload_path) != submission["provider_upload_response_sha256"]:
+        raise ValueError("recovery submission upload binding drift")
     provider = submission["provider_response"]
     if retriever is None:
 
@@ -942,6 +1231,7 @@ def check_recovery_shard(
         observed,
         metadata=_metadata(intent, shard_id, "recovery-000"),
         batch_id=provider["batch_id"],
+        input_file_id=upload["input_file_id"],
     )
     status_root = shard_root / "status"
     status_root.mkdir(exist_ok=True)
@@ -981,6 +1271,11 @@ def collect_recovery_shard(
         raise FileExistsError("coarse production recovery shard already collected")
     submission = _load_object(shard_root / "submission.json")
     _verify(submission, "submission_sha256", "recovery submission")
+    upload_path = shard_root / "provider-upload-response.json"
+    upload = _load_object(upload_path)
+    _validate_upload(upload)
+    if file_sha256(upload_path) != submission["provider_upload_response_sha256"]:
+        raise ValueError("recovery submission upload binding drift")
     provider = submission["provider_response"]
     collection_intent = _hashed(
         {
@@ -998,18 +1293,38 @@ def collect_recovery_shard(
         snapshot,
         metadata=_metadata(intent, shard_id, "recovery-000"),
         batch_id=provider["batch_id"],
+        input_file_id=upload["input_file_id"],
     )
-    if snapshot.get("status") != "completed":
-        raise ValueError("coarse production recovery Batch is not completed")
+    terminal_status = snapshot.get("status")
+    if terminal_status not in {"completed", "failed", "expired", "cancelled"}:
+        raise ValueError("coarse production recovery Batch is not terminal")
     raw_root = shard_root / "raw"
     raw_root.mkdir(exist_ok=True)
     atomic_write_json(raw_root / "provider-snapshot.json", snapshot)
     rows = {}
+    raw_bindings = [
+        {
+            "source": "provider_snapshot",
+            "file_id": None,
+            "path": str((raw_root / "provider-snapshot.json").relative_to(run_root)),
+            "sha256": file_sha256(raw_root / "provider-snapshot.json"),
+            "bytes": (raw_root / "provider-snapshot.json").stat().st_size,
+        }
+    ]
     for source, item in files.items():
         if item["file_id"] != snapshot.get(f"{source}_file_id"):
             raise ValueError("coarse production recovery file receipt drift")
         path = raw_root / f"{source}.jsonl"
         atomic_write_bytes(path, item["content"])
+        raw_bindings.append(
+            {
+                "source": source,
+                "file_id": item["file_id"],
+                "path": str(path.relative_to(run_root)),
+                "sha256": file_sha256(path),
+                "bytes": path.stat().st_size,
+            }
+        )
         for row in read_jsonl(path):
             request_id = row.get("custom_id")
             if not isinstance(request_id, str) or request_id in rows:
@@ -1025,8 +1340,6 @@ def collect_recovery_shard(
     }
     prices = load_price_snapshot(Path(intent["bundle_root"]) / "price-snapshot.json")
     events = []
-    total = 0.0
-    complete_cost = True
     for request_id in binding["request_ids_in_order"]:
         request = primary_requests[request_id]
         if request_id in rows:
@@ -1043,23 +1356,15 @@ def collect_recovery_shard(
                 "body_sha256": request["body_sha256"],
                 "focal_unit_ids": request["focal_unit_ids"],
                 "validation_status": "missing",
-                "error_type": "missing_provider_row",
+                "error_type": f"terminal_batch_{terminal_status}_without_request_row",
                 "usage": openai_usage(None).model_dump(mode="json"),
                 "decisions": None,
             }
         event["generation"] = "recovery-000"
-        usage = Usage.model_validate(event["usage"])
-        cost, long_context = _estimate_v4_actual_cost(
-            prices, model="gpt-5.6-luna", usage=usage
-        )
-        event["cost"] = cost.model_dump(mode="json")
-        event["long_context_price_multiplier_applied"] = long_context
-        event["event_sha256"] = canonical_sha256(event)
         events.append(event)
-        if cost.total_cost is None:
-            complete_cost = False
-        else:
-            total += float(cost.total_cost)
+    total, complete_cost, pricing_basis = _price_events(
+        events=events, snapshot=snapshot, prices=prices
+    )
     atomic_write_jsonl(shard_root / "events.jsonl", events)
     success = sum(e["validation_status"] == "success" for e in events)
     campaign_cost = (
@@ -1097,13 +1402,208 @@ def collect_recovery_shard(
             "known_priced_cost_usd": total,
             "cumulative_known_priced_cost_usd": campaign_cost,
             "cost_complete": complete_cost,
+            "pricing_basis": pricing_basis,
+            "provider_terminal_status": terminal_status,
             "authorization_exceeded": authorization_exceeded,
+            "raw_file_bindings": raw_bindings,
             "events_sha256": file_sha256(shard_root / "events.jsonl"),
         },
         "collection_sha256",
     )
     atomic_write_json(shard_root / "collection.json", result)
     return result
+
+
+def _copy_campaign_evidence(
+    *,
+    run_root: Path,
+    temporary: Path,
+    intent: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+) -> None:
+    """Make final evidence independent of the mutable run and source bundle roots."""
+
+    copied_bundle = temporary / "campaign-bundle"
+    shutil.copytree(Path(intent["bundle_root"]), copied_bundle)
+    shutil.copyfile(run_root / "campaign-intent.json", temporary / "campaign-intent.json")
+    for shard in bundle["shards"]:
+        source = run_root / "shards" / shard["shard_id"]
+        target = temporary / "shards" / shard["shard_id"]
+        shutil.copytree(
+            source,
+            target,
+            ignore=shutil.ignore_patterns("input.jsonl"),
+        )
+        target_input = target / "input.jsonl"
+        copied_input = copied_bundle / shard["path"]
+        target_input.symlink_to(os.path.relpath(copied_input, target))
+    recovery = run_root / "recovery-000"
+    if recovery.exists():
+        shutil.copytree(recovery, temporary / "recovery-000")
+
+
+def _write_evidence_inventory(root: Path) -> dict[str, Any]:
+    files = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path in {
+            root / "manifest.json",
+            root / "evidence-inventory.json",
+        }:
+            continue
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(root.resolve())
+        except ValueError as error:
+            raise ValueError("coarse production final evidence has external symlink") from error
+        row = {
+            "path": str(path.relative_to(root)),
+            "sha256": file_sha256(path),
+            "bytes": path.stat().st_size,
+        }
+        if path.is_symlink():
+            row["symlink_target"] = os.readlink(path)
+        files.append(row)
+    inventory = _hashed(
+        {
+            "schema_version": "adag.process-witness.coarse-production-evidence-inventory.v1",
+            "files": files,
+        },
+        "evidence_inventory_sha256",
+    )
+    atomic_write_json(root / "evidence-inventory.json", inventory)
+    return inventory
+
+
+def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
+    """Strictly validate a finalized proposal bank without its original run roots."""
+
+    manifest = _load_object(root / "manifest.json")
+    _verify(manifest, "proposal_bank_manifest_sha256", "proposal bank manifest")
+    inventory = _load_object(root / "evidence-inventory.json")
+    _verify(inventory, "evidence_inventory_sha256", "proposal evidence inventory")
+    if (
+        inventory["evidence_inventory_sha256"]
+        != manifest["evidence_inventory_sha256"]
+    ):
+        raise ValueError("proposal evidence inventory/manifest drift")
+    expected = {row["path"]: row for row in inventory["files"]}
+    observed = {
+        str(path.relative_to(root)): path
+        for path in root.rglob("*")
+        if path.is_file()
+        and path
+        not in {root / "manifest.json", root / "evidence-inventory.json"}
+    }
+    if set(expected) != set(observed):
+        raise ValueError("proposal evidence inventory coverage drift")
+    for relative, path in observed.items():
+        row = expected[relative]
+        if file_sha256(path) != row["sha256"] or path.stat().st_size != row["bytes"]:
+            raise ValueError(f"proposal evidence file drift: {relative}")
+        try:
+            path.resolve().relative_to(root.resolve())
+        except ValueError as error:
+            raise ValueError("proposal evidence external symlink drift") from error
+    bundle = load_production_bundle(root / "campaign-bundle", load_units=True)
+    if bundle["manifest"]["manifest_sha256"] != manifest["bundle_manifest_sha256"]:
+        raise ValueError("proposal copied bundle binding drift")
+    intent = _load_object(root / "campaign-intent.json")
+    _verify(intent, "campaign_run_sha256", "copied campaign intent")
+    if intent["campaign_run_sha256"] != manifest["campaign_run_sha256"]:
+        raise ValueError("proposal copied campaign binding drift")
+    for binding in manifest["collection_bindings"]:
+        attempt = (
+            root / "shards" / binding["shard_id"]
+            if binding["generation"] == "primary"
+            else root / "recovery-000" / "shards" / binding["shard_id"]
+        )
+        for name in (
+            "input.jsonl",
+            "submission-intent.json",
+            "provider-upload-response.json",
+            "provider-create-response.json",
+            "submission.json",
+            "collection-intent.json",
+            "collection.json",
+            "events.jsonl",
+            "raw/provider-snapshot.json",
+        ):
+            if not (attempt / name).is_file():
+                raise ValueError(f"proposal evidence misses {binding['generation']}/{binding['shard_id']}/{name}")
+        collection = _load_object(attempt / "collection.json")
+        _verify(collection, "collection_sha256", "copied collection")
+        submission_intent = _load_object(attempt / "submission-intent.json")
+        _verify(
+            submission_intent,
+            "submission_intent_sha256",
+            "copied submission intent",
+        )
+        if file_sha256(attempt / "input.jsonl") != submission_intent["input_sha256"]:
+            raise ValueError("proposal copied provider input binding drift")
+        upload_path = attempt / "provider-upload-response.json"
+        upload = _load_object(upload_path)
+        _validate_upload(upload)
+        submission = _load_object(attempt / "submission.json")
+        _verify(submission, "submission_sha256", "copied submission")
+        if (
+            file_sha256(upload_path)
+            != submission["provider_upload_response_sha256"]
+        ):
+            raise ValueError("proposal copied upload receipt binding drift")
+        provider = submission["provider_response"]
+        _validate_snapshot(
+            provider,
+            metadata=provider["metadata"],
+            input_file_id=upload["input_file_id"],
+        )
+        if _load_object(attempt / "provider-create-response.json") != provider:
+            raise ValueError("proposal copied create receipt binding drift")
+        collection_intent = _load_object(attempt / "collection-intent.json")
+        _verify(
+            collection_intent,
+            "collection_intent_sha256",
+            "copied collection intent",
+        )
+        if (
+            collection_intent["collection_intent_sha256"]
+            != collection["collection_intent_sha256"]
+        ):
+            raise ValueError("proposal copied collection intent binding drift")
+        if (
+            collection["collection_sha256"] != binding["collection_sha256"]
+            or file_sha256(attempt / "events.jsonl") != binding["events_sha256"]
+        ):
+            raise ValueError("proposal copied collection binding drift")
+        for raw in collection["raw_file_bindings"]:
+            raw_path = root / raw["path"]
+            if (
+                not raw_path.is_file()
+                or file_sha256(raw_path) != raw["sha256"]
+                or raw_path.stat().st_size != raw["bytes"]
+            ):
+                raise ValueError("proposal copied raw provider evidence drift")
+        raw_snapshot = _load_object(attempt / "raw/provider-snapshot.json")
+        _validate_snapshot(
+            raw_snapshot,
+            metadata=provider["metadata"],
+            batch_id=provider["batch_id"],
+            input_file_id=upload["input_file_id"],
+        )
+        prior = None
+        for status_path in sorted((attempt / "status").glob("*.json")):
+            status = _load_object(status_path)
+            _verify(status, "status_sha256", "copied provider status")
+            if status["previous_status_sha256"] != prior:
+                raise ValueError("proposal copied provider status chain drift")
+            prior = status["status_sha256"]
+    for filename, field in (
+        ("effective-events.jsonl", "effective_events_sha256"),
+        ("proposals.jsonl", "proposals_sha256"),
+        ("sampling-groups.jsonl", "sampling_groups_sha256"),
+    ):
+        if file_sha256(root / filename) != manifest[field]:
+            raise ValueError(f"proposal final output drift: {filename}")
+    return {"manifest": manifest, "inventory": inventory, "bundle": bundle}
 
 
 def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
@@ -1206,17 +1706,13 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
     atomic_write_jsonl(temporary / "effective-events.jsonl", events)
     atomic_write_jsonl(temporary / "proposals.jsonl", proposals)
     atomic_write_jsonl(temporary / "sampling-groups.jsonl", groups)
-    evidence_root = temporary / "collection-evidence"
-    for binding in collection_bindings:
-        source_root = (
-            run_root / "shards" / binding["shard_id"]
-            if binding["generation"] == "primary"
-            else recovery_root / "shards" / binding["shard_id"]
-        )
-        target = evidence_root / binding["generation"] / binding["shard_id"]
-        target.mkdir(parents=True)
-        shutil.copyfile(source_root / "collection.json", target / "collection.json")
-        shutil.copyfile(source_root / "events.jsonl", target / "events.jsonl")
+    _copy_campaign_evidence(
+        run_root=run_root,
+        temporary=temporary,
+        intent=intent,
+        bundle=bundle,
+    )
+    inventory = _write_evidence_inventory(temporary)
     result = _hashed(
         {
             "schema_version": "adag.process-witness.coarse-proposal-bank.v1",
@@ -1234,6 +1730,9 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
             ),
             "proposals_sha256": file_sha256(temporary / "proposals.jsonl"),
             "sampling_groups_sha256": file_sha256(temporary / "sampling-groups.jsonl"),
+            "evidence_inventory_sha256": inventory[
+                "evidence_inventory_sha256"
+            ],
             "collection_bindings": collection_bindings,
             "claim_boundary": bundle["config"]["claim_boundary"],
         },
@@ -1243,4 +1742,5 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary.rename(destination)
     _readonly_tree(destination)
+    load_frozen_proposal_bank(destination)
     return result
