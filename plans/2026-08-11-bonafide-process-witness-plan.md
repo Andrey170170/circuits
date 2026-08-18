@@ -1207,3 +1207,56 @@ Preserve v3 unchanged as qualification evidence. The next full-corpus coarse-ann
 returns to the original 96-token maximum and must receive a bounded compatibility check before
 scale-up. Because segmentation changes unit identities and label difficulty, do not represent that
 future corpus as a continuation of the v3 unit set.
+
+### 2026-08-17 production coarse-proposal amendment after v4
+
+The v4 compatibility result is preserved as `failed_closed`: exact fine-subtype human-admissible
+agreement was 14/20 rather than the frozen 17/20 threshold. The bounded segmentation evidence is
+separately positive: all 20 gated repair/control units had zero human merge/split concerns, replica
+pairwise agreement was 0.8889, no target had a 1-1-1 vote, and there were zero process-bearing false
+negatives. This does not retroactively pass the v4 gate or turn model majorities into truth.
+
+Production coarse annotation is therefore a **proposal-bank run for sampling enrichment**, not a
+seven-class semantic-accuracy result. Preserve all seven physical fine-label votes, confidence
+values, and boundary concerns, but project each replica into one primary selection family:
+
+- `active_task_work`, `evaluation_or_revision`, `intermediate_commitment`, and `final_answer` map to
+  `process_bearing`;
+- `other_semantic_text` and `surface_or_control` map to `contextual`; and
+- `uncertain` maps to `unresolved`.
+
+The majority broad family is the initial sampling selector. A fine-label 1-1-1 is retained rather
+than retried or cherry-picked; a broad-family tie remains unresolved and enters the uncertainty
+reserve. Fine labels remain auxiliary proposal metadata for yield inspection and priority ordering,
+not adequacy labels, motif labels, or downstream semantic evidence.
+
+Keep the qualified request shape: at most six consecutive response-local semantic units, complete
+task prompt and response context with target-only markup, Luna medium reasoning, strict structured
+output, and three body-identical replicas. Increasing the target count per request is a new protocol
+that requires a separate matched qualification. The current full-corpus census has 74,860
+OpenAI-pending semantic atoms, 19,500 deterministic surface/control atoms, and 186 deterministic
+terminal units across 188 responses. Six-target packing produces 12,557 windows and 37,671 physical
+requests.
+
+The Batch discount is per request and does not increase when more rows are placed in one input
+file. The current compact-JSON census is approximately 1.003 GB, so the official 200 MB input-file
+limit makes one Batch impossible even though 37,671 is below the 50,000-request limit. Freeze
+deterministic response-affinity shards under a 180 MB guard: keep every response's windows and all
+three replicas together, make replica rows consecutive, and bind all shards in one campaign
+manifest. Batch order, prompt-cache hits, and cache lifetime are operational observations, never
+scientific or correctness assumptions.
+
+The immutable output must cover every pending semantic atom with exactly three valid votes and
+every deterministic atom through its frozen rule. Failed, expired, missing, duplicate, malformed,
+or ambiguously submitted requests fail closed. Recovery may include only failed physical request
+bodies byte-for-byte in a new receipt-bound recovery shard; never rerun a success. Freeze the entire
+campaign request universe before the first provider call. A one-shard cost-calibration wave may
+precede submission of the remaining frozen shards because it conditions only spend control, not
+request membership, labels, or scientific selection.
+
+After collection, create a separate sampling-group index without altering atomic annotations.
+First group atoms sharing a non-null `fragment_of` identity. Then a later selection policy may form
+maximal adjacent response-local runs with the same broad majority across deterministic whitespace
+or control gaps. Sample groups before positions and record group/atom/position inclusion
+probabilities. Every group retains all member unit IDs, spans, vote profiles, and provenance; trace
+artifacts remain per target and are never merged.

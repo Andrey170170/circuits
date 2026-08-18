@@ -129,6 +129,32 @@ part of the repair gate. The selected refined-zero-shot prompt is run as three b
 medium replicas through native Batch. Scale-up remains blocked until all 24 blind human decisions
 are globally sealed and the identity-bound compatibility evaluator passes its frozen thresholds.
 
+The completed v4 evaluator remains `failed_closed` because exact seven-way human-admissible
+agreement was 14/20 rather than 17/20. Its segmentation and broad-selection evidence is recorded
+separately: zero human merge/split concerns on the 20 gated repair/control units, no 1-1-1 replica
+vote, pairwise agreement 0.8889, and zero process-bearing false negatives. Do not rewrite the sealed
+human ledger or describe this as a seven-way accuracy pass.
+
+For the production proposal bank, keep every seven-way physical vote but use a broader primary
+selection projection:
+
+- `process_bearing`: active work, evaluation/revision, intermediate commitment, or final answer;
+- `contextual`: other semantic text or surface/control; and
+- `unresolved`: uncertain, or a tied broad-family vote.
+
+This projection is optimized for high-recall first-wave sampling and may over-select contextual
+material. It is not a refined annotation, truth label, ADAG input, adequacy class, or motif class.
+The production request retains at most six consecutive semantic targets, complete prompt/response
+context, target-only markup, Luna medium reasoning, strict structured output, and three exact
+replicas. More targets per request require a new qualification.
+
+Long semantic intervals may still cross the 96-token safety cap. Preserve their atomic pieces, but
+allow a versioned **sampling-only group** to collect pieces with the same `fragment_of` source and,
+later, adjacent atoms with the same broad proposal across deterministic control gaps. Sample the
+group before positions so long lists or calculations do not gain weight merely by fragmentation.
+The group must retain all atomic IDs, spans, votes, and inclusion probabilities and must never merge
+annotations or trace artifacts.
+
 ## Loading and saving
 
 1. Open `scripts/bonafide/process_witness_annotation_review.html` in a current browser.
