@@ -50,9 +50,18 @@ _BOUND_SOURCE_FILES = (
     "circuits/analysis/bonafide/coarse_sampling_annotation_v3.py",
     "circuits/analysis/bonafide/coarse_sampling_annotation_v2.py",
     "circuits/analysis/bonafide/coarse_sampling_annotation.py",
+    "circuits/analysis/bonafide/coarse_sampling_openai_batch_v4.py",
+    "circuits/analysis/bonafide/coarse_sampling_openai_run.py",
+    "circuits/analysis/bonafide/coarse_sampling_review_v3.py",
     "circuits/analysis/bonafide/process_annotation.py",
     "circuits/analysis/bonafide/canonical.py",
+    "circuits/labeling/api.py",
+    "circuits/labeling/config.py",
     "circuits/labeling/io.py",
+    "circuits/labeling/pricing.py",
+    "circuits/labeling/schema.py",
+    "pyproject.toml",
+    "uv.lock",
     "scripts/bonafide/build_process_witness_coarse_production_v1.py",
     "scripts/bonafide/process_witness_coarse_openai_batch_production_v1.py",
     "scripts/bonafide/configs/process_witness_coarse_production_v1.json",
@@ -203,15 +212,15 @@ def _cost_plan(
         "long_context_request_count_by_byte_bound": len(long_indices),
         "strict_no_cache_full_output_input_cost_usd": strict_input,
         "strict_no_cache_full_output_output_cost_usd": strict_output,
-        "strict_no_cache_full_output_ceiling_usd": strict_input + strict_output,
-        "reference_strict_ceiling_usd": float(
+        "strict_no_cache_full_output_exposure_usd": strict_input + strict_output,
+        "reference_strict_exposure_usd": float(
             empirical["strict_no_cache_full_output_reference_usd"]
         ),
         "assumptions": [
             "direct-v4 and cache-pattern values are forecasts, never caps",
             "prompt-cache reads/writes are observed operational behavior, never assumed",
-            "strict ceiling prices UTF-8 body bytes plus per-request overhead as input tokens",
-            "strict ceiling consumes the full max_output_tokens for every physical request",
+            "strict exposure prices UTF-8 body bytes plus per-request overhead as input tokens",
+            "strict exposure consumes the full max_output_tokens for every physical request",
             "long-context candidates conservatively use live rather than Batch rates",
             "the active API-tier queued-input-token limit remains an explicit launch gate",
         ],
@@ -393,6 +402,17 @@ def build(
             shard_body_bytes = sum(
                 int(block["provider_body_utf8_bytes"]) for block in blocks
             )
+            shard_request_body_bytes = [
+                value
+                for block in blocks
+                for value in body_bytes[
+                    int(block["physical_start"]) : int(block["physical_start"])
+                    + int(block["request_count"])
+                ]
+            ]
+            shard_cost_plan = _cost_plan(
+                config=config, prices=prices, body_bytes=shard_request_body_bytes
+            )
             shard_records.append(
                 {
                     "shard_id": shard_id,
@@ -401,11 +421,12 @@ def build(
                     "sha256": file_sha256(path),
                     "request_count": len(request_ids),
                     "provider_body_utf8_bytes": shard_body_bytes,
-                    "direct_v4_cost_forecast_usd": (
-                        float(config["empirical_calibration"]["source_actual_cost_usd"])
-                        * len(request_ids)
-                        / int(config["empirical_calibration"]["source_request_count"])
-                    ),
+                    "direct_v4_cost_forecast_usd": shard_cost_plan[
+                        "direct_v4_cost_per_request_extrapolation_usd"
+                    ],
+                    "strict_no_cache_full_output_exposure_usd": shard_cost_plan[
+                        "strict_no_cache_full_output_exposure_usd"
+                    ],
                     "queued_input_tokens_empirical_forecast": round(
                         shard_body_bytes
                         * float(config["empirical_calibration"]["source_input_tokens"])

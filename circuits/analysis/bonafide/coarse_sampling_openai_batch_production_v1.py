@@ -8,6 +8,7 @@ state forbids automatic retries and must be reconciled by metadata discovery.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -25,8 +26,10 @@ from circuits.analysis.bonafide.coarse_sampling_openai_batch_v4 import (
     _estimate_v4_actual_cost,
     _openai_client,
     _openai_file_bytes,
-    _provider_batch_dict,
     _response_text,
+)
+from circuits.analysis.bonafide.coarse_sampling_openai_batch_v4 import (
+    _provider_batch_dict as _base_provider_batch_dict,
 )
 from circuits.analysis.bonafide.coarse_sampling_production_v1 import (
     iter_shard_requests,
@@ -41,7 +44,7 @@ from circuits.labeling.io import (
     atomic_write_jsonl,
     read_jsonl,
 )
-from circuits.labeling.pricing import load_price_snapshot
+from circuits.labeling.pricing import estimate_cost, load_price_snapshot
 from circuits.labeling.schema import Usage
 
 CAMPAIGN_RUN_SCHEMA = "adag.process-witness.coarse-production-run.v1"
@@ -74,6 +77,65 @@ def _verify(value: Mapping[str, Any], field: str, label: str) -> None:
     observed = payload.pop(field, None)
     if observed != canonical_sha256(payload):
         raise ValueError(f"{label} self-hash drift")
+
+
+def _write_or_verify_json(path: Path, value: Mapping[str, Any]) -> None:
+    if path.exists():
+        if _load_object(path) != dict(value):
+            raise ValueError(f"retained coarse production JSON drift: {path}")
+        return
+    atomic_write_json(path, value)
+
+
+def _write_or_verify_bytes(path: Path, value: bytes) -> None:
+    if path.exists():
+        if path.read_bytes() != value:
+            raise ValueError(f"retained coarse production bytes drift: {path}")
+        return
+    atomic_write_bytes(path, value)
+
+
+def _write_or_verify_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
+    expected = b"".join(
+        (
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        for value in values
+    )
+    _write_or_verify_bytes(path, expected)
+
+
+def _load_or_create_collection_intent(
+    *, path: Path, submission: Mapping[str, Any]
+) -> dict[str, Any]:
+    if path.exists():
+        intent = _load_object(path)
+        _verify(intent, "collection_intent_sha256", "collection intent")
+        if (
+            intent.get("submission_sha256") != submission["submission_sha256"]
+            or intent.get("batch_id") != submission["provider_response"]["batch_id"]
+        ):
+            raise ValueError("retained collection intent binding drift")
+        return intent
+    intent = _hashed(
+        {
+            "schema_version": COLLECTION_SCHEMA,
+            "status": "intent_persisted",
+            "recorded_at": _now(),
+            "submission_sha256": submission["submission_sha256"],
+            "batch_id": submission["provider_response"]["batch_id"],
+        },
+        "collection_intent_sha256",
+    )
+    atomic_write_json(path, intent)
+    return intent
 
 
 def _readonly_tree(root: Path) -> None:
@@ -110,12 +172,51 @@ def _submission_gate(run_root: Path):
         lock.rmdir()
 
 
+@contextmanager
+def _collection_gate(shard_root: Path):
+    lock = shard_root / ".collection-gate"
+    try:
+        lock.mkdir()
+    except FileExistsError as error:
+        raise RuntimeError(
+            "coarse production collection gate is already held or stale; "
+            "inspect retained collection evidence before manual lock removal"
+        ) from error
+    try:
+        atomic_write_json(
+            lock / "owner.json",
+            {
+                "schema_version": "adag.process-witness.coarse-production-lock.v1",
+                "created_at": _now(),
+                "hostname": platform.node(),
+                "pid": os.getpid(),
+            },
+        )
+        yield
+    finally:
+        (lock / "owner.json").unlink(missing_ok=True)
+        lock.rmdir()
+
+
+def _active_collection_locks(run_root: Path) -> list[str]:
+    return sorted(
+        str(path.relative_to(run_root))
+        for pattern in (
+            "shards/*/.collection-gate",
+            "recovery-000/shards/*/.collection-gate",
+        )
+        for path in run_root.glob(pattern)
+    )
+
+
 def initialize_campaign_run(
     *,
     bundle_root: Path,
     run_root: Path,
-    maximum_authorized_cost_usd: float,
-    authorization_note: str,
+    forecast_budget_usd: float,
+    forecast_budget_authorization_note: str,
+    acknowledged_strict_worst_case_exposure_usd: float,
+    strict_exposure_acknowledgement_note: str,
     provider_queued_input_token_limit: int,
     maximum_concurrent_shards: int,
 ) -> dict[str, Any]:
@@ -124,9 +225,20 @@ def initialize_campaign_run(
     bundle = load_production_bundle(bundle_root, load_units=False)
     if run_root.exists():
         raise FileExistsError(f"coarse production run exists: {run_root}")
-    if maximum_authorized_cost_usd <= 0 or not authorization_note.strip():
+    strict_exposure = float(
+        bundle["cost_plan"]["strict_no_cache_full_output_exposure_usd"]
+    )
+    if forecast_budget_usd <= 0 or not forecast_budget_authorization_note.strip():
         raise ValueError(
-            "coarse production requires an explicit positive spend authorization"
+            "coarse production requires an explicit positive forecast budget"
+        )
+    if (
+        abs(acknowledged_strict_worst_case_exposure_usd - strict_exposure) > 1e-9
+        or not strict_exposure_acknowledgement_note.strip()
+    ):
+        raise ValueError(
+            "coarse production requires exact acknowledgement that actual spend may "
+            "exceed the forecast budget up to the strict worst-case exposure"
         )
     if not 1 <= maximum_concurrent_shards <= len(bundle["shards"]):
         raise ValueError("maximum concurrent shards is outside the frozen shard census")
@@ -159,8 +271,9 @@ def initialize_campaign_run(
                     "input_sha256": shard["sha256"],
                     "bytes": shard["bytes"],
                     "request_count": shard["request_count"],
-                    "direct_v4_cost_forecast_usd": shard[
-                        "direct_v4_cost_forecast_usd"
+                    "direct_v4_cost_forecast_usd": shard["direct_v4_cost_forecast_usd"],
+                    "strict_no_cache_full_output_exposure_usd": shard[
+                        "strict_no_cache_full_output_exposure_usd"
                     ],
                     "queued_input_tokens_empirical_forecast": shard[
                         "queued_input_tokens_empirical_forecast"
@@ -175,8 +288,16 @@ def initialize_campaign_run(
                 "bundle_root": str(bundle_root.resolve()),
                 "bundle_manifest_sha256": bundle["manifest"]["manifest_sha256"],
                 "cost_plan_sha256": bundle["cost_plan"]["cost_plan_sha256"],
-                "maximum_authorized_cost_usd": maximum_authorized_cost_usd,
-                "authorization_note": authorization_note,
+                "forecast_budget_usd": forecast_budget_usd,
+                "forecast_budget_authorization_note": forecast_budget_authorization_note,
+                "forecast_budget_is_hard_spend_cap": False,
+                "strict_worst_case_exposure_usd": strict_exposure,
+                "acknowledged_strict_worst_case_exposure_usd": (
+                    acknowledged_strict_worst_case_exposure_usd
+                ),
+                "strict_exposure_acknowledgement_note": (
+                    strict_exposure_acknowledgement_note
+                ),
                 "provider_queued_input_token_limit": provider_queued_input_token_limit,
                 "maximum_concurrent_shards": maximum_concurrent_shards,
                 "queue_policy": "active frozen shards must fit recorded concurrency and queued-token cap",
@@ -185,6 +306,8 @@ def initialize_campaign_run(
                     "hostname": platform.node(),
                     "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
                     "endpoint_identity": "https://api.openai.com/v1",
+                    "python_version": platform.python_version(),
+                    "openai_sdk_version": importlib.metadata.version("openai"),
                     "openai_project_sha256": (
                         hashlib.sha256(
                             os.environ["OPENAI_PROJECT_ID"].encode()
@@ -209,6 +332,23 @@ def initialize_campaign_run(
         raise
 
 
+def _validate_runtime_environment(environment: Any) -> None:
+    project = os.environ.get("OPENAI_PROJECT_ID")
+    organization = os.environ.get("OPENAI_ORG_ID")
+    project_sha256 = hashlib.sha256(project.encode()).hexdigest() if project else None
+    organization_sha256 = (
+        hashlib.sha256(organization.encode()).hexdigest() if organization else None
+    )
+    if (
+        not isinstance(environment, Mapping)
+        or environment.get("python_version") != platform.python_version()
+        or environment.get("openai_sdk_version") != importlib.metadata.version("openai")
+        or environment.get("openai_project_sha256") != project_sha256
+        or environment.get("openai_organization_sha256") != organization_sha256
+    ):
+        raise ValueError("coarse production runtime environment drift")
+
+
 def _campaign(run_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     intent = _load_object(run_root / "campaign-intent.json")
     _verify(intent, "campaign_run_sha256", "coarse production campaign intent")
@@ -217,6 +357,7 @@ def _campaign(run_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     )
     if bundle["manifest"]["manifest_sha256"] != intent["bundle_manifest_sha256"]:
         raise ValueError("coarse production run/bundle binding drift")
+    _validate_runtime_environment(intent.get("environment"))
     repo_root = Path(__file__).resolve().parents[3]
     for binding in bundle["manifest"]["source_revision"]["files"]:
         path = repo_root / binding["path"]
@@ -252,9 +393,37 @@ def _upload_provider(path: Path) -> dict[str, Any]:
     }
 
 
-def _create_provider(
-    input_file_id: str, *, metadata: dict[str, str]
-) -> dict[str, Any]:
+def _provider_json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _provider_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_provider_json_value(item) for item in value]
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _provider_json_value(model_dump(mode="json"))
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return _provider_json_value(to_dict())
+    raise TypeError(f"unsupported provider receipt value: {type(value).__name__}")
+
+
+def _production_provider_batch_dict(batch: Any) -> dict[str, Any]:
+    """Retain the base Batch receipt plus structured Batch-level errors."""
+
+    value = _base_provider_batch_dict(batch)
+    raw = _provider_json_value(batch)
+    value["provider_model_dump"] = raw
+    value["errors"] = (
+        raw.get("errors")
+        if isinstance(raw, Mapping) and "errors" in raw
+        else _provider_json_value(getattr(batch, "errors", None))
+    )
+    return value
+
+
+def _create_provider(input_file_id: str, *, metadata: dict[str, str]) -> dict[str, Any]:
     batch = _openai_client().batches.create(
         input_file_id=input_file_id,
         endpoint="/v1/responses",
@@ -263,7 +432,7 @@ def _create_provider(
     )
     if getattr(batch, "input_file_id", None) != input_file_id:
         raise ValueError("coarse production created Batch input file id drift")
-    return _provider_batch_dict(batch)
+    return _production_provider_batch_dict(batch)
 
 
 def _validate_upload(value: Mapping[str, Any]) -> None:
@@ -292,10 +461,7 @@ def _validate_snapshot(
         or not isinstance(value.get("input_file_id"), str)
         or not isinstance(value.get("batch_id"), str)
         or (batch_id is not None and value.get("batch_id") != batch_id)
-        or (
-            input_file_id is not None
-            and value.get("input_file_id") != input_file_id
-        )
+        or (input_file_id is not None and value.get("input_file_id") != input_file_id)
     ):
         raise ValueError("coarse production provider snapshot drift")
 
@@ -358,6 +524,11 @@ def submit_shard(
         raise ValueError("unknown coarse production shard")
     shard_root = run_root / "shards" / shard_id
     with _submission_gate(run_root):
+        collection_locks = _active_collection_locks(run_root)
+        if collection_locks:
+            raise RuntimeError(
+                f"collection materialization is active: {collection_locks}"
+            )
         if (shard_root / "submission-intent.json").exists():
             raise FileExistsError(
                 "coarse production shard submission was already attempted"
@@ -369,11 +540,9 @@ def submit_shard(
             item for item in intent["shards"] if item["shard_id"] == shard_id
         )
         candidate_cost = float(intent_shard["direct_v4_cost_forecast_usd"])
-        if attempted_cost + candidate_cost > float(
-            intent["maximum_authorized_cost_usd"]
-        ):
+        if attempted_cost + candidate_cost > float(intent["forecast_budget_usd"]):
             raise ValueError(
-                "prospective actual-or-reserved campaign cost exceeds authorization"
+                "prospective actual-or-reserved campaign cost exceeds forecast budget"
             )
         active, active_queue_tokens = _active_primary_queue(run_root, intent)
         if len(active) >= int(intent["maximum_concurrent_shards"]):
@@ -455,43 +624,100 @@ def submit_shard(
             ) from error
 
 
-def recover_shard_submission(
+def _recover_submission_failure(
     *,
-    run_root: Path,
+    shard_root: Path,
+    intent: Mapping[str, Any],
     shard_id: str,
-    discoverer: Callable[..., list[dict[str, Any]]] | None = None,
+    generation: str,
+    discoverer: Callable[..., list[dict[str, Any]]] | None,
+    uploader: Callable[[Path], dict[str, Any]],
+    creator: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
-    intent, _bundle = _campaign(run_root)
-    shard_root = run_root / "shards" / shard_id
     if (shard_root / "submission.json").exists():
         raise FileExistsError("coarse production submission receipt already exists")
     submission_intent = _load_object(shard_root / "submission-intent.json")
     _verify(submission_intent, "submission_intent_sha256", "submission intent")
-    upload = _load_object(shard_root / "provider-upload-response.json")
-    _validate_upload(upload)
-    metadata = _metadata(intent, shard_id, "primary")
-    create = shard_root / "provider-create-response.json"
-    if create.exists():
-        provider = _load_object(create)
-        recovered_by = "immediate_create_snapshot"
-    else:
-        if discoverer is None:
+    if submission_intent.get("generation") != generation:
+        raise ValueError("coarse production recovery generation drift")
+    metadata = _metadata(intent, shard_id, generation)
+    if discoverer is None:
 
-            def discoverer(**_: Any) -> list[dict[str, Any]]:
-                return [
-                    _provider_batch_dict(batch)
-                    for batch in _openai_client().batches.list(limit=100)
-                    if dict(getattr(batch, "metadata", None) or {}) == metadata
-                ]
+        def discoverer(**_: Any) -> list[dict[str, Any]]:
+            return [
+                _production_provider_batch_dict(batch)
+                for batch in _openai_client().batches.list(limit=100)
+                if dict(getattr(batch, "metadata", None) or {}) == metadata
+            ]
 
-        matches = discoverer(metadata=metadata)
-        if len(matches) != 1:
+    upload_path = shard_root / "provider-upload-response.json"
+    if not upload_path.exists():
+        if (shard_root / "provider-create-response.json").exists():
             raise ValueError(
-                f"expected one metadata-matched Batch, found {len(matches)}"
+                "provider create snapshot exists without its upload receipt"
             )
-        provider = matches[0]
-        atomic_write_json(create, provider)
-        recovered_by = "unique_provider_metadata_discovery"
+        matches = discoverer(metadata=metadata)
+        if matches:
+            raise ValueError(
+                "upload receipt is absent but provider metadata discovery found Batch(es)"
+            )
+        failure_path = shard_root / "submission-failure.json"
+        original_failure = None
+        if failure_path.exists():
+            original_failure = _load_object(failure_path)
+            _verify(
+                original_failure,
+                "submission_failure_sha256",
+                "ambiguous upload failure",
+            )
+            if (
+                original_failure.get("submission_intent_sha256")
+                != submission_intent["submission_intent_sha256"]
+                or original_failure.get("upload_receipt_persisted") is not False
+            ):
+                raise ValueError("ambiguous upload failure/submission intent drift")
+        orphan = _hashed(
+            {
+                "schema_version": "adag.process-witness.coarse-production-orphan-upload.v1",
+                "recorded_at": _now(),
+                "submission_failure_sha256": (
+                    original_failure["submission_failure_sha256"]
+                    if original_failure is not None
+                    else None
+                ),
+                "submission_intent_sha256": submission_intent[
+                    "submission_intent_sha256"
+                ],
+                "failure_receipt_present": original_failure is not None,
+                "metadata_matches_before_reupload": 0,
+                "original_upload_may_be_orphaned": True,
+                "batch_create_could_not_run_without_an_upload_receipt": True,
+            },
+            "orphan_upload_state_sha256",
+        )
+        atomic_write_json(shard_root / "orphan-upload-state.json", orphan)
+        upload = uploader(shard_root / "input.jsonl")
+        _validate_upload(upload)
+        atomic_write_json(upload_path, upload)
+        provider = creator(upload["input_file_id"], metadata=metadata)
+        atomic_write_json(shard_root / "provider-create-response.json", provider)
+        recovered_by = "safe_reupload_after_zero_batch_metadata_matches"
+    else:
+        upload = _load_object(upload_path)
+        _validate_upload(upload)
+        create = shard_root / "provider-create-response.json"
+        if create.exists():
+            provider = _load_object(create)
+            recovered_by = "immediate_create_snapshot"
+        else:
+            matches = discoverer(metadata=metadata)
+            if len(matches) != 1:
+                raise ValueError(
+                    f"expected one metadata-matched Batch, found {len(matches)}"
+                )
+            provider = matches[0]
+            atomic_write_json(create, provider)
+            recovered_by = "unique_provider_metadata_discovery"
     _validate_snapshot(
         provider, metadata=metadata, input_file_id=upload["input_file_id"]
     )
@@ -503,12 +729,36 @@ def recover_shard_submission(
             "recovered_by": recovered_by,
             "campaign_run_sha256": intent["campaign_run_sha256"],
             "submission_intent_sha256": submission_intent["submission_intent_sha256"],
+            "provider_upload_response_sha256": file_sha256(
+                shard_root / "provider-upload-response.json"
+            ),
             "provider_response": provider,
         },
         "submission_sha256",
     )
     atomic_write_json(shard_root / "submission.json", receipt)
     return receipt
+
+
+def recover_shard_submission(
+    *,
+    run_root: Path,
+    shard_id: str,
+    discoverer: Callable[..., list[dict[str, Any]]] | None = None,
+    uploader: Callable[[Path], dict[str, Any]] = _upload_provider,
+    creator: Callable[..., dict[str, Any]] = _create_provider,
+) -> dict[str, Any]:
+    intent, _bundle = _campaign(run_root)
+    with _submission_gate(run_root):
+        return _recover_submission_failure(
+            shard_root=run_root / "shards" / shard_id,
+            intent=intent,
+            shard_id=shard_id,
+            generation="primary",
+            discoverer=discoverer,
+            uploader=uploader,
+            creator=creator,
+        )
 
 
 def _submission(run_root: Path, shard_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -542,7 +792,9 @@ def check_shard(
     if retriever is None:
 
         def retriever(batch_id: str) -> dict[str, Any]:
-            return _provider_batch_dict(_openai_client().batches.retrieve(batch_id))
+            return _production_provider_batch_dict(
+                _openai_client().batches.retrieve(batch_id)
+            )
 
     observed = retriever(provider["batch_id"])
     metadata = _metadata(intent, shard_id, "primary")
@@ -579,7 +831,7 @@ def check_shard(
 
 def _download(batch_id: str) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     batch = _openai_client().batches.retrieve(batch_id)
-    snapshot = _provider_batch_dict(batch)
+    snapshot = _production_provider_batch_dict(batch)
     files = {}
     for source in ("output", "error"):
         file_id = snapshot.get(f"{source}_file_id")
@@ -606,19 +858,41 @@ def _parse_row(row: Mapping[str, Any], request: Mapping[str, Any]) -> dict[str, 
     }
     response = row.get("response")
     if row.get("error") is not None or not isinstance(response, Mapping):
+        provider_error = row.get("error")
+        error_code = (
+            provider_error.get("code") if isinstance(provider_error, Mapping) else None
+        )
+        error_message = (
+            provider_error.get("message")
+            if isinstance(provider_error, Mapping)
+            else provider_error
+        )
         return {
             **common,
             "validation_status": "provider_error",
             "error_type": "batch_request_error",
+            "provider_error_code": str(error_code) if error_code is not None else None,
+            "error_message": (
+                str(error_message)[:2000] if error_message is not None else None
+            ),
             "usage": openai_usage(None).model_dump(mode="json"),
             "decisions": None,
         }
     body = response.get("body")
     if response.get("status_code") != 200 or not isinstance(body, Mapping):
+        body_error = body.get("error") if isinstance(body, Mapping) else None
+        error_code = body_error.get("code") if isinstance(body_error, Mapping) else None
+        error_message = (
+            body_error.get("message") if isinstance(body_error, Mapping) else body_error
+        )
         return {
             **common,
             "validation_status": "provider_error",
             "error_type": "batch_http_error",
+            "provider_error_code": str(error_code) if error_code is not None else None,
+            "error_message": (
+                str(error_message)[:2000] if error_message is not None else None
+            ),
             "usage": openai_usage(None).model_dump(mode="json"),
             "decisions": None,
         }
@@ -683,13 +957,12 @@ def _price_events(
     events: list[dict[str, Any]],
     snapshot: Mapping[str, Any],
     prices: dict[str, Any],
+    aggregate_fallback_long_context_impossible: bool = False,
 ) -> tuple[float, bool, str]:
-    """Price a Batch from aggregate usage, or typed per-row/zero evidence."""
+    """Price row usage first; use aggregate usage only with a safe tier proof."""
 
-    aggregate_usage = openai_usage(snapshot.get("usage"))
-    aggregate_cost, aggregate_long = _estimate_v4_actual_cost(
-        prices, model="gpt-5.6-luna", usage=aggregate_usage
-    )
+    aggregate_raw = snapshot.get("usage")
+    aggregate_usage = openai_usage(aggregate_raw)
     event_total = 0.0
     event_complete = True
     for event in events:
@@ -697,53 +970,217 @@ def _price_events(
         cost, long_context = _estimate_v4_actual_cost(
             prices, model="gpt-5.6-luna", usage=usage
         )
-        if cost.total_cost is None and event["validation_status"] in {
-            "provider_error",
-            "missing",
-        }:
-            # No provider response/usage exists for this request. The provider Batch
-            # receipt is the evidence that it did not produce a billable model result.
-            zero = Usage(
-                input_tokens=0,
-                uncached_input_tokens=0,
-                cache_read_tokens=0,
-                cache_write_tokens=0,
-                output_tokens=0,
-                reasoning_tokens=0,
-            )
-            cost, long_context = _estimate_v4_actual_cost(
-                prices, model="gpt-5.6-luna", usage=zero
-            )
-            event["pricing_basis"] = "no_provider_result_or_usage_priced_zero"
-        else:
-            event["pricing_basis"] = "request_usage"
+        event["pricing_basis"] = "request_usage"
         event["cost"] = cost.model_dump(mode="json")
         event["long_context_price_multiplier_applied"] = long_context
         if cost.total_cost is None:
             event_complete = False
         else:
             event_total += float(cost.total_cost)
-    if aggregate_cost.complete and aggregate_cost.total_cost is not None:
-        total = float(aggregate_cost.total_cost)
-        complete = True
-        basis = "provider_batch_aggregate_usage"
-        for event in events:
-            event["collection_pricing_basis"] = basis
-            event["batch_aggregate_long_context_price_multiplier_applied"] = (
-                aggregate_long
+    total = event_total
+    complete = event_complete
+    basis = "per_request_usage_with_per_request_long_context_threshold"
+    if isinstance(aggregate_raw, Mapping) and event_complete:
+        input_details = aggregate_raw.get("input_tokens_details")
+        presence = {
+            "input_tokens": "input_tokens" in aggregate_raw,
+            "cache_read_tokens": isinstance(input_details, Mapping)
+            and "cached_tokens" in input_details,
+            "cache_write_tokens": isinstance(input_details, Mapping)
+            and "cache_write_tokens" in input_details,
+            "output_tokens": "output_tokens" in aggregate_raw,
+        }
+        for field, present in presence.items():
+            if not present:
+                continue
+            expected = getattr(aggregate_usage, field)
+            values = [getattr(Usage.model_validate(e["usage"]), field) for e in events]
+            if (
+                expected is not None
+                and all(value is not None for value in values)
+                and sum(int(value) for value in values if value is not None) != expected
+            ):
+                complete = False
+                basis = "failed_closed_batch_aggregate_usage_mismatch"
+                break
+        if complete:
+            basis = "per_request_usage_reconciled_to_batch_aggregate"
+    elif isinstance(aggregate_raw, Mapping) and not event_complete:
+        input_details = aggregate_raw.get("input_tokens_details")
+        presence = {
+            "input_tokens": "input_tokens" in aggregate_raw,
+            "cache_read_tokens": isinstance(input_details, Mapping)
+            and "cached_tokens" in input_details,
+            "cache_write_tokens": isinstance(input_details, Mapping)
+            and "cache_write_tokens" in input_details,
+            "output_tokens": "output_tokens" in aggregate_raw,
+        }
+        aggregate_pricing_fields_present = all(presence.values())
+        aggregate_not_below_known_rows = True
+        for field, present in presence.items():
+            if not present:
+                continue
+            aggregate_value = getattr(aggregate_usage, field)
+            known_values = [
+                getattr(Usage.model_validate(event["usage"]), field) for event in events
+            ]
+            known_sum = sum(int(value) for value in known_values if value is not None)
+            if aggregate_value is not None and aggregate_value < known_sum:
+                aggregate_not_below_known_rows = False
+                break
+        if aggregate_pricing_fields_present:
+            known_uncached_sum = sum(
+                int(value)
+                for value in (
+                    Usage.model_validate(event["usage"]).uncached_input_tokens
+                    for event in events
+                )
+                if value is not None
             )
-    else:
-        total = event_total
-        complete = event_complete
-        basis = "request_usage_plus_typed_zero_for_no_provider_result"
-        for event in events:
-            event["collection_pricing_basis"] = basis
+            if (
+                aggregate_usage.uncached_input_tokens is not None
+                and aggregate_usage.uncached_input_tokens < known_uncached_sum
+            ):
+                aggregate_not_below_known_rows = False
+        aggregate_not_below_known_cost = True
+        threshold = int(
+            prices["long_context"]["gpt-5.6-luna"]["threshold_input_tokens_exclusive"]
+        )
+        aggregate_below_threshold = (
+            aggregate_usage.input_tokens is not None
+            and aggregate_usage.input_tokens <= threshold
+        )
+        if (
+            aggregate_pricing_fields_present
+            and aggregate_not_below_known_rows
+            and (
+                aggregate_fallback_long_context_impossible or aggregate_below_threshold
+            )
+        ):
+            aggregate_cost = estimate_cost(
+                prices,
+                provider="openai",
+                model="gpt-5.6-luna",
+                transport="native_batch",
+                usage=aggregate_usage,
+            )
+            if aggregate_cost.total_cost is not None:
+                aggregate_total = float(aggregate_cost.total_cost)
+                if aggregate_total + 1e-12 < event_total:
+                    aggregate_not_below_known_cost = False
+                elif aggregate_total != 0.0 or _proven_pre_execution_failure(snapshot):
+                    total = aggregate_total
+                    complete = True
+                    basis = (
+                        "aggregate_batch_usage_with_per_request_byte_upper_bound"
+                        if aggregate_fallback_long_context_impossible
+                        else "aggregate_batch_usage_below_long_context_threshold"
+                    )
+        if not aggregate_not_below_known_rows:
+            basis = "failed_closed_batch_aggregate_usage_below_known_rows"
+        elif not aggregate_not_below_known_cost:
+            basis = "failed_closed_batch_aggregate_cost_below_known_rows"
+        elif not complete:
+            basis = "cost_incomplete_per_request_and_aggregate_usage"
+    elif not event_complete:
+        basis = "cost_incomplete_per_request_usage_missing"
+    for event in events:
+        event["collection_pricing_basis"] = basis
     for event in events:
         event["event_sha256"] = canonical_sha256(event)
     return total, complete, basis
 
 
-def collect_shard(
+def _batch_error_rows(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, Mapping):
+        data = value.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, Mapping)]
+        return [value] if value.get("code") else []
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, Mapping)]
+    return []
+
+
+def _proven_pre_execution_failure(snapshot: Mapping[str, Any]) -> bool:
+    counts = snapshot.get("request_counts")
+    usage_raw = snapshot.get("usage")
+    errors = _batch_error_rows(snapshot.get("errors"))
+    if (
+        snapshot.get("status") != "failed"
+        or not isinstance(counts, Mapping)
+        or not isinstance(usage_raw, Mapping)
+        or not errors
+        or any(
+            not isinstance(row.get("code"), str) or not row["code"] for row in errors
+        )
+    ):
+        return False
+    total = counts.get("total")
+    completed = counts.get("completed")
+    failed = counts.get("failed")
+    if not isinstance(total, int) or total < 0 or completed != 0 or failed != total:
+        return False
+    input_details = usage_raw.get("input_tokens_details")
+    if not isinstance(input_details, Mapping):
+        return False
+    required_zeroes = (
+        usage_raw.get("input_tokens"),
+        input_details.get("cached_tokens"),
+        input_details.get("cache_write_tokens"),
+        usage_raw.get("output_tokens"),
+    )
+    return required_zeroes == (0, 0, 0, 0)
+
+
+def _input_byte_bound_excludes_long_context(
+    *, input_path: Path, config: Mapping[str, Any], prices: Mapping[str, Any]
+) -> bool:
+    provider = config["provider"]
+    threshold = int(
+        prices["long_context"][provider["model"]]["threshold_input_tokens_exclusive"]
+    )
+    overhead = int(provider["input_token_overhead_per_request"])
+    for row in read_jsonl(input_path):
+        body_bytes = len(
+            json.dumps(
+                row["body"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        if body_bytes + overhead > threshold:
+            return False
+    return True
+
+
+def _strict_exposure_for_provider_bodies(
+    *, config: Mapping[str, Any], prices: Mapping[str, Any], body_bytes: list[int]
+) -> float:
+    provider = config["provider"]
+    rates = prices["rates"]["openai"][provider["model"]]["native_batch"]
+    overhead = int(provider["input_token_overhead_per_request"])
+    threshold = int(
+        prices["long_context"][provider["model"]]["threshold_input_tokens_exclusive"]
+    )
+    if any(value + overhead > threshold for value in body_bytes):
+        raise ValueError(
+            "recovery strict exposure needs per-request long-context pricing support"
+        )
+    input_rate = max(
+        float(rates["input_per_million"]),
+        float(rates["cache_write_per_million"]),
+    )
+    output_rate = float(rates["output_per_million"])
+    return (
+        sum(value + overhead for value in body_bytes) / 1_000_000 * input_rate
+        + len(body_bytes) * int(provider["max_output_tokens"]) / 1_000_000 * output_rate
+    )
+
+
+def _collect_shard_locked(
     *,
     run_root: Path,
     shard_id: str,
@@ -756,17 +1193,9 @@ def collect_shard(
     if (shard_root / "collection.json").exists():
         raise FileExistsError("coarse production shard already collected")
     provider = submission["provider_response"]
-    collection_intent = _hashed(
-        {
-            "schema_version": COLLECTION_SCHEMA,
-            "status": "intent_persisted",
-            "recorded_at": _now(),
-            "submission_sha256": submission["submission_sha256"],
-            "batch_id": provider["batch_id"],
-        },
-        "collection_intent_sha256",
+    collection_intent = _load_or_create_collection_intent(
+        path=shard_root / "collection-intent.json", submission=submission
     )
-    atomic_write_json(shard_root / "collection-intent.json", collection_intent)
     snapshot, files = downloader(provider["batch_id"])
     _validate_snapshot(
         snapshot,
@@ -779,7 +1208,7 @@ def collect_shard(
         raise ValueError("coarse production Batch is not terminal")
     raw_root = shard_root / "raw"
     raw_root.mkdir(exist_ok=True)
-    atomic_write_json(raw_root / "provider-snapshot.json", snapshot)
+    _write_or_verify_json(raw_root / "provider-snapshot.json", snapshot)
     rows = {}
     raw_bindings = [
         {
@@ -795,7 +1224,7 @@ def collect_shard(
         if item["file_id"] != snapshot.get(f"{source}_file_id"):
             raise ValueError("coarse production provider file receipt drift")
         path = raw_root / f"{source}.jsonl"
-        atomic_write_bytes(path, content)
+        _write_or_verify_bytes(path, content)
         raw_bindings.append(
             {
                 "source": source,
@@ -816,6 +1245,9 @@ def collect_shard(
     if unknown:
         raise ValueError("coarse production provider output contains unknown custom_id")
     prices = load_price_snapshot(Path(intent["bundle_root"]) / "price-snapshot.json")
+    bundle = load_production_bundle(
+        Path(intent["bundle_root"]), load_units=False, strict_topology=False
+    )
     events = []
     for request in requests:
         if request["request_id"] not in rows:
@@ -838,9 +1270,18 @@ def collect_shard(
             event = _parse_row(rows[request["request_id"]], request)
         events.append(event)
     total, complete_cost, pricing_basis = _price_events(
-        events=events, snapshot=snapshot, prices=prices
+        events=events,
+        snapshot=snapshot,
+        prices=prices,
+        aggregate_fallback_long_context_impossible=(
+            _input_byte_bound_excludes_long_context(
+                input_path=shard_root / "input.jsonl",
+                config=bundle["config"],
+                prices=prices,
+            )
+        ),
     )
-    atomic_write_jsonl(shard_root / "events.jsonl", events)
+    _write_or_verify_jsonl(shard_root / "events.jsonl", events)
     success = sum(e["validation_status"] == "success" for e in events)
     prior_cost = 0.0
     for other in intent["shards"]:
@@ -850,15 +1291,15 @@ def collect_shard(
             _verify(prior, "collection_sha256", "coarse production collection")
             prior_cost += float(prior["known_priced_cost_usd"])
     cumulative_cost = prior_cost + total
-    authorization_exceeded = complete_cost and cumulative_cost > float(
-        intent["maximum_authorized_cost_usd"]
+    forecast_budget_exceeded = complete_cost and cumulative_cost > float(
+        intent["forecast_budget_usd"]
     )
     result = _hashed(
         {
             "schema_version": COLLECTION_SCHEMA,
             "status": (
-                "failed_closed_authorization_exceeded"
-                if authorization_exceeded
+                "complete_forecast_budget_exceeded_stop_further_primary_submission"
+                if forecast_budget_exceeded
                 else (
                     "complete"
                     if success == len(events) and complete_cost
@@ -875,8 +1316,9 @@ def collect_shard(
             "cost_complete": complete_cost,
             "pricing_basis": pricing_basis,
             "provider_terminal_status": terminal_status,
-            "maximum_authorized_cost_usd": intent["maximum_authorized_cost_usd"],
-            "authorization_exceeded": authorization_exceeded,
+            "forecast_budget_usd": intent["forecast_budget_usd"],
+            "forecast_budget_is_hard_spend_cap": False,
+            "forecast_budget_exceeded": forecast_budget_exceeded,
             "raw_file_bindings": raw_bindings,
             "events_sha256": file_sha256(shard_root / "events.jsonl"),
         },
@@ -884,6 +1326,23 @@ def collect_shard(
     )
     atomic_write_json(shard_root / "collection.json", result)
     return result
+
+
+def collect_shard(
+    *,
+    run_root: Path,
+    shard_id: str,
+    downloader: Callable[
+        [str], tuple[dict[str, Any], dict[str, dict[str, Any]]]
+    ] = _download,
+) -> dict[str, Any]:
+    shard_root = run_root / "shards" / shard_id
+    with _collection_gate(shard_root), _submission_gate(run_root):
+        return _collect_shard_locked(
+            run_root=run_root,
+            shard_id=shard_id,
+            downloader=downloader,
+        )
 
 
 def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
@@ -908,7 +1367,6 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
         if (
             file_sha256(events_path) != collection["events_sha256"]
             or not collection["cost_complete"]
-            or collection["authorization_exceeded"]
         ):
             raise ValueError("primary collection is not recovery-eligible")
         for event in read_jsonl(events_path):
@@ -930,6 +1388,8 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
         raise ValueError("recovery failed request body coverage drift")
     recovery_root.mkdir()
     recovery_shards = []
+    recovery_direct_forecast_total = 0.0
+    recovery_strict_exposure_total = 0.0
     for primary in bundle["shards"]:
         ordered = [
             source_lines[request_id][1]
@@ -945,7 +1405,7 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
         input_path = shard_root / "input.jsonl"
         if input_path.stat().st_size >= 180_000_000:
             raise ValueError("coarse production recovery shard violates byte guard")
-        provider_body_bytes = sum(
+        provider_body_byte_values = [
             len(
                 json.dumps(
                     row["body"],
@@ -956,8 +1416,24 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
                 ).encode("utf-8")
             )
             for row in ordered
-        )
+        ]
+        provider_body_bytes = sum(provider_body_byte_values)
         empirical = bundle["config"]["empirical_calibration"]
+        prices = load_price_snapshot(
+            Path(intent["bundle_root"]) / "price-snapshot.json"
+        )
+        direct_forecast = (
+            float(empirical["source_actual_cost_usd"])
+            * len(ordered)
+            / int(empirical["source_request_count"])
+        )
+        strict_exposure = _strict_exposure_for_provider_bodies(
+            config=bundle["config"],
+            prices=prices,
+            body_bytes=provider_body_byte_values,
+        )
+        recovery_direct_forecast_total += direct_forecast
+        recovery_strict_exposure_total += strict_exposure
         recovery_shards.append(
             {
                 "shard_id": recovery_shard_id,
@@ -965,11 +1441,8 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
                 "input_sha256": file_sha256(input_path),
                 "bytes": input_path.stat().st_size,
                 "request_count": len(ordered),
-                "direct_v4_cost_forecast_usd": (
-                    float(empirical["source_actual_cost_usd"])
-                    * len(ordered)
-                    / int(empirical["source_request_count"])
-                ),
+                "direct_v4_cost_forecast_usd": direct_forecast,
+                "strict_no_cache_full_output_exposure_usd": strict_exposure,
                 "queued_input_tokens_empirical_forecast": round(
                     provider_body_bytes
                     * float(empirical["source_input_tokens"])
@@ -988,6 +1461,11 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
             "request_count": len(failed_set),
             "shard_count": len(recovery_shards),
             "shards": recovery_shards,
+            "direct_v4_cost_forecast_usd": recovery_direct_forecast_total,
+            "strict_no_cache_full_output_exposure_usd": (
+                recovery_strict_exposure_total
+            ),
+            "fresh_recovery_forecast_budget_and_strict_exposure_ack_required": True,
             "successful_requests_rerun": 0,
             "provider_bodies_byte_identical": True,
             "additional_recovery_waves_permitted": False,
@@ -998,6 +1476,99 @@ def prepare_failed_only_recovery(*, run_root: Path) -> dict[str, Any]:
     return manifest
 
 
+def authorize_recovery_wave(
+    *,
+    run_root: Path,
+    recovery_forecast_budget_usd: float,
+    forecast_budget_authorization_note: str,
+    acknowledged_strict_worst_case_exposure_usd: float,
+    strict_exposure_acknowledgement_note: str,
+) -> dict[str, Any]:
+    intent, _bundle = _campaign(run_root)
+    recovery_root = run_root / "recovery-000"
+    manifest = _load_object(recovery_root / "manifest.json")
+    _verify(manifest, "recovery_manifest_sha256", "coarse production recovery")
+    path = recovery_root / "authorization.json"
+    if path.exists():
+        raise FileExistsError("coarse production recovery authorization exists")
+    strict_exposure = float(manifest["strict_no_cache_full_output_exposure_usd"])
+    if (
+        recovery_forecast_budget_usd <= 0
+        or not forecast_budget_authorization_note.strip()
+    ):
+        raise ValueError("recovery requires a positive explicit forecast budget")
+    if (
+        abs(acknowledged_strict_worst_case_exposure_usd - strict_exposure) > 1e-9
+        or not strict_exposure_acknowledgement_note.strip()
+    ):
+        raise ValueError(
+            "recovery requires exact fresh acknowledgement that actual spend may "
+            "exceed its forecast budget up to its strict worst-case exposure"
+        )
+    authorization = _hashed(
+        {
+            "schema_version": "adag.process-witness.coarse-production-recovery-authorization.v1",
+            "created_at": _now(),
+            "campaign_run_sha256": intent["campaign_run_sha256"],
+            "recovery_manifest_sha256": manifest["recovery_manifest_sha256"],
+            "recovery_forecast_budget_usd": recovery_forecast_budget_usd,
+            "forecast_budget_authorization_note": forecast_budget_authorization_note,
+            "forecast_budget_is_hard_spend_cap": False,
+            "strict_worst_case_exposure_usd": strict_exposure,
+            "acknowledged_strict_worst_case_exposure_usd": (
+                acknowledged_strict_worst_case_exposure_usd
+            ),
+            "strict_exposure_acknowledgement_note": (
+                strict_exposure_acknowledgement_note
+            ),
+        },
+        "recovery_authorization_sha256",
+    )
+    _validate_recovery_authorization(
+        authorization=authorization,
+        manifest=manifest,
+        intent=intent,
+    )
+    atomic_write_json(path, authorization)
+    return authorization
+
+
+def _validate_recovery_authorization(
+    *,
+    authorization: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    intent: Mapping[str, Any],
+) -> None:
+    _verify(
+        authorization,
+        "recovery_authorization_sha256",
+        "recovery authorization",
+    )
+    strict_exposure = float(manifest["strict_no_cache_full_output_exposure_usd"])
+    if (
+        authorization.get("schema_version")
+        != "adag.process-witness.coarse-production-recovery-authorization.v1"
+        or authorization.get("campaign_run_sha256") != intent["campaign_run_sha256"]
+        or authorization.get("recovery_manifest_sha256")
+        != manifest["recovery_manifest_sha256"]
+        or not isinstance(
+            authorization.get("recovery_forecast_budget_usd"), (int, float)
+        )
+        or float(authorization["recovery_forecast_budget_usd"]) <= 0
+        or not isinstance(authorization.get("forecast_budget_authorization_note"), str)
+        or not authorization["forecast_budget_authorization_note"].strip()
+        or authorization.get("forecast_budget_is_hard_spend_cap") is not False
+        or authorization.get("strict_worst_case_exposure_usd") != strict_exposure
+        or authorization.get("acknowledged_strict_worst_case_exposure_usd")
+        != strict_exposure
+        or not isinstance(
+            authorization.get("strict_exposure_acknowledgement_note"), str
+        )
+        or not authorization["strict_exposure_acknowledgement_note"].strip()
+    ):
+        raise ValueError("recovery authorization semantic drift")
+
+
 def _recovery_binding(
     run_root: Path, shard_id: str
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Path]:
@@ -1006,6 +1577,12 @@ def _recovery_binding(
     _verify(manifest, "recovery_manifest_sha256", "coarse production recovery")
     if manifest["campaign_run_sha256"] != intent["campaign_run_sha256"]:
         raise ValueError("coarse production recovery campaign drift")
+    authorization = _load_object(run_root / "recovery-000" / "authorization.json")
+    _validate_recovery_authorization(
+        authorization=authorization,
+        manifest=manifest,
+        intent=intent,
+    )
     binding = next((s for s in manifest["shards"] if s["shard_id"] == shard_id), None)
     if binding is None:
         raise ValueError("unknown coarse production recovery shard")
@@ -1024,14 +1601,27 @@ def submit_recovery_shard(
 ) -> dict[str, Any]:
     intent, _bundle, binding, shard_root = _recovery_binding(run_root, shard_id)
     with _submission_gate(run_root):
+        collection_locks = _active_collection_locks(run_root)
+        if collection_locks:
+            raise RuntimeError(
+                f"collection materialization is active: {collection_locks}"
+            )
         if (shard_root / "submission-intent.json").exists():
             raise FileExistsError(
                 "coarse production recovery submission was already attempted"
             )
-        primary_cost, primary_complete = _attempted_primary_forecast(run_root, intent)
+        _primary_cost, primary_complete = _attempted_primary_forecast(run_root, intent)
         if not primary_complete:
             raise ValueError("primary campaign cost is not fully priced")
         recovery_manifest = _load_object(run_root / "recovery-000" / "manifest.json")
+        recovery_authorization = _load_object(
+            run_root / "recovery-000" / "authorization.json"
+        )
+        _validate_recovery_authorization(
+            authorization=recovery_authorization,
+            manifest=recovery_manifest,
+            intent=intent,
+        )
         recovery_cost = 0.0
         active: list[str] = []
         active_queue = 0
@@ -1060,15 +1650,13 @@ def submit_recovery_shard(
                     ].get("status")
                 if state not in terminal:
                     active.append(other["shard_id"])
-                    active_queue += int(
-                        other["queued_input_tokens_empirical_forecast"]
-                    )
+                    active_queue += int(other["queued_input_tokens_empirical_forecast"])
         candidate_cost = float(binding["direct_v4_cost_forecast_usd"])
-        if primary_cost + recovery_cost + candidate_cost > float(
-            intent["maximum_authorized_cost_usd"]
+        if recovery_cost + candidate_cost > float(
+            recovery_authorization["recovery_forecast_budget_usd"]
         ):
             raise ValueError(
-                "prospective actual-or-reserved recovery cost exceeds authorization"
+                "prospective actual-or-reserved recovery cost exceeds forecast budget"
             )
         if len(active) >= int(intent["maximum_concurrent_shards"]):
             raise ValueError(f"recorded recovery concurrency is already full: {active}")
@@ -1090,9 +1678,10 @@ def submit_recovery_shard(
                 "input_sha256": binding["input_sha256"],
                 "request_count": binding["request_count"],
                 "direct_v4_cost_forecast_usd": candidate_cost,
-                "prospective_campaign_cost_usd": (
-                    primary_cost + recovery_cost + candidate_cost
-                ),
+                "prospective_recovery_cost_usd": (recovery_cost + candidate_cost),
+                "recovery_authorization_sha256": recovery_authorization[
+                    "recovery_authorization_sha256"
+                ],
                 "metadata": metadata,
             },
             "submission_intent_sha256",
@@ -1156,54 +1745,20 @@ def recover_recovery_submission(
     run_root: Path,
     shard_id: str,
     discoverer: Callable[..., list[dict[str, Any]]] | None = None,
+    uploader: Callable[[Path], dict[str, Any]] = _upload_provider,
+    creator: Callable[..., dict[str, Any]] = _create_provider,
 ) -> dict[str, Any]:
     intent, _bundle, _binding, shard_root = _recovery_binding(run_root, shard_id)
-    if (shard_root / "submission.json").exists():
-        raise FileExistsError("coarse production recovery receipt already exists")
-    submission_intent = _load_object(shard_root / "submission-intent.json")
-    _verify(submission_intent, "submission_intent_sha256", "recovery submission intent")
-    upload = _load_object(shard_root / "provider-upload-response.json")
-    _validate_upload(upload)
-    metadata = _metadata(intent, shard_id, "recovery-000")
-    create = shard_root / "provider-create-response.json"
-    if create.exists():
-        provider = _load_object(create)
-        recovered_by = "immediate_create_snapshot"
-    else:
-        if discoverer is None:
-
-            def discoverer(**_: Any) -> list[dict[str, Any]]:
-                return [
-                    _provider_batch_dict(batch)
-                    for batch in _openai_client().batches.list(limit=100)
-                    if dict(getattr(batch, "metadata", None) or {}) == metadata
-                ]
-
-        matches = discoverer(metadata=metadata)
-        if len(matches) != 1:
-            raise ValueError(
-                f"expected one metadata-matched recovery Batch, found {len(matches)}"
-            )
-        provider = matches[0]
-        atomic_write_json(create, provider)
-        recovered_by = "unique_provider_metadata_discovery"
-    _validate_snapshot(
-        provider, metadata=metadata, input_file_id=upload["input_file_id"]
-    )
-    receipt = _hashed(
-        {
-            "schema_version": SUBMISSION_SCHEMA,
-            "status": "submitted",
-            "recorded_at": _now(),
-            "recovered_by": recovered_by,
-            "campaign_run_sha256": intent["campaign_run_sha256"],
-            "submission_intent_sha256": submission_intent["submission_intent_sha256"],
-            "provider_response": provider,
-        },
-        "submission_sha256",
-    )
-    atomic_write_json(shard_root / "submission.json", receipt)
-    return receipt
+    with _submission_gate(run_root):
+        return _recover_submission_failure(
+            shard_root=shard_root,
+            intent=intent,
+            shard_id=shard_id,
+            generation="recovery-000",
+            discoverer=discoverer,
+            uploader=uploader,
+            creator=creator,
+        )
 
 
 def check_recovery_shard(
@@ -1224,7 +1779,9 @@ def check_recovery_shard(
     if retriever is None:
 
         def retriever(batch_id: str) -> dict[str, Any]:
-            return _provider_batch_dict(_openai_client().batches.retrieve(batch_id))
+            return _production_provider_batch_dict(
+                _openai_client().batches.retrieve(batch_id)
+            )
 
     observed = retriever(provider["batch_id"])
     _validate_snapshot(
@@ -1258,7 +1815,7 @@ def check_recovery_shard(
     return receipt
 
 
-def collect_recovery_shard(
+def _collect_recovery_shard_locked(
     *,
     run_root: Path,
     shard_id: str,
@@ -1266,7 +1823,7 @@ def collect_recovery_shard(
         [str], tuple[dict[str, Any], dict[str, dict[str, Any]]]
     ] = _download,
 ) -> dict[str, Any]:
-    intent, _bundle, binding, shard_root = _recovery_binding(run_root, shard_id)
+    intent, bundle, binding, shard_root = _recovery_binding(run_root, shard_id)
     if (shard_root / "collection.json").exists():
         raise FileExistsError("coarse production recovery shard already collected")
     submission = _load_object(shard_root / "submission.json")
@@ -1277,17 +1834,9 @@ def collect_recovery_shard(
     if file_sha256(upload_path) != submission["provider_upload_response_sha256"]:
         raise ValueError("recovery submission upload binding drift")
     provider = submission["provider_response"]
-    collection_intent = _hashed(
-        {
-            "schema_version": COLLECTION_SCHEMA,
-            "status": "intent_persisted",
-            "recorded_at": _now(),
-            "submission_sha256": submission["submission_sha256"],
-            "batch_id": provider["batch_id"],
-        },
-        "collection_intent_sha256",
+    collection_intent = _load_or_create_collection_intent(
+        path=shard_root / "collection-intent.json", submission=submission
     )
-    atomic_write_json(shard_root / "collection-intent.json", collection_intent)
     snapshot, files = downloader(provider["batch_id"])
     _validate_snapshot(
         snapshot,
@@ -1300,7 +1849,7 @@ def collect_recovery_shard(
         raise ValueError("coarse production recovery Batch is not terminal")
     raw_root = shard_root / "raw"
     raw_root.mkdir(exist_ok=True)
-    atomic_write_json(raw_root / "provider-snapshot.json", snapshot)
+    _write_or_verify_json(raw_root / "provider-snapshot.json", snapshot)
     rows = {}
     raw_bindings = [
         {
@@ -1315,7 +1864,7 @@ def collect_recovery_shard(
         if item["file_id"] != snapshot.get(f"{source}_file_id"):
             raise ValueError("coarse production recovery file receipt drift")
         path = raw_root / f"{source}.jsonl"
-        atomic_write_bytes(path, item["content"])
+        _write_or_verify_bytes(path, item["content"])
         raw_bindings.append(
             {
                 "source": source,
@@ -1363,31 +1912,47 @@ def collect_recovery_shard(
         event["generation"] = "recovery-000"
         events.append(event)
     total, complete_cost, pricing_basis = _price_events(
-        events=events, snapshot=snapshot, prices=prices
+        events=events,
+        snapshot=snapshot,
+        prices=prices,
+        aggregate_fallback_long_context_impossible=(
+            _input_byte_bound_excludes_long_context(
+                input_path=shard_root / "input.jsonl",
+                config=bundle["config"],
+                prices=prices,
+            )
+        ),
     )
-    atomic_write_jsonl(shard_root / "events.jsonl", events)
+    _write_or_verify_jsonl(shard_root / "events.jsonl", events)
     success = sum(e["validation_status"] == "success" for e in events)
-    campaign_cost = (
-        total
-        + sum(
-            float(_load_object(path)["known_priced_cost_usd"])
-            for path in run_root.glob("shards/*/collection.json")
-        )
-        + sum(
-            float(_load_object(path)["known_priced_cost_usd"])
-            for path in run_root.glob("recovery-000/shards/*/collection.json")
-            if path.parent.name != shard_id
-        )
+    primary_cost = sum(
+        float(_load_object(path)["known_priced_cost_usd"])
+        for path in run_root.glob("shards/*/collection.json")
     )
-    authorization_exceeded = complete_cost and campaign_cost > float(
-        intent["maximum_authorized_cost_usd"]
+    recovery_cumulative_cost = total + sum(
+        float(_load_object(path)["known_priced_cost_usd"])
+        for path in run_root.glob("recovery-000/shards/*/collection.json")
+        if path.parent.name != shard_id
+    )
+    campaign_cost = primary_cost + recovery_cumulative_cost
+    recovery_authorization = _load_object(
+        run_root / "recovery-000" / "authorization.json"
+    )
+    recovery_manifest = _load_object(run_root / "recovery-000" / "manifest.json")
+    _validate_recovery_authorization(
+        authorization=recovery_authorization,
+        manifest=recovery_manifest,
+        intent=intent,
+    )
+    forecast_budget_exceeded = complete_cost and recovery_cumulative_cost > float(
+        recovery_authorization["recovery_forecast_budget_usd"]
     )
     result = _hashed(
         {
             "schema_version": COLLECTION_SCHEMA,
             "status": (
-                "failed_closed_authorization_exceeded"
-                if authorization_exceeded
+                "complete_forecast_budget_exceeded_stop_further_recovery_submission"
+                if forecast_budget_exceeded
                 else (
                     "complete"
                     if success == len(events) and complete_cost
@@ -1401,10 +1966,15 @@ def collect_recovery_shard(
             "failure_count": len(events) - success,
             "known_priced_cost_usd": total,
             "cumulative_known_priced_cost_usd": campaign_cost,
+            "recovery_cumulative_known_priced_cost_usd": recovery_cumulative_cost,
             "cost_complete": complete_cost,
             "pricing_basis": pricing_basis,
             "provider_terminal_status": terminal_status,
-            "authorization_exceeded": authorization_exceeded,
+            "forecast_budget_usd": recovery_authorization[
+                "recovery_forecast_budget_usd"
+            ],
+            "forecast_budget_is_hard_spend_cap": False,
+            "forecast_budget_exceeded": forecast_budget_exceeded,
             "raw_file_bindings": raw_bindings,
             "events_sha256": file_sha256(shard_root / "events.jsonl"),
         },
@@ -1412,6 +1982,23 @@ def collect_recovery_shard(
     )
     atomic_write_json(shard_root / "collection.json", result)
     return result
+
+
+def collect_recovery_shard(
+    *,
+    run_root: Path,
+    shard_id: str,
+    downloader: Callable[
+        [str], tuple[dict[str, Any], dict[str, dict[str, Any]]]
+    ] = _download,
+) -> dict[str, Any]:
+    shard_root = run_root / "recovery-000" / "shards" / shard_id
+    with _collection_gate(shard_root), _submission_gate(run_root):
+        return _collect_recovery_shard_locked(
+            run_root=run_root,
+            shard_id=shard_id,
+            downloader=downloader,
+        )
 
 
 def _copy_campaign_evidence(
@@ -1425,7 +2012,9 @@ def _copy_campaign_evidence(
 
     copied_bundle = temporary / "campaign-bundle"
     shutil.copytree(Path(intent["bundle_root"]), copied_bundle)
-    shutil.copyfile(run_root / "campaign-intent.json", temporary / "campaign-intent.json")
+    shutil.copyfile(
+        run_root / "campaign-intent.json", temporary / "campaign-intent.json"
+    )
     for shard in bundle["shards"]:
         source = run_root / "shards" / shard["shard_id"]
         target = temporary / "shards" / shard["shard_id"]
@@ -1454,7 +2043,9 @@ def _write_evidence_inventory(root: Path) -> dict[str, Any]:
         try:
             resolved.relative_to(root.resolve())
         except ValueError as error:
-            raise ValueError("coarse production final evidence has external symlink") from error
+            raise ValueError(
+                "coarse production final evidence has external symlink"
+            ) from error
         row = {
             "path": str(path.relative_to(root)),
             "sha256": file_sha256(path),
@@ -1474,31 +2065,47 @@ def _write_evidence_inventory(root: Path) -> dict[str, Any]:
     return inventory
 
 
+def _validate_readonly_modes(root: Path) -> None:
+    if root.stat().st_mode & 0o777 != 0o555:
+        raise ValueError("proposal evidence root mode drift")
+    for path in root.rglob("*"):
+        expected = 0o555 if path.is_dir() else 0o444
+        if path.stat().st_mode & 0o777 != expected:
+            raise ValueError(f"proposal evidence mode drift: {path.relative_to(root)}")
+
+
 def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
     """Strictly validate a finalized proposal bank without its original run roots."""
 
+    _validate_readonly_modes(root)
     manifest = _load_object(root / "manifest.json")
     _verify(manifest, "proposal_bank_manifest_sha256", "proposal bank manifest")
+    if (
+        manifest.get("schema_version") != "adag.process-witness.coarse-proposal-bank.v1"
+        or manifest.get("status") != "frozen_sampling_proposals_not_semantic_truth"
+    ):
+        raise ValueError("proposal bank manifest semantic drift")
     inventory = _load_object(root / "evidence-inventory.json")
     _verify(inventory, "evidence_inventory_sha256", "proposal evidence inventory")
-    if (
-        inventory["evidence_inventory_sha256"]
-        != manifest["evidence_inventory_sha256"]
-    ):
+    if inventory["evidence_inventory_sha256"] != manifest["evidence_inventory_sha256"]:
         raise ValueError("proposal evidence inventory/manifest drift")
     expected = {row["path"]: row for row in inventory["files"]}
     observed = {
         str(path.relative_to(root)): path
         for path in root.rglob("*")
         if path.is_file()
-        and path
-        not in {root / "manifest.json", root / "evidence-inventory.json"}
+        and path not in {root / "manifest.json", root / "evidence-inventory.json"}
     }
     if set(expected) != set(observed):
         raise ValueError("proposal evidence inventory coverage drift")
     for relative, path in observed.items():
         row = expected[relative]
-        if file_sha256(path) != row["sha256"] or path.stat().st_size != row["bytes"]:
+        if (
+            file_sha256(path) != row["sha256"]
+            or path.stat().st_size != row["bytes"]
+            or ("symlink_target" in row) != path.is_symlink()
+            or (path.is_symlink() and os.readlink(path) != row.get("symlink_target"))
+        ):
             raise ValueError(f"proposal evidence file drift: {relative}")
         try:
             path.resolve().relative_to(root.resolve())
@@ -1509,8 +2116,48 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
         raise ValueError("proposal copied bundle binding drift")
     intent = _load_object(root / "campaign-intent.json")
     _verify(intent, "campaign_run_sha256", "copied campaign intent")
-    if intent["campaign_run_sha256"] != manifest["campaign_run_sha256"]:
+    if (
+        intent.get("schema_version") != CAMPAIGN_RUN_SCHEMA
+        or intent.get("status") != "initialized_no_provider_calls"
+        or intent["campaign_run_sha256"] != manifest["campaign_run_sha256"]
+        or intent.get("forecast_budget_is_hard_spend_cap") is not False
+        or intent.get("acknowledged_strict_worst_case_exposure_usd")
+        != intent.get("strict_worst_case_exposure_usd")
+        or not isinstance(intent.get("strict_exposure_acknowledgement_note"), str)
+        or not intent["strict_exposure_acknowledgement_note"].strip()
+        or manifest.get("primary_forecast_budget_usd")
+        != intent.get("forecast_budget_usd")
+        or manifest.get("primary_forecast_budget_is_hard_spend_cap") is not False
+        or manifest.get("primary_strict_worst_case_exposure_usd")
+        != intent.get("strict_worst_case_exposure_usd")
+    ):
         raise ValueError("proposal copied campaign binding drift")
+    recovery_binding = manifest.get("recovery_authorization")
+    recovery_root = root / "recovery-000"
+    if (recovery_binding is None) != (not recovery_root.exists()):
+        raise ValueError("proposal recovery authorization presence drift")
+    if recovery_binding is not None:
+        recovery = _load_object(recovery_root / "manifest.json")
+        _verify(recovery, "recovery_manifest_sha256", "copied recovery manifest")
+        authorization = _load_object(recovery_root / "authorization.json")
+        _validate_recovery_authorization(
+            authorization=authorization,
+            manifest=recovery,
+            intent=intent,
+        )
+        if (
+            recovery_binding["recovery_manifest_sha256"]
+            != recovery["recovery_manifest_sha256"]
+            or recovery_binding["recovery_authorization_sha256"]
+            != authorization["recovery_authorization_sha256"]
+            or recovery_binding["recovery_forecast_budget_usd"]
+            != authorization["recovery_forecast_budget_usd"]
+            or recovery_binding["strict_worst_case_exposure_usd"]
+            != authorization["strict_worst_case_exposure_usd"]
+        ):
+            raise ValueError("proposal copied recovery authorization binding drift")
+    observed_primary_cost = 0.0
+    observed_recovery_cost = 0.0
     for binding in manifest["collection_bindings"]:
         attempt = (
             root / "shards" / binding["shard_id"]
@@ -1529,16 +2176,45 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
             "raw/provider-snapshot.json",
         ):
             if not (attempt / name).is_file():
-                raise ValueError(f"proposal evidence misses {binding['generation']}/{binding['shard_id']}/{name}")
+                raise ValueError(
+                    f"proposal evidence misses {binding['generation']}/{binding['shard_id']}/{name}"
+                )
         collection = _load_object(attempt / "collection.json")
         _verify(collection, "collection_sha256", "copied collection")
+        if (
+            collection.get("schema_version") != COLLECTION_SCHEMA
+            or collection.get("cost_complete") is not True
+            or collection.get("status")
+            not in {
+                "complete",
+                "complete_with_failed_requests_recovery_eligible",
+                "complete_forecast_budget_exceeded_stop_further_primary_submission",
+                "complete_forecast_budget_exceeded_stop_further_recovery_submission",
+            }
+            or collection.get("provider_terminal_status")
+            not in {"completed", "failed", "expired", "cancelled"}
+        ):
+            raise ValueError("proposal copied collection semantic drift")
+        if binding["generation"] == "primary":
+            observed_primary_cost += float(collection["known_priced_cost_usd"])
+        else:
+            observed_recovery_cost += float(collection["known_priced_cost_usd"])
         submission_intent = _load_object(attempt / "submission-intent.json")
         _verify(
             submission_intent,
             "submission_intent_sha256",
             "copied submission intent",
         )
-        if file_sha256(attempt / "input.jsonl") != submission_intent["input_sha256"]:
+        expected_generation = (
+            "primary" if binding["generation"] == "primary" else "recovery-000"
+        )
+        expected_metadata = _metadata(intent, binding["shard_id"], expected_generation)
+        if (
+            submission_intent.get("schema_version") != SUBMISSION_SCHEMA
+            or submission_intent.get("generation") != expected_generation
+            or submission_intent.get("metadata") != expected_metadata
+            or file_sha256(attempt / "input.jsonl") != submission_intent["input_sha256"]
+        ):
             raise ValueError("proposal copied provider input binding drift")
         upload_path = attempt / "provider-upload-response.json"
         upload = _load_object(upload_path)
@@ -1546,14 +2222,18 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
         submission = _load_object(attempt / "submission.json")
         _verify(submission, "submission_sha256", "copied submission")
         if (
-            file_sha256(upload_path)
-            != submission["provider_upload_response_sha256"]
+            submission.get("schema_version") != SUBMISSION_SCHEMA
+            or submission.get("status") != "submitted"
+            or submission.get("campaign_run_sha256") != intent["campaign_run_sha256"]
+            or submission.get("submission_intent_sha256")
+            != submission_intent["submission_intent_sha256"]
+            or file_sha256(upload_path) != submission["provider_upload_response_sha256"]
         ):
             raise ValueError("proposal copied upload receipt binding drift")
         provider = submission["provider_response"]
         _validate_snapshot(
             provider,
-            metadata=provider["metadata"],
+            metadata=expected_metadata,
             input_file_id=upload["input_file_id"],
         )
         if _load_object(attempt / "provider-create-response.json") != provider:
@@ -1565,7 +2245,11 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
             "copied collection intent",
         )
         if (
-            collection_intent["collection_intent_sha256"]
+            collection_intent.get("schema_version") != COLLECTION_SCHEMA
+            or collection_intent.get("submission_sha256")
+            != submission["submission_sha256"]
+            or collection_intent.get("batch_id") != provider["batch_id"]
+            or collection_intent["collection_intent_sha256"]
             != collection["collection_intent_sha256"]
         ):
             raise ValueError("proposal copied collection intent binding drift")
@@ -1577,7 +2261,8 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
         for raw in collection["raw_file_bindings"]:
             raw_path = root / raw["path"]
             if (
-                not raw_path.is_file()
+                raw["path"] not in expected
+                or not raw_path.is_file()
                 or file_sha256(raw_path) != raw["sha256"]
                 or raw_path.stat().st_size != raw["bytes"]
             ):
@@ -1585,17 +2270,47 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
         raw_snapshot = _load_object(attempt / "raw/provider-snapshot.json")
         _validate_snapshot(
             raw_snapshot,
-            metadata=provider["metadata"],
+            metadata=expected_metadata,
             batch_id=provider["batch_id"],
             input_file_id=upload["input_file_id"],
         )
+        if raw_snapshot.get("status") != collection["provider_terminal_status"]:
+            raise ValueError("proposal copied terminal status binding drift")
         prior = None
-        for status_path in sorted((attempt / "status").glob("*.json")):
+        status_paths = sorted((attempt / "status").glob("*.json"))
+        if not status_paths:
+            raise ValueError("proposal evidence misses provider status receipt")
+        for status_path in status_paths:
             status = _load_object(status_path)
             _verify(status, "status_sha256", "copied provider status")
-            if status["previous_status_sha256"] != prior:
+            if (
+                status.get("schema_version") != STATUS_SCHEMA
+                or status.get("campaign_run_sha256") != intent["campaign_run_sha256"]
+                or status["previous_status_sha256"] != prior
+                or status["submission_sha256"] != submission["submission_sha256"]
+            ):
                 raise ValueError("proposal copied provider status chain drift")
+            _validate_snapshot(
+                status["provider_response"],
+                metadata=expected_metadata,
+                batch_id=provider["batch_id"],
+                input_file_id=upload["input_file_id"],
+            )
             prior = status["status_sha256"]
+    if (
+        manifest.get("primary_actual_cost_usd") != observed_primary_cost
+        or manifest.get("recovery_actual_cost_usd") != observed_recovery_cost
+        or manifest.get("actual_total_cost_usd")
+        != observed_primary_cost + observed_recovery_cost
+        or observed_primary_cost
+        > float(manifest["primary_strict_worst_case_exposure_usd"])
+        or (
+            recovery_binding is not None
+            and observed_recovery_cost
+            > float(recovery_binding["strict_worst_case_exposure_usd"])
+        )
+    ):
+        raise ValueError("proposal copied cost binding drift")
     for filename, field in (
         ("effective-events.jsonl", "effective_events_sha256"),
         ("proposals.jsonl", "proposals_sha256"),
@@ -1604,6 +2319,17 @@ def load_frozen_proposal_bank(root: Path) -> dict[str, Any]:
         if file_sha256(root / filename) != manifest[field]:
             raise ValueError(f"proposal final output drift: {filename}")
     return {"manifest": manifest, "inventory": inventory, "bundle": bundle}
+
+
+def _enforce_actual_within_strict_exposure(
+    *, actual_cost_usd: float, strict_exposure_usd: float, generation: str
+) -> None:
+    if actual_cost_usd < 0 or strict_exposure_usd < 0:
+        raise ValueError("coarse production exposure values must be nonnegative")
+    if actual_cost_usd > strict_exposure_usd:
+        raise ValueError(
+            f"coarse production {generation} actual cost exceeds acknowledged strict exposure"
+        )
 
 
 def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
@@ -1641,11 +2367,38 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
         e["request_id"] for e in primary_events
     } != set(request_ids):
         raise ValueError("coarse production campaign union request coverage drift")
+    primary_actual_cost = total_cost
+    _enforce_actual_within_strict_exposure(
+        actual_cost_usd=primary_actual_cost,
+        strict_exposure_usd=float(intent["strict_worst_case_exposure_usd"]),
+        generation="primary",
+    )
     events_by_id = {event["request_id"]: event for event in primary_events}
     recovery_root = run_root / "recovery-000"
+    recovery_authorization_binding = None
+    recovery_actual_cost = 0.0
     if recovery_root.exists():
         recovery = _load_object(recovery_root / "manifest.json")
         _verify(recovery, "recovery_manifest_sha256", "coarse production recovery")
+        recovery_authorization = _load_object(recovery_root / "authorization.json")
+        _validate_recovery_authorization(
+            authorization=recovery_authorization,
+            manifest=recovery,
+            intent=intent,
+        )
+        recovery_authorization_binding = {
+            "recovery_manifest_sha256": recovery["recovery_manifest_sha256"],
+            "recovery_authorization_sha256": recovery_authorization[
+                "recovery_authorization_sha256"
+            ],
+            "recovery_forecast_budget_usd": recovery_authorization[
+                "recovery_forecast_budget_usd"
+            ],
+            "forecast_budget_is_hard_spend_cap": False,
+            "strict_worst_case_exposure_usd": recovery_authorization[
+                "strict_worst_case_exposure_usd"
+            ],
+        }
         for shard in recovery["shards"]:
             shard_root = recovery_root / "shards" / shard["shard_id"]
             collection = _load_object(shard_root / "collection.json")
@@ -1661,6 +2414,7 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
                     )
                 events_by_id[event["request_id"]] = event
             total_cost += float(collection["known_priced_cost_usd"])
+            recovery_actual_cost += float(collection["known_priced_cost_usd"])
             cost_complete = cost_complete and bool(collection["cost_complete"])
             collection_bindings.append(
                 {
@@ -1670,15 +2424,20 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
                     "events_sha256": collection["events_sha256"],
                 }
             )
+        _enforce_actual_within_strict_exposure(
+            actual_cost_usd=recovery_actual_cost,
+            strict_exposure_usd=float(
+                recovery_authorization["strict_worst_case_exposure_usd"]
+            ),
+            generation="recovery",
+        )
     events = [events_by_id[request_id] for request_id in request_ids]
     if any(event["validation_status"] != "success" for event in events):
         raise ValueError(
             "coarse production finalization requires recovery-resolved success coverage"
         )
-    if not cost_complete or total_cost > float(intent["maximum_authorized_cost_usd"]):
-        raise ValueError(
-            "coarse production finalization cost is incomplete or unauthorized"
-        )
+    if not cost_complete:
+        raise ValueError("coarse production finalization cost is incomplete")
     votes_by_unit: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
         for decision in event["decisions"]:
@@ -1724,23 +2483,32 @@ def finalize_campaign(*, run_root: Path, destination: Path) -> dict[str, Any]:
             "sampling_group_count": len(groups),
             "provider_pending_atoms_with_three_votes": len(votes_by_unit),
             "actual_total_cost_usd": total_cost,
-            "maximum_authorized_cost_usd": intent["maximum_authorized_cost_usd"],
+            "primary_actual_cost_usd": primary_actual_cost,
+            "recovery_actual_cost_usd": recovery_actual_cost,
+            "primary_forecast_budget_usd": intent["forecast_budget_usd"],
+            "primary_forecast_budget_is_hard_spend_cap": False,
+            "primary_strict_worst_case_exposure_usd": intent[
+                "strict_worst_case_exposure_usd"
+            ],
+            "recovery_authorization": recovery_authorization_binding,
             "effective_events_sha256": file_sha256(
                 temporary / "effective-events.jsonl"
             ),
             "proposals_sha256": file_sha256(temporary / "proposals.jsonl"),
             "sampling_groups_sha256": file_sha256(temporary / "sampling-groups.jsonl"),
-            "evidence_inventory_sha256": inventory[
-                "evidence_inventory_sha256"
-            ],
+            "evidence_inventory_sha256": inventory["evidence_inventory_sha256"],
             "collection_bindings": collection_bindings,
             "claim_boundary": bundle["config"]["claim_boundary"],
         },
         "proposal_bank_manifest_sha256",
     )
     atomic_write_json(temporary / "manifest.json", result)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    _readonly_tree(temporary)
+    load_frozen_proposal_bank(temporary)
     temporary.rename(destination)
-    _readonly_tree(destination)
-    load_frozen_proposal_bank(destination)
+    try:
+        load_frozen_proposal_bank(destination)
+    except BaseException:
+        destination.rename(temporary)
+        raise
     return result

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from circuits.analysis.bonafide.coarse_sampling_openai_batch_production_v1 import (
+    authorize_recovery_wave,
     check_recovery_shard,
     check_shard,
     collect_recovery_shard,
@@ -28,8 +29,12 @@ def main() -> None:
     initialize = commands.add_parser("initialize")
     initialize.add_argument("--bundle-root", type=Path, required=True)
     initialize.add_argument("--run-root", type=Path, required=True)
-    initialize.add_argument("--maximum-authorized-cost-usd", type=float, required=True)
-    initialize.add_argument("--authorization-note", required=True)
+    initialize.add_argument("--forecast-budget-usd", type=float, required=True)
+    initialize.add_argument("--forecast-budget-authorization-note", required=True)
+    initialize.add_argument(
+        "--acknowledged-strict-worst-case-exposure-usd", type=float, required=True
+    )
+    initialize.add_argument("--strict-exposure-acknowledgement-note", required=True)
     initialize.add_argument(
         "--provider-queued-input-token-limit", type=int, required=True
     )
@@ -49,6 +54,20 @@ def main() -> None:
         command.add_argument("--shard-id", required=True)
     recovery = commands.add_parser("prepare-recovery")
     recovery.add_argument("--run-root", type=Path, required=True)
+    authorize_recovery = commands.add_parser("authorize-recovery")
+    authorize_recovery.add_argument("--run-root", type=Path, required=True)
+    authorize_recovery.add_argument(
+        "--recovery-forecast-budget-usd", type=float, required=True
+    )
+    authorize_recovery.add_argument(
+        "--forecast-budget-authorization-note", required=True
+    )
+    authorize_recovery.add_argument(
+        "--acknowledged-strict-worst-case-exposure-usd", type=float, required=True
+    )
+    authorize_recovery.add_argument(
+        "--strict-exposure-acknowledgement-note", required=True
+    )
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--run-root", type=Path, required=True)
     finalize.add_argument("--destination", type=Path, required=True)
@@ -57,8 +76,16 @@ def main() -> None:
         result = initialize_campaign_run(
             bundle_root=args.bundle_root.resolve(),
             run_root=args.run_root.resolve(),
-            maximum_authorized_cost_usd=args.maximum_authorized_cost_usd,
-            authorization_note=args.authorization_note,
+            forecast_budget_usd=args.forecast_budget_usd,
+            forecast_budget_authorization_note=(
+                args.forecast_budget_authorization_note
+            ),
+            acknowledged_strict_worst_case_exposure_usd=(
+                args.acknowledged_strict_worst_case_exposure_usd
+            ),
+            strict_exposure_acknowledgement_note=(
+                args.strict_exposure_acknowledgement_note
+            ),
             provider_queued_input_token_limit=args.provider_queued_input_token_limit,
             maximum_concurrent_shards=args.maximum_concurrent_shards,
         )
@@ -90,6 +117,20 @@ def main() -> None:
         )
     elif args.command == "prepare-recovery":
         result = prepare_failed_only_recovery(run_root=args.run_root.resolve())
+    elif args.command == "authorize-recovery":
+        result = authorize_recovery_wave(
+            run_root=args.run_root.resolve(),
+            recovery_forecast_budget_usd=args.recovery_forecast_budget_usd,
+            forecast_budget_authorization_note=(
+                args.forecast_budget_authorization_note
+            ),
+            acknowledged_strict_worst_case_exposure_usd=(
+                args.acknowledged_strict_worst_case_exposure_usd
+            ),
+            strict_exposure_acknowledgement_note=(
+                args.strict_exposure_acknowledgement_note
+            ),
+        )
     else:
         result = finalize_campaign(
             run_root=args.run_root.resolve(), destination=args.destination.resolve()
