@@ -1,6 +1,7 @@
 # Coarse proposal-bank production v1 runbook
 
-Status: **v3 frozen offline; blocked before provider launch and durable archival**.
+Status: **v6 frozen offline; shard-005-only primary calibration authorized, but blocked on the
+active API-tier queue limit and durable archival**.
 
 This campaign produces graph-blind coarse proposals for trace-sampling enrichment. Fine and broad
 votes are not semantic truth, adequacy labels, motif labels, correctness judgments, or evidence of
@@ -10,13 +11,13 @@ internal computation.
 
 Bundle root:
 
-`/scratch/general/vast/u1653998/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/full-corpus-proposal-bank-v3`
+`/scratch/general/vast/u1653998/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/full-corpus-proposal-bank-v6`
 
 The authoritative manifest self-hash is
-`c62d057204e3826d32856dea16e7cdf9d49237f502c5cb1b3ea62cb16138864e`; the manifest file SHA-256
-is `7d9243e40d9083d5f3771796ceb7adebc91e2c7de1c18d79290484dbd849e41c`. The bundle binds commit
-`9830876a2204a21908f6b4b7cfe72e58ad5e7504`, tree
-`cb3fc6cf225f3aa820166d153a9a5957bfdde221`, the v9 workstation SHA-256
+`3b67f89e14ef703d3222fc4fdfebfd6b60336571d5cdee1164dd1a91fe78ab1c`; the manifest file SHA-256
+is `be80325b3daf05c3390fdbf9b47cd0f58951019b7914156b58372c608464fb89`. The bundle binds commit
+`6133b5624844b6d0636215b306c6edb4082d64fa`, tree
+`09ccda553036472f3fabae22272817c85597352e`, the v9 workstation SHA-256
 `95a5627768b2e5f05920aaab91f6e1cd9c00688560f9d821ffc2d8d69c7ceeea`, the protocol and price
 snapshots, the locked Python/OpenAI environment inputs, every unit/window/request, and every Batch
 shard. The strict loader reconstructed the full topology and verified read-only `0555` directories
@@ -46,29 +47,41 @@ separate:
 The first two values are forecasts, not hard caps. The strict exposure is an upper exposure for the
 frozen primary request universe, not advance authorization for a recovery wave.
 
-The preserved v1 (`e1fb9505...`, commit `e2c0899`) and v2 (`f7c0171b...`, commit `6a000c3`) bundles
-are superseded and must not be launched. Their scientific request bodies and six shard hashes are
-unchanged in v3, but their lifecycle implementations failed strict review around concurrency,
-ambiguous upload/create recovery, pricing completeness, recovery authorization, final evidence,
-and runtime binding. They remain immutable provenance only.
+V1 through v5 are superseded and must not be launched. V1/v2 failed lifecycle review; v3 lacked the
+calibration-only primary-authorization scope; v4 carried misleading recovery-preauthorization
+wording; and v5 corrected that wording but allowed an operational config change to rename every
+request. V6 separately binds the full operational config and a validated stable v1 request-identity
+namespace. Its six Batch files are byte-identical to v3, including every `custom_id`, request body,
+and shard hash. All earlier versions remain immutable provenance only.
 
 ## Storage gate
 
-VAST scratch is subject to CHPC's 60-day inactivity purge. V3 is currently the only recorded
+VAST scratch is subject to CHPC's 60-day inactivity purge. V6 is currently the only recorded
 authoritative copy and no durable copy was made during preparation. Before relying on the bundle or
 any eventual result for scientific analysis, make a verified content-hash-preserving copy to group
 storage or Pando and record its location. Do not treat read-only permissions on VAST as archival.
 
 ## Primary launch gates
 
-Do not upload or submit until a fresh run records all of the following:
+The user authorized only the `shard-005` primary calibration wave:
 
-1. a user-authorized primary forecast budget and exact authorization note;
-2. explicit acknowledgement that actual primary cost may exceed that forecast, up to the exact
-   $514.45756665 strict exposure;
-3. the active OpenAI API tier's Batch queued-input-token limit; and
-4. the desired maximum concurrent shard count whose largest frozen queue reservations fit that
-   limit.
+- exact primary forecast budget: $3.207300838;
+- acknowledged strict primary exposure: $79.53101355;
+- primary-wave actual spend must remain strictly below $100;
+- maximum concurrency: one.
+
+This does **not** authorize any other primary shard, the $514.45756665 full campaign, recovery, or
+full-corpus finalization. Recovery remains unavailable unless failures are first frozen from the
+authorized shard and the user later supplies a fresh recovery-specific forecast and exact strict
+exposure acknowledgement.
+
+Do not initialize, upload, or submit until the active API tier's Batch queued-input-token limit is
+recorded and is at least the frozen `shard-005` forecast of 28,514,690 tokens. Initialization then
+records all of the following:
+
+1. the exact `shard-005`-only authorization and notes above;
+2. the active OpenAI API tier's Batch queued-input-token limit; and
+3. maximum concurrency one.
 
 The forecast budget stops later submissions when known cost plus conservative reservations exceeds
 it; it cannot stop an already submitted Batch and is not advertised as a hard maximum. Finalization
@@ -80,24 +93,29 @@ response-source lanes, but it is not assumed to predict prompt-cache behavior fo
 shards. Collect its receipt-derived per-request usage before deciding whether to authorize further
 submissions.
 
-Network-free initialization after fresh authorization:
+Network-free initialization after replacing `ACTIVE_TIER_LIMIT_AT_LEAST_28514690` with the verified
+integer limit:
 
 ```bash
 module load python/3.12.12 uv/0.11.14
 source scripts/chpc_env.sh
 $UV_PROJECT_ENVIRONMENT/bin/python \
   scripts/bonafide/process_witness_coarse_openai_batch_production_v1.py initialize \
-  --bundle-root /scratch/general/vast/u1653998/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/full-corpus-proposal-bank-v3 \
+  --bundle-root /scratch/general/vast/u1653998/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/full-corpus-proposal-bank-v6 \
   --run-root RUN_ROOT \
-  --forecast-budget-usd AUTHORIZED_PRIMARY_FORECAST_USD \
-  --forecast-budget-authorization-note 'EXACT USER PRIMARY FORECAST AUTHORIZATION' \
-  --acknowledged-strict-worst-case-exposure-usd 514.45756665 \
-  --strict-exposure-acknowledgement-note 'EXACT USER ACKNOWLEDGEMENT THAT PRIMARY ACTUAL MAY EXCEED THE FORECAST UP TO USD 514.45756665' \
-  --provider-queued-input-token-limit ACTIVE_TIER_LIMIT \
+  --authorized-primary-shard-id shard-005 \
+  --forecast-budget-usd 3.207300838 \
+  --forecast-budget-authorization-note 'AUTHORIZED PRIMARY CALIBRATION FORECAST FOR SHARD-005 ONLY: USD 3.207300838' \
+  --acknowledged-strict-worst-case-exposure-usd 79.53101355 \
+  --strict-exposure-acknowledgement-note 'ACKNOWLEDGED SHARD-005 PRIMARY STRICT EXPOSURE: USD 79.53101355; FULL CAMPAIGN NOT AUTHORIZED' \
+  --primary-actual-spend-limit-usd 100 \
+  --provider-queued-input-token-limit ACTIVE_TIER_LIMIT_AT_LEAST_28514690 \
   --maximum-concurrent-shards 1
 ```
 
-Initialization makes no provider call. It binds the exact Python/OpenAI SDK versions and optional
+Do not run the command with the placeholder. Initialization makes no provider call. It copies only
+`shard-005`, freezes the non-expandable primary subset, and binds the exact Python/OpenAI SDK
+versions and optional
 `OPENAI_PROJECT_ID`/`OPENAI_ORG_ID` hashes; every later campaign command rechecks those values,
 tracked source files, lockfiles, bundle identity, and copied shard inputs.
 
@@ -116,11 +134,16 @@ Recovery reconciles exactly one metadata-matched Batch, or proves zero matching 
 safe re-upload after an unknown/orphan upload state. Collection is resumable and retains raw
 provider snapshots, output/error JSONL, and receipt chains.
 
+Every primary mutation command refuses nonauthorized shard IDs. Collection fails closed if actual
+primary cost exceeds the acknowledged $79.53101355 strict exposure or reaches the separate $100
+primary-wave limit. No provider call, upload, initialization, or submission has occurred for v6.
+
 ## Failed-only recovery authorization
 
-After every primary shard is terminal and collected, `prepare-recovery` freezes at most one
-failed-only recovery wave. It excludes successful requests and preserves each failed provider body
-byte-for-byte. Primary authorization does **not** authorize this wave.
+After the authorized primary shard is terminal and collected, `prepare-recovery` may freeze at most
+one failed-only recovery wave. It excludes successful requests and independently revalidates every
+failed request against the frozen `shard-005` body, path, order, cost, strict exposure, and queue
+binding. Primary authorization does **not** authorize this wave.
 
 Inspect the generated recovery manifest, then obtain a fresh recovery-specific forecast budget and
 acknowledgement of its exact `strict_no_cache_full_output_exposure_usd`. Record them before any
@@ -147,6 +170,8 @@ complete per-request or defensibly reconciled aggregate pricing, separately boun
 recovery actual costs, and three votes for every provider-pending atom. Completed/partial missing
 rows remain cost-incomplete; zero pricing is allowed only for provider-evidenced pre-execution whole
 Batch failure.
+
+A shard-subset calibration run is explicitly forbidden from invoking full-corpus `finalize`.
 
 The final artifact is built in a temporary tree, semantically validated before publication, then
 made read-only and validated again. It contains the exact campaign bundle and request bodies,

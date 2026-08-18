@@ -468,3 +468,29 @@ authorization.
 The only recorded v3 copy is on VAST scratch, which is subject to a 60-day inactivity purge.
 Read-only permissions are not archival. A verified durable copy to group storage or Pando is
 required before scientific reliance, but no large copy was made without separate authority.
+
+## 2026-08-18 — V6 freezes shard-005-only calibration authorization
+
+The authoritative offline proposal bank is now `full-corpus-proposal-bank-v6`, built from commit
+`6133b5624844b6d0636215b306c6edb4082d64fa`. Its manifest self-hash is
+`3b67f89e14ef703d3222fc4fdfebfd6b60336571d5cdee1164dd1a91fe78ab1c`; its manifest file SHA-256 is
+`be80325b3daf05c3390fdbf9b47cd0f58951019b7914156b58372c608464fb89`. A strict read reconstructed
+94,546 units, 12,557 windows, 37,671 physical requests, and six response-affinity shards. All six
+Batch inputs are byte-identical to v3. The stable request-identity namespace is
+`b673793a4cf2e9db254c04dac4772d6c8b9cc50de26d0f6f9a0ac36df29ba3a3`; operational protocol changes
+remain separately bound by the full config hash.
+
+The user authorized only primary `shard-005`: $3.207300838 forecast, exact $79.53101355 strict
+exposure acknowledgement, actual primary-wave spend strictly below $100, and concurrency one.
+The $514.45756665 full primary campaign, every other primary shard, recovery, and full-corpus
+finalization are not authorized. Recovery is limited to at most one failed-only wave from the
+authorized shard and still requires fresh user authorization after its exact forecast and strict
+exposure are frozen. Initialization remains blocked until the active API-tier Batch queue limit is
+recorded and confirmed to cover the 28,514,690-token shard forecast.
+
+V1 through v5 remain immutable but are superseded and must not launch. V4 contained misleading
+recovery-preauthorization wording; v5 corrected the wording but accidentally changed request IDs;
+v6 restores exact v3 request bytes while retaining the corrected fresh-authorization contract. V6
+is read-only on VAST, but VAST's 60-day inactivity purge means a verified durable copy is still
+required before scientific reliance. No provider call, upload, campaign initialization, or Batch
+submission occurred during this work.
