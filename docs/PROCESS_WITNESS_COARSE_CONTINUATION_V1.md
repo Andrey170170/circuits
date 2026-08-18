@@ -71,13 +71,23 @@ the clean worktree so the same untracked provider environment is bound for later
 
 ```bash
 module load python/3.12.12 uv/0.11.14
-source scripts/chpc_env.sh
+MAIN_CHECKOUT=/uufs/chpc.utah.edu/common/home/u1653998/projects/circuits
+CLEAN_WORKTREE=/scratch/local/$USER/$SLURM_JOB_ID/process-witness-continuation-production
+SOURCE_COMMIT=REVIEWED_COMMIT_FROM_EXPERIMENT_LOG
+
+source "$MAIN_CHECKOUT/scripts/chpc_env.sh"
+test ! -e "$CLEAN_WORKTREE"
+git -C "$MAIN_CHECKOUT" worktree add --detach "$CLEAN_WORKTREE" "$SOURCE_COMMIT"
+cd "$CLEAN_WORKTREE"
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+test -z "$(git status --porcelain=v1 --untracked-files=no)"
+export PYTHONPATH="$CLEAN_WORKTREE"
 
 BUNDLE_ROOT=/scratch/general/vast/$USER/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/full-corpus-proposal-bank-v6
 CALIBRATION_ROOT=/scratch/general/vast/$USER/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/run-shard-005-calibration-v1
 RUN_ROOT=/scratch/general/vast/$USER/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/run-full-continuation-v1
 
-$UV_PROJECT_ENVIRONMENT/bin/python \
+PYTHONPATH="$CLEAN_WORKTREE" "$UV_PROJECT_ENVIRONMENT/bin/python" \
   scripts/bonafide/process_witness_coarse_openai_batch_continuation_v1.py prepare \
   --bundle-root "$BUNDLE_ROOT" \
   --calibration-run-root "$CALIBRATION_ROOT" \
@@ -103,15 +113,15 @@ For each `primary-tranche-NNN` in manifest order, submit, wait until terminal, a
 submitting the next tranche:
 
 ```bash
-$UV_PROJECT_ENVIRONMENT/bin/python \
+PYTHONPATH="$CLEAN_WORKTREE" "$UV_PROJECT_ENVIRONMENT/bin/python" \
   scripts/bonafide/process_witness_coarse_openai_batch_continuation_v1.py submit-attempt \
   --run-root "$RUN_ROOT" --attempt-id primary-tranche-NNN
 
-$UV_PROJECT_ENVIRONMENT/bin/python \
+PYTHONPATH="$CLEAN_WORKTREE" "$UV_PROJECT_ENVIRONMENT/bin/python" \
   scripts/bonafide/process_witness_coarse_openai_batch_continuation_v1.py status-attempt \
   --run-root "$RUN_ROOT" --attempt-id primary-tranche-NNN
 
-$UV_PROJECT_ENVIRONMENT/bin/python \
+PYTHONPATH="$CLEAN_WORKTREE" "$UV_PROJECT_ENVIRONMENT/bin/python" \
   scripts/bonafide/process_witness_coarse_openai_batch_continuation_v1.py collect-attempt \
   --run-root "$RUN_ROOT" --attempt-id primary-tranche-NNN
 ```
@@ -119,7 +129,7 @@ $UV_PROJECT_ENVIRONMENT/bin/python \
 If upload/create state is ambiguous, use this exact attempt reconciliation command:
 
 ```bash
-$UV_PROJECT_ENVIRONMENT/bin/python \
+PYTHONPATH="$CLEAN_WORKTREE" "$UV_PROJECT_ENVIRONMENT/bin/python" \
   scripts/bonafide/process_witness_coarse_openai_batch_continuation_v1.py recover-attempt-submission \
   --run-root "$RUN_ROOT" --attempt-id primary-tranche-NNN
 ```
@@ -133,7 +143,7 @@ prior collection is present and cost-complete.
 After every primary tranche is collected, freeze the one recovery wave:
 
 ```bash
-$UV_PROJECT_ENVIRONMENT/bin/python \
+PYTHONPATH="$CLEAN_WORKTREE" "$UV_PROJECT_ENVIRONMENT/bin/python" \
   scripts/bonafide/process_witness_coarse_openai_batch_continuation_v1.py prepare-failed-only-recovery \
   --run-root "$RUN_ROOT"
 ```
@@ -146,7 +156,7 @@ does not resolve every inherited and new failure.
 ```bash
 FINAL_ROOT=/scratch/general/vast/$USER/circuits/results/process_witness/coarse_annotation/process-witness-coarse-openai-production-v1/proposal-bank-continuation-v1
 
-$UV_PROJECT_ENVIRONMENT/bin/python \
+PYTHONPATH="$CLEAN_WORKTREE" "$UV_PROJECT_ENVIRONMENT/bin/python" \
   scripts/bonafide/process_witness_coarse_openai_batch_continuation_v1.py finalize \
   --run-root "$RUN_ROOT" --destination "$FINAL_ROOT"
 ```
