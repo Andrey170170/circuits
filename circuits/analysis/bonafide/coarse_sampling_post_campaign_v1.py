@@ -1732,6 +1732,7 @@ def _validate_embedded_event_sources(root: Path) -> None:
         str(row["request_id"]): row
         for row in read_jsonl(root / "source-evidence/effective-events.jsonl")
     }
+    event_source_cache: dict[Path, list[tuple[int, bytes, dict[str, Any]]]] = {}
     for row in precedence:
         request_id = str(row["request_id"])
         candidates = [*row["superseded_sources"], row["effective_source"]]
@@ -1741,7 +1742,9 @@ def _validate_embedded_event_sources(root: Path) -> None:
         effective_event: dict[str, Any] | None = None
         for binding_index, binding in enumerate(candidates):
             path = root / binding["source_path"]
-            source_rows = _exact_rows(path)
+            if path not in event_source_cache:
+                event_source_cache[path] = _exact_rows(path)
+            source_rows = event_source_cache[path]
             ordinal = int(binding["source_ordinal"])
             if ordinal >= len(source_rows):
                 raise ValueError("embedded event source ordinal drift")
@@ -1762,13 +1765,22 @@ def _validate_embedded_event_sources(root: Path) -> None:
     raw_ledger = read_jsonl(root / "source-evidence/non-success-raw-line-ledger.jsonl")
     if len(raw_ledger) != 89:
         raise ValueError("embedded non-success raw row census drift")
+    raw_source_cache: dict[
+        Path, tuple[str, int, list[tuple[int, bytes, dict[str, Any]]]]
+    ] = {}
     for binding in raw_ledger:
         path = root / binding["raw_file_path"]
-        rows = _exact_rows(path)
+        if path not in raw_source_cache:
+            raw_source_cache[path] = (
+                file_sha256(path),
+                path.stat().st_size,
+                _exact_rows(path),
+            )
+        raw_sha256, raw_bytes, rows = raw_source_cache[path]
         ordinal = int(binding["raw_line_ordinal"])
         if (
-            file_sha256(path) != binding["raw_file_sha256"]
-            or path.stat().st_size != binding["raw_file_bytes"]
+            raw_sha256 != binding["raw_file_sha256"]
+            or raw_bytes != binding["raw_file_bytes"]
             or ordinal >= len(rows)
             or str(rows[ordinal][2]["custom_id"]) != binding["request_id"]
             or hashlib.sha256(rows[ordinal][1]).hexdigest()
