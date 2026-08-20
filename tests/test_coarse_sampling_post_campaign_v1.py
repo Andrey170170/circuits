@@ -12,6 +12,7 @@ from circuits.analysis.bonafide.coarse_sampling_post_campaign_v1 import (
 
 def _write_minimal_artifact(root: Path) -> dict[str, object]:
     root.mkdir()
+    (root / "source-evidence/bundle").mkdir(parents=True)
     report = {
         "schema_version": "adag.process-witness.coarse-post-campaign-report.v1",
         "claim_boundary": "sampling metadata only",
@@ -60,12 +61,65 @@ def _write_minimal_artifact(root: Path) -> dict[str, object]:
         },
     }
     (root / "completion-report.json").write_text(json.dumps(report) + "\n")
+    units = [
+        {
+            "unit_id": "u0",
+            "response_id": "r0",
+            "sequence_index": 0,
+            "fragment_of": "f0",
+        },
+        {
+            "unit_id": "u1",
+            "response_id": "r0",
+            "sequence_index": 1,
+            "fragment_of": "f0",
+        },
+    ]
+    (root / "source-evidence/bundle/units.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in units)
+    )
+    psu = {
+        "psu_id": "p0",
+        "response_id": "r0",
+        "response_psu_index": 0,
+        "member_unit_ids": ["u0", "u1"],
+        "fragment_of": "f0",
+        "incomplete_hard_barrier": False,
+        "correlation_run_id": "r0:run-0",
+    }
+    (root / "sampling-psus.jsonl").write_text(json.dumps(psu) + "\n")
+    candidates = [
+        {
+            "psu_id": "p0",
+            "unit_id": unit_id,
+            "designs": [
+                {
+                    "policy": "balanced",
+                    "nominal_expected_budget": budget,
+                    "group_inclusion_probability": pi,
+                    "atom_conditional_probability": 0.5,
+                    "each_position_conditional_probability": 1.0,
+                    "each_position_marginal_inclusion_probability": pi * 0.5,
+                    "each_position_inverse_probability_weight": 1.0 / (pi * 0.5),
+                    "selected_or_frozen_trace_policy": False,
+                    "exact_integer_sample_selected": False,
+                }
+                for budget, pi in ((30_000, 0.3), (35_000, 0.35), (40_000, 0.4))
+            ],
+        }
+        for unit_id in ("u0", "u1")
+    ]
+    (root / "candidate-inclusion-probabilities.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in candidates)
+    )
     files = [
         {
-            "path": "completion-report.json",
-            "bytes": (root / "completion-report.json").stat().st_size,
-            "sha256": file_sha256(root / "completion-report.json"),
+            "path": str(path.relative_to(root)),
+            "bytes": path.stat().st_size,
+            "sha256": file_sha256(path),
         }
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
     ]
     inventory = {
         "schema_version": "adag.process-witness.coarse-post-campaign-inventory.v1",
@@ -77,7 +131,7 @@ def _write_minimal_artifact(root: Path) -> dict[str, object]:
         "schema_version": "adag.process-witness.coarse-post-campaign-analysis.v1",
         "status": "frozen_sampling_metadata_not_truth",
         "inventory_sha256": inventory["inventory_sha256"],
-        "completion_report_sha256": files[0]["sha256"],
+        "completion_report_sha256": file_sha256(root / "completion-report.json"),
     }
     manifest["manifest_sha256"] = canonical_sha256(manifest)
     (root / "manifest.json").write_text(json.dumps(manifest) + "\n")
@@ -85,6 +139,30 @@ def _write_minimal_artifact(root: Path) -> dict[str, object]:
         path.chmod(0o444 if path.is_file() else 0o555)
     root.chmod(0o555)
     return manifest
+
+
+def _rehash_artifact(root: Path) -> None:
+    inventory_path = root / "evidence-inventory.json"
+    inventory = json.loads(inventory_path.read_text())
+    inventory["files"] = [
+        {
+            "path": str(path.relative_to(root)),
+            "bytes": path.stat().st_size,
+            "sha256": file_sha256(path),
+        }
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path not in {root / "manifest.json", inventory_path}
+    ]
+    inventory.pop("inventory_sha256")
+    inventory["inventory_sha256"] = canonical_sha256(inventory)
+    inventory_path.write_text(json.dumps(inventory) + "\n")
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["inventory_sha256"] = inventory["inventory_sha256"]
+    manifest["completion_report_sha256"] = file_sha256(root / "completion-report.json")
+    manifest.pop("manifest_sha256")
+    manifest["manifest_sha256"] = canonical_sha256(manifest)
+    manifest_path.write_text(json.dumps(manifest) + "\n")
 
 
 def test_frozen_loader_validates_without_source_roots(tmp_path: Path) -> None:
@@ -120,23 +198,74 @@ def test_frozen_loader_rejects_rehashed_literal_census_drift(tmp_path: Path) -> 
     report = json.loads(report_path.read_text())
     report["strict_proposals"]["provider_vote_coverage"]["3"] = 74_787
     report_path.write_text(json.dumps(report) + "\n")
-    inventory_path = root / "evidence-inventory.json"
-    inventory = json.loads(inventory_path.read_text())
-    inventory["files"][0]["bytes"] = report_path.stat().st_size
-    inventory["files"][0]["sha256"] = file_sha256(report_path)
-    inventory.pop("inventory_sha256")
-    inventory["inventory_sha256"] = canonical_sha256(inventory)
-    inventory_path.write_text(json.dumps(inventory) + "\n")
-    manifest_path = root / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest["inventory_sha256"] = inventory["inventory_sha256"]
-    manifest["completion_report_sha256"] = file_sha256(report_path)
-    manifest.pop("manifest_sha256")
-    manifest["manifest_sha256"] = canonical_sha256(manifest)
-    manifest_path.write_text(json.dumps(manifest) + "\n")
+    _rehash_artifact(root)
     for path in root.rglob("*"):
         path.chmod(0o555 if path.is_dir() else 0o444)
     root.chmod(0o555)
 
     with pytest.raises(ValueError, match="literal census drift"):
+        load_frozen_post_campaign_analysis(root)
+
+
+def test_frozen_loader_rejects_split_fragment_psu(tmp_path: Path) -> None:
+    root = tmp_path / "artifact"
+    _write_minimal_artifact(root)
+    for path in root.rglob("*"):
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    root.chmod(0o755)
+    (root / "sampling-psus.jsonl").write_text(
+        json.dumps(
+            {
+                "psu_id": "p0",
+                "response_id": "r0",
+                "response_psu_index": 0,
+                "member_unit_ids": ["u0"],
+                "fragment_of": "f0",
+                "incomplete_hard_barrier": False,
+                "correlation_run_id": "r0:run-0",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "psu_id": "p1",
+                "response_id": "r0",
+                "response_psu_index": 1,
+                "member_unit_ids": ["u1"],
+                "fragment_of": "f0",
+                "incomplete_hard_barrier": False,
+                "correlation_run_id": "r0:run-0",
+            }
+        )
+        + "\n"
+    )
+    _rehash_artifact(root)
+    for path in root.rglob("*"):
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    root.chmod(0o555)
+
+    with pytest.raises(ValueError, match="fragment PSU partition drift"):
+        load_frozen_post_campaign_analysis(root)
+
+
+def test_frozen_loader_rejects_non_nested_or_nonpositive_candidate_pi(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifact"
+    _write_minimal_artifact(root)
+    for path in root.rglob("*"):
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    root.chmod(0o755)
+    path = root / "candidate-inclusion-probabilities.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[0]["designs"][1]["group_inclusion_probability"] = 0.2
+    rows[0]["designs"][1]["each_position_marginal_inclusion_probability"] = 0.1
+    rows[0]["designs"][1]["each_position_inverse_probability_weight"] = 10.0
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    _rehash_artifact(root)
+    for child in root.rglob("*"):
+        child.chmod(0o555 if child.is_dir() else 0o444)
+    root.chmod(0o555)
+
+    with pytest.raises(ValueError, match="candidate nesting drift"):
         load_frozen_post_campaign_analysis(root)
