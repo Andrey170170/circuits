@@ -139,6 +139,18 @@ EXPECTED_CONTEXT_CENSUS = {
     "within_measured_1268_envelope": 102_019,
     "above_measured_1268_envelope": 739_988,
 }
+REQUIRED_EXECUTION_SOURCE_PATHS = frozenset(
+    {
+        "circuits/analysis/bonafide/coarse_sampling_post_campaign_v2.py",
+        "scripts/bonafide/build_process_witness_coarse_post_campaign_v2.py",
+        "circuits/analysis/bonafide/coarse_sampling_post_campaign_v1.py",
+        "circuits/analysis/bonafide/coarse_sampling_openai_batch_production_v1.py",
+        "circuits/analysis/bonafide/canonical.py",
+        "circuits/labeling/io.py",
+        "pyproject.toml",
+        "uv.lock",
+    }
+)
 
 
 def _expected_design_contract(
@@ -172,6 +184,7 @@ def _validate_candidate_only_manifest(manifest: Mapping[str, Any]) -> None:
         "trace_policy_selection_status": "pending_audit_and_resource_gate",
         "network_calls_made": 0,
         "parent_v1_mutated": False,
+        "claim_boundary": CLAIM_BOUNDARY,
     }
     if any(manifest.get(field) != value for field, value in expected.items()):
         raise ValueError("v2 sampling candidate-only manifest drift")
@@ -1725,17 +1738,7 @@ def _execution_source_revision(temporary: Path) -> dict[str, Any]:
         or path in {"circuits/__init__.py", "circuits/analysis/__init__.py"}
         or path == "scripts/bonafide/build_process_witness_coarse_post_campaign_v2.py"
     ]
-    required = {
-        "circuits/analysis/bonafide/coarse_sampling_post_campaign_v2.py",
-        "scripts/bonafide/build_process_witness_coarse_post_campaign_v2.py",
-        "circuits/analysis/bonafide/coarse_sampling_post_campaign_v1.py",
-        "circuits/analysis/bonafide/coarse_sampling_openai_batch_production_v1.py",
-        "circuits/analysis/bonafide/canonical.py",
-        "circuits/labeling/io.py",
-        "pyproject.toml",
-        "uv.lock",
-    }
-    if not required.issubset(paths):
+    if not REQUIRED_EXECUTION_SOURCE_PATHS.issubset(paths):
         raise ValueError("v2 execution source is untracked or incomplete")
     files = []
     execution_root = temporary / "execution-source"
@@ -1788,8 +1791,18 @@ def _validate_execution_source(root: Path, revision: Mapping[str, Any]) -> None:
         or lowercase_hex_40(str(revision.get("git_tree", ""))) is None
     ):
         raise ValueError("v2 exact execution-source subset gate absent")
+    bindings = revision.get("files")
+    if not isinstance(bindings, list):
+        raise ValueError("v2 execution source is incomplete")
+    source_paths = {
+        str(binding.get("path")) for binding in bindings if isinstance(binding, dict)
+    }
+    if not REQUIRED_EXECUTION_SOURCE_PATHS.issubset(source_paths):
+        raise ValueError("v2 execution source is incomplete")
     seen = set()
-    for binding in revision["files"]:
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            raise ValueError("v2 execution source is incomplete")
         relative = str(binding["copied_path"])
         source_relative = str(binding["path"])
         if (

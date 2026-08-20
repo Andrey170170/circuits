@@ -33,6 +33,7 @@ def _minimal_manifest(**overrides: object) -> dict[str, object]:
         "trace_policy_selection_status": "pending_audit_and_resource_gate",
         "network_calls_made": 0,
         "parent_v1_mutated": False,
+        "claim_boundary": sampling_v2.CLAIM_BOUNDARY,
         "design_contract_sha256": "1" * 64,
         "expected_frontiers_sha256": "2" * 64,
         "realized_candidate_tiers_sha256": "3" * 64,
@@ -394,7 +395,11 @@ def test_realized_target_ids_are_nested_candidate_only(
 
 def test_copied_execution_source_recomputes_git_blob_identity(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        sampling_v2, "REQUIRED_EXECUTION_SOURCE_PATHS", frozenset({"runtime.py"})
+    )
     copied = tmp_path / "execution-source/runtime.py"
     copied.parent.mkdir()
     source_bytes = b"VALUE = 1\n"
@@ -434,12 +439,36 @@ def test_copied_execution_source_recomputes_git_blob_identity(
         sampling_v2._validate_execution_source(tmp_path, revision)
 
 
+def test_copied_execution_source_rejects_empty_file_set(tmp_path: Path) -> None:
+    revision = {
+        "git_commit": "a" * 40,
+        "git_tree": "b" * 40,
+        "execution_source_subset_matches_head": True,
+        "files": [],
+    }
+
+    with pytest.raises(ValueError, match="execution source is incomplete"):
+        sampling_v2._validate_execution_source(tmp_path, revision)
+
+
 def test_public_loader_rejects_manifest_that_promotes_tracing(tmp_path: Path) -> None:
     root = tmp_path / "artifact"
     root.mkdir()
     _write_json(
         root / "manifest.json",
         _minimal_manifest(selected_for_tracing=True, trace_ready=True),
+    )
+
+    with pytest.raises(ValueError, match="candidate-only manifest drift"):
+        sampling_v2.load_frozen_post_campaign_sampling_v2(root)
+
+
+def test_public_loader_rejects_mutated_claim_boundary(tmp_path: Path) -> None:
+    root = tmp_path / "artifact"
+    root.mkdir()
+    _write_json(
+        root / "manifest.json",
+        _minimal_manifest(claim_boundary="This artifact proves faithfulness."),
     )
 
     with pytest.raises(ValueError, match="candidate-only manifest drift"):
@@ -463,7 +492,10 @@ def test_public_loader_rejects_duplicate_inventory_paths(tmp_path: Path) -> None
         sampling_v2.load_frozen_post_campaign_sampling_v2(root)
 
 
-def test_public_loader_rejects_static_design_contract_drift(tmp_path: Path) -> None:
+def test_public_loader_rejects_static_design_contract_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sampling_v2, "REQUIRED_EXECUTION_SOURCE_PATHS", frozenset())
     root = tmp_path / "artifact"
     root.mkdir()
     contract: dict[str, object] = {
