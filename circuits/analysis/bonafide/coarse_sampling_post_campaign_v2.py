@@ -141,6 +141,61 @@ EXPECTED_CONTEXT_CENSUS = {
 }
 
 
+def _expected_design_contract(
+    *, kernel_stream_sha256: str, group_base_stream_sha256: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": "adag.process-witness.coarse-sampling-design-contract.v2",
+        "mechanisms_plan_order": list(MECHANISMS),
+        "first_owner_precedence": list(OWNERSHIP_ORDER),
+        "shares": SHARES,
+        "budgets": list(BUDGETS),
+        "kernel_stream_sha256": kernel_stream_sha256,
+        "group_base_stream_sha256": group_base_stream_sha256,
+        "group_to_atom_to_position": True,
+        "uniform_each_position_probability_equal": True,
+        "observable_process_anchors_only": True,
+        "halo_status": "deferred",
+        "candidate_design_status": "frozen",
+        "selected_for_tracing": False,
+        "trace_ready": False,
+    }
+
+
+def _validate_candidate_only_manifest(manifest: Mapping[str, Any]) -> None:
+    expected = {
+        "status": "frozen_candidate_designs_not_selected_for_tracing",
+        "candidate_design_status": "frozen",
+        "candidate_tier_status": "frozen_candidate_only",
+        "selected_for_tracing": False,
+        "trace_ready": False,
+        "trace_policy_selection_status": "pending_audit_and_resource_gate",
+        "network_calls_made": 0,
+        "parent_v1_mutated": False,
+    }
+    if any(manifest.get(field) != value for field, value in expected.items()):
+        raise ValueError("v2 sampling candidate-only manifest drift")
+
+
+def _validate_static_artifact_contract(root: Path, manifest: Mapping[str, Any]) -> None:
+    contract_path = root / "design-contract.json"
+    if file_sha256(contract_path) != manifest.get("design_contract_sha256"):
+        raise ValueError("v2 sampling design-contract manifest binding drift")
+    contract = _load_object(contract_path)
+    expected_contract = _expected_design_contract(
+        kernel_stream_sha256=str(contract.get("kernel_stream_sha256", "")),
+        group_base_stream_sha256=str(contract.get("group_base_stream_sha256", "")),
+    )
+    if contract != expected_contract:
+        raise ValueError("v2 sampling design contract drift")
+    for relative, field in (
+        ("expected-frontiers.jsonl", "expected_frontiers_sha256"),
+        ("realized-candidate-tiers.jsonl.gz", "realized_candidate_tiers_sha256"),
+    ):
+        if file_sha256(root / relative) != manifest.get(field):
+            raise ValueError(f"v2 sampling {relative} manifest binding drift")
+
+
 def _load_object(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -1974,22 +2029,10 @@ def build_post_campaign_sampling_v2(
             temporary / "mechanism-eligibility.jsonl", _jsonl_bytes(eligibility)
         )
         atomic_write_json(temporary / "eligibility-census.json", eligibility_census)
-        design_contract = {
-            "schema_version": "adag.process-witness.coarse-sampling-design-contract.v2",
-            "mechanisms_plan_order": list(MECHANISMS),
-            "first_owner_precedence": list(OWNERSHIP_ORDER),
-            "shares": SHARES,
-            "budgets": list(BUDGETS),
-            "kernel_stream_sha256": _stream_hash_nested(kernels),
-            "group_base_stream_sha256": _stream_hash_nested(bases),
-            "group_to_atom_to_position": True,
-            "uniform_each_position_probability_equal": True,
-            "observable_process_anchors_only": True,
-            "halo_status": "deferred",
-            "candidate_design_status": "frozen",
-            "selected_for_tracing": False,
-            "trace_ready": False,
-        }
+        design_contract = _expected_design_contract(
+            kernel_stream_sha256=_stream_hash_nested(kernels),
+            group_base_stream_sha256=_stream_hash_nested(bases),
+        )
         atomic_write_json(temporary / "design-contract.json", design_contract)
         atomic_write_bytes(
             temporary / "expected-frontiers.jsonl", _jsonl_bytes(frontiers)
@@ -2087,12 +2130,21 @@ def load_frozen_post_campaign_sampling_v2(
     _verify_self_hash(manifest, "manifest_sha256", "v2 sampling manifest")
     if manifest.get("schema_version") != ANALYSIS_SCHEMA:
         raise ValueError("v2 sampling schema drift")
+    _validate_candidate_only_manifest(manifest)
     inventory = _load_object(root / "evidence-inventory.json")
     _verify_self_hash(inventory, "inventory_sha256", "v2 sampling inventory")
+    if inventory.get("schema_version") != INVENTORY_SCHEMA:
+        raise ValueError("v2 sampling inventory schema drift")
+    inventory_files = inventory.get("files")
+    if not isinstance(inventory_files, list):
+        raise ValueError("v2 sampling inventory files drift")
+    inventory_paths = [str(row.get("path")) for row in inventory_files]
+    if len(inventory_paths) != len(set(inventory_paths)):
+        raise ValueError("v2 sampling duplicate inventory path")
     if inventory["inventory_sha256"] != manifest["inventory_sha256"]:
         raise ValueError("v2 sampling manifest/inventory binding drift")
     _validate_execution_source(root, manifest["execution_source_revision"])
-    declared = {str(row["path"]): row for row in inventory["files"]}
+    declared = {str(row["path"]): row for row in inventory_files}
     observed = {
         path.relative_to(root).as_posix(): path
         for path in root.rglob("*")
@@ -2120,6 +2172,7 @@ def load_frozen_post_campaign_sampling_v2(
             str(binding["sha256"]),
         ):
             raise ValueError(f"v2 sampling inventoried file drift: {relative}")
+    _validate_static_artifact_contract(root, manifest)
     if root.stat().st_mode & 0o777 != 0o555:
         raise ValueError("v2 sampling root mode drift")
     for path in root.rglob("*"):
@@ -2162,9 +2215,11 @@ def load_frozen_post_campaign_sampling_v2(
     kernels = build_position_kernels_v2(eligibility, units, documents)
     bases = build_hierarchical_group_bases_v2(eligibility)
     contract = _load_object(root / "design-contract.json")
-    if contract["kernel_stream_sha256"] != _stream_hash_nested(kernels) or contract[
-        "group_base_stream_sha256"
-    ] != _stream_hash_nested(bases):
+    expected_contract = _expected_design_contract(
+        kernel_stream_sha256=_stream_hash_nested(kernels),
+        group_base_stream_sha256=_stream_hash_nested(bases),
+    )
+    if contract != expected_contract:
         raise ValueError("v2 sampling kernel/base contract drift")
     frontiers, _discarded, solutions = build_overlap_frontiers_v2(
         kernels, bases, include_candidates=False

@@ -1,12 +1,45 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from collections import defaultdict
 from pathlib import Path
 
 import pytest
 from circuits.analysis.bonafide import coarse_sampling_post_campaign_v2 as sampling_v2
+from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
+
+
+def _write_json(path: Path, value: dict[str, object]) -> None:
+    path.write_text(json.dumps(value, sort_keys=True) + "\n")
+
+
+def _minimal_manifest(**overrides: object) -> dict[str, object]:
+    manifest: dict[str, object] = {
+        "schema_version": sampling_v2.ANALYSIS_SCHEMA,
+        "status": "frozen_candidate_designs_not_selected_for_tracing",
+        "inventory_sha256": "0" * 64,
+        "execution_source_revision": {
+            "git_commit": "a" * 40,
+            "git_tree": "b" * 40,
+            "execution_source_subset_matches_head": True,
+            "files": [],
+        },
+        "candidate_design_status": "frozen",
+        "candidate_tier_status": "frozen_candidate_only",
+        "selected_for_tracing": False,
+        "trace_ready": False,
+        "trace_policy_selection_status": "pending_audit_and_resource_gate",
+        "network_calls_made": 0,
+        "parent_v1_mutated": False,
+        "design_contract_sha256": "1" * 64,
+        "expected_frontiers_sha256": "2" * 64,
+        "realized_candidate_tiers_sha256": "3" * 64,
+    }
+    manifest.update(overrides)
+    manifest["manifest_sha256"] = canonical_sha256(manifest)
+    return manifest
 
 
 def _overlapping_test_kernels() -> dict[str, dict[str, dict[int, float]]]:
@@ -399,6 +432,76 @@ def test_copied_execution_source_recomputes_git_blob_identity(
     copied.write_bytes(b"VALUE = 2\n")
     with pytest.raises(ValueError, match="copied execution source drift"):
         sampling_v2._validate_execution_source(tmp_path, revision)
+
+
+def test_public_loader_rejects_manifest_that_promotes_tracing(tmp_path: Path) -> None:
+    root = tmp_path / "artifact"
+    root.mkdir()
+    _write_json(
+        root / "manifest.json",
+        _minimal_manifest(selected_for_tracing=True, trace_ready=True),
+    )
+
+    with pytest.raises(ValueError, match="candidate-only manifest drift"):
+        sampling_v2.load_frozen_post_campaign_sampling_v2(root)
+
+
+def test_public_loader_rejects_duplicate_inventory_paths(tmp_path: Path) -> None:
+    root = tmp_path / "artifact"
+    root.mkdir()
+    duplicate = {"path": "duplicate.json", "bytes": 0, "sha256": "0" * 64}
+    inventory: dict[str, object] = {
+        "schema_version": sampling_v2.INVENTORY_SCHEMA,
+        "files": [duplicate, duplicate],
+    }
+    inventory["inventory_sha256"] = canonical_sha256(inventory)
+    manifest = _minimal_manifest(inventory_sha256=inventory["inventory_sha256"])
+    _write_json(root / "manifest.json", manifest)
+    _write_json(root / "evidence-inventory.json", inventory)
+
+    with pytest.raises(ValueError, match="duplicate inventory path"):
+        sampling_v2.load_frozen_post_campaign_sampling_v2(root)
+
+
+def test_public_loader_rejects_static_design_contract_drift(tmp_path: Path) -> None:
+    root = tmp_path / "artifact"
+    root.mkdir()
+    contract: dict[str, object] = {
+        "schema_version": "adag.process-witness.coarse-sampling-design-contract.v2",
+        "mechanisms_plan_order": list(sampling_v2.MECHANISMS),
+        "first_owner_precedence": list(sampling_v2.OWNERSHIP_ORDER),
+        "shares": sampling_v2.SHARES,
+        "budgets": list(sampling_v2.BUDGETS),
+        "kernel_stream_sha256": "4" * 64,
+        "group_base_stream_sha256": "5" * 64,
+        "group_to_atom_to_position": True,
+        "uniform_each_position_probability_equal": True,
+        "observable_process_anchors_only": True,
+        "halo_status": "incorrectly_enabled",
+        "candidate_design_status": "frozen",
+        "selected_for_tracing": False,
+        "trace_ready": False,
+    }
+    _write_json(root / "design-contract.json", contract)
+    binding = {
+        "path": "design-contract.json",
+        "bytes": (root / "design-contract.json").stat().st_size,
+        "sha256": file_sha256(root / "design-contract.json"),
+    }
+    inventory: dict[str, object] = {
+        "schema_version": sampling_v2.INVENTORY_SCHEMA,
+        "files": [binding],
+    }
+    inventory["inventory_sha256"] = canonical_sha256(inventory)
+    manifest = _minimal_manifest(
+        inventory_sha256=inventory["inventory_sha256"],
+        design_contract_sha256=binding["sha256"],
+    )
+    _write_json(root / "manifest.json", manifest)
+    _write_json(root / "evidence-inventory.json", inventory)
+
+    with pytest.raises(ValueError, match="design contract drift"):
+        sampling_v2.load_frozen_post_campaign_sampling_v2(root)
 
 
 def test_public_loader_rejects_descendant_directory_symlink(tmp_path: Path) -> None:
