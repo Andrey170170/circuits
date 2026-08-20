@@ -49,6 +49,13 @@ Under conservative exact-ID salvage, all 94,546 atoms partition as:
 - 142 `unresolved` proposals; and
 - 12 explicit `missing_proposal` atoms.
 
+Restricting that view to the 74,860 provider-pending atoms gives 38,212 process-bearing, 36,494
+contextual, 142 unresolved, and 12 missing proposals. Unique fine majorities comprise 20,359
+`active_task_work`, 11,782 `intermediate_commitment`, 4,812 `evaluation_or_revision`, 667
+`final_answer`, 26,461 `other_semantic_text`, 9,977 `surface_or_control`, and 114 `uncertain`;
+another 676 complete atoms have a 1-1-1 fine-label tie and the 12 incomplete atoms have no valid
+three-vote majority.
+
 The 19,500 deterministic surface/control atoms and 186 deterministic terminal atoms are inventory
 routes, not stochastic model votes. Among the 74,848 provider atoms with three exact-ID votes,
 59,864 have a unanimous fine label, 14,308 have a 2-1 fine split, and 676 have a 1-1-1 fine split.
