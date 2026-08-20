@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
 from pathlib import Path
 
@@ -191,6 +193,76 @@ def test_frozen_loader_streams_large_candidate_table(
     monkeypatch.setattr(post_campaign, "read_jsonl", reject_bulk_candidate_read)
 
     load_frozen_post_campaign_analysis(root)
+
+
+def test_publish_falls_back_without_replacing_existing_nested_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class UnsupportedRename:
+        def __call__(self, *_args: object) -> int:
+            ctypes.set_errno(errno.EINVAL)
+            return -1
+
+    class FakeLibc:
+        renameat2 = UnsupportedRename()
+
+    monkeypatch.setattr(
+        post_campaign.ctypes, "CDLL", lambda *_args, **_kwargs: FakeLibc()
+    )
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested/evidence.json").write_text("evidence\n")
+    (source / "manifest.json").write_text("manifest\n")
+    destination = tmp_path / "published"
+
+    post_campaign._publish_no_replace(source, destination)
+
+    assert not source.exists()
+    assert (destination / "nested/evidence.json").read_text() == "evidence\n"
+    assert (destination / "manifest.json").read_text() == "manifest\n"
+    second = tmp_path / "second"
+    second.mkdir()
+    (second / "manifest.json").write_text("replacement\n")
+    with pytest.raises(FileExistsError, match="destination exists"):
+        post_campaign._publish_no_replace(second, destination)
+    assert (destination / "manifest.json").read_text() == "manifest\n"
+
+
+def test_publish_fallback_removes_interrupted_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class UnsupportedRename:
+        def __call__(self, *_args: object) -> int:
+            ctypes.set_errno(errno.EINVAL)
+            return -1
+
+    class FakeLibc:
+        renameat2 = UnsupportedRename()
+
+    monkeypatch.setattr(
+        post_campaign.ctypes, "CDLL", lambda *_args, **_kwargs: FakeLibc()
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "evidence.json").write_text("evidence\n")
+    (source / "manifest.json").write_text("manifest\n")
+    destination = tmp_path / "published"
+    original_rename = post_campaign.os.rename
+    move_count = 0
+
+    def interrupt_second_move(source_path: Path, destination_path: Path) -> None:
+        nonlocal move_count
+        move_count += 1
+        if move_count == 2:
+            raise OSError("injected publication interruption")
+        original_rename(source_path, destination_path)
+
+    monkeypatch.setattr(post_campaign.os, "rename", interrupt_second_move)
+
+    with pytest.raises(OSError, match="injected publication interruption"):
+        post_campaign._publish_no_replace(source, destination)
+
+    assert not destination.exists()
 
 
 def test_frozen_loader_rejects_tamper_and_mode_drift(tmp_path: Path) -> None:

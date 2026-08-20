@@ -1158,11 +1158,47 @@ def _writable_tree(root: Path) -> None:
         path.chmod(0o755 if path.is_dir() else 0o644)
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _publish_manifest_last(source: Path, destination: Path) -> None:
+    try:
+        destination.mkdir(mode=0o755)
+    except FileExistsError as error:
+        raise FileExistsError(f"analysis destination exists: {destination}") from error
+    try:
+        children = sorted(
+            source.iterdir(), key=lambda path: (path.name == "manifest.json", path.name)
+        )
+        if not children or children[-1].name != "manifest.json":
+            raise ValueError("analysis staging manifest is absent")
+        source.chmod(0o755)
+        for child in children[:-1]:
+            os.rename(child, destination / child.name)
+        _fsync_directory(destination)
+        os.rename(children[-1], destination / "manifest.json")
+        destination.chmod(0o555)
+        _fsync_directory(destination)
+        source.rmdir()
+        _fsync_directory(destination.parent)
+    except BaseException:
+        if destination.exists():
+            _writable_tree(destination)
+            shutil.rmtree(destination)
+        raise
+
+
 def _publish_no_replace(source: Path, destination: Path) -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
     if renameat2 is None:
-        raise RuntimeError("renameat2 is required for collision-safe publication")
+        _publish_manifest_last(source, destination)
+        return
     result = renameat2(
         -100,
         os.fsencode(source),
@@ -1175,6 +1211,9 @@ def _publish_no_replace(source: Path, destination: Path) -> None:
     error = ctypes.get_errno()
     if error == errno.EEXIST:
         raise FileExistsError(f"analysis destination exists: {destination}")
+    if error in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
+        _publish_manifest_last(source, destination)
+        return
     raise OSError(error, os.strerror(error), str(destination))
 
 
