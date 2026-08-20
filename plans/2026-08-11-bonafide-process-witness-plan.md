@@ -642,9 +642,18 @@ cleaner. Optional absence-aware importance profiles, hierarchical weights, posit
 identities, robust aggregation, or support thresholds are explicitly modified methods and enter
 only as named repair/sensitivity conditions after the unmodified conditions are recorded.
 
-To evaluate global-atlas adequacy, fit an equal-budget composition series from the same saved trace
-bank. The exact viable cells and counts freeze after the graph-blind annotation-yield inventory,
-but before any cluster or label output is opened. The intended progression is:
+To evaluate global-atlas adequacy, run two orthogonal ordered ablation series from the same saved
+trace bank. The **semantic-composition stair** holds the total admitted target-context evidence and
+balancing rules approximately fixed while increasing semantic diversity. The **evidence-support
+stair** holds one declared semantic composition fixed while varying the hierarchical support profile
+of independent prompt cells, responses per prompt, and targets per response or event. Do not reduce
+that support profile to one graph count: additional rollouts and targets refine evidence inside an
+observed prompt but do not create independent prompts. Scientific target-context evidence and
+variable tracing compute cost are also separate budgets.
+
+The exact viable semantic cells, composition levels, support tiers, and counts freeze after the
+graph-blind annotation-yield inventory, but before any cluster or label output is opened. The
+intended semantic-composition progression is:
 
 1. one well-supported process signature at one matched role;
 2. the same process signature across roles or representations;
@@ -655,10 +664,76 @@ but before any cluster or label output is opened. The intended progression is:
 7. a separately named nuisance-contamination sensitivity that injects actual
    `surface_reference` contexts only after the primary process-only state freezes.
 
-Hold total contexts and prompt/response contribution fixed within each direct comparison. Sample
-hierarchically by prompt, response, process event, then token; adjacent subtokens from one event are
-not independent contexts. All sibling completions of one prompt stay in the same evaluation fold.
-Count prompt-level support and use prompt-held-out projection for semantic evaluation.
+Within each direct semantic-composition comparison, hold total target contexts and prompt/response
+contribution fixed. This estimates the operational effect of greater heterogeneity at fixed evidence
+budget, including the resulting reduction in per-cell support. The evidence-support stair then
+separately varies prompt breadth, response replication, and target density under a fixed semantic
+selection so their effects and limited substitutability can be measured. Same-composition,
+prompt-blocked refits provide the finite-sample perturbation reference for both stairs; they are
+overlapping resamples from one finite prompt population, not new independent experiments.
+
+Sample hierarchically by prompt, response, process event, then token; adjacent subtokens from one
+event are not independent contexts. All sibling completions of one prompt stay in the same
+evaluation fold. Count prompt-level support and use prompt-held-out projection for semantic
+evaluation.
+
+Quality follows a conditional chain of evidence under the declared Step-1 assumption that the
+admitted T5 traces contain the information needed for this adequacy study. **Cluster-retention
+quality** measures how much of the admitted trace evidence survives affinity aggregation, global
+partitioning, and projection into target-local cluster graphs, with losses localized by mechanism,
+semantic composition, and support profile. **Description-fidelity quality** measures whether a
+label faithfully summarizes the evidence available for its already frozen cluster at an
+appropriately broad or specific level, including calibrated abstention. The labeler may help
+interpret the practical importance of clustering measurements, but it cannot repair a distinction
+that the frozen clustering destroyed or authorize changing that clustering. The complete atlas is
+adequate only when cluster retention and description fidelity are jointly adequate; actual motif
+utility remains a later Step-2/Step-3 question.
+
+The first outcome-bearing report may be an **exploratory adequacy characterization** rather than an
+immediate pass/fail gate. Before opening outcomes, freeze the first-pass measurement registry,
+including formulas, aggregation, nulls, support accounting, and allowed anchor-selection rules.
+Report the resulting quality vectors and uncertainty across the semantic-composition and
+evidence-support matrix without requiring an already justified universal threshold. Additional
+metrics, engineered degradation controls, or interpretations developed after seeing those results
+must be versioned as outcome-informed exploratory analyses rather than silently substituted into
+the registry.
+
+Exploratory results may be used to design evidence-degradation controls, select predeclared
+calibration anchors, and propose practical margins. They cannot also provide independent validation
+of the resulting rule. A later **confirmatory adequacy gate** must freeze its score interpretation,
+margins, and `robust`, `brittle`, or `inconclusive` rule before applying it to prompt-blocked folds,
+cells, or new data that were not used to invent or calibrate that rule. If no such confirmation
+evidence remains, the study may report a detailed exploratory quality surface but not a validated
+adequacy verdict.
+
+#### Adequacy design discussion checklist
+
+- [x] **Two-stair architecture and terminology:** separate the semantic-composition stair from the
+  evidence-support stair, retain the full prompt/response/target support profile, and keep scientific
+  evidence budget distinct from trace compute cost.
+- [x] **Quality construct:** treat atlas quality as the conjunction of cluster-retention quality and
+  description-fidelity quality under an explicit tracing-sufficiency assumption; defer motif
+  utility, permit threshold-free exploratory characterization, and require unopened evidence for a
+  later confirmatory adequacy gate.
+- [ ] **Fine-grained semantic classes:** freeze the independent annotation axes and definitions,
+  distinguish genuinely simultaneous classes from uncertain admissible alternatives, and specify
+  how relevance ordering or ambiguity may be used without treating it as calibrated probability.
+- [ ] **Exact stair construction:** use the observed graph-blind annotation support to freeze viable
+  semantic-composition levels, prompt/response/event matching rules, and evidence-support tiers for
+  independent prompt breadth, responses per prompt, and targets per response or event.
+- [ ] **Failure-point metrics and aggregation:** formalize co-occurrence censoring, conditional
+  similarity heterogeneity, bridge dependence, hard-assignment/position aliasing, projection
+  coverage, graph-level recurrence/specificity, and description dilution; then define how noisy
+  pair-level evidence rolls up through cluster, event, response, prompt, and semantic-cell levels.
+- [ ] **Reference conditions and inference:** freeze same-composition perturbation references,
+  mechanism-specific nulls, prompt-blocked folds/resampling, uncertainty summaries, and the treatment
+  of overlapping refits from the finite prompt population.
+- [ ] **Algorithm conditions and decision rule:** freeze the paper-faithful versus released-code
+  relationship, label-blind cluster-count/sensitivity grid, admission and stopping rules, practical
+  margins, and the exact `robust`, `brittle`, or `inconclusive` gate.
+- [ ] **Executable protocol freeze:** only after the preceding items agree with the observed
+  annotation/trace schema, freeze manifests, formulas, software inputs, report schemas, and the
+  allowed order for opening outcomes.
 
 Use a predeclared cluster-count sweep rather than assuming the paper's task-specific value transfers
 to this broader outright-task corpus. Increasing `k` is a complementary resolution choice, not a
@@ -780,9 +855,11 @@ graph-blind human audit of balanced samples, conflicts, and low-confidence cases
 Establish the natural perturbation floor first using repeated clustering seeds, independently
 sampled prompt-balanced panels with identical semantic composition, prompt-blocked resampling,
 frozen repeat traces, label/exemplar resampling, matched surface references, and prompt/event-
-blocked semantic permutations. Refine and freeze the exact metrics after trace artifacts establish
-their available occurrence/profile fields and coverage, but before opening any cluster assignments,
-generated labels, composition comparison, or dense trajectory. Candidate measurements include
+blocked semantic permutations. Refine and freeze the first-pass measurement registry after trace
+artifacts establish their available occurrence/profile fields and coverage, but before opening any
+cluster assignments, generated labels, composition comparison, or dense trajectory. This registry
+does not itself freeze a pass threshold; later outcome-informed measurements remain exploratory and
+versioned until tested through a confirmatory gate. Candidate measurements include
 shared-neuron assignment stability, held-out semantic concentration and prediction, label
 calibration and over-specificity, prompt-level support, unassigned attribution mass, and direct
 operation/role collision audits for recurring signed neurons.

@@ -48,6 +48,21 @@ The reusable collection of independent target-local T5 graphs selected to evalua
 panels, without being optimized for a later motif hypothesis.
 _Avoid_: Witness corpus, dense trajectory corpus
 
+**Semantic-composition stair**:
+An ordered adequacy comparison that holds total target-context evidence approximately fixed while
+increasing the declared semantic diversity of the atlas-fit corpus.
+_Avoid_: Dataset-size ablation, broad-versus-narrow anecdote
+
+**Evidence-support stair**:
+An ordered adequacy comparison that holds semantic composition fixed while varying the hierarchical
+support profile of prompt cells, responses per prompt, and targets per response or event.
+_Avoid_: Token-budget sweep, independent-context count
+
+**Evidence-support profile**:
+The ordered tuple of independent prompt cells, responses per prompt, and target contexts per
+response or event; profiles with the same total graph count are not scientifically interchangeable.
+_Avoid_: Sample size, compute budget
+
 **Coarse sampling tag**:
 One mutually exclusive, graph-blind region category used only to enrich the first tracing-wave
 sample. The allowed tags are active task work, evaluation or revision, intermediate commitment,
@@ -91,6 +106,41 @@ _Avoid_: Retry, silent extension, outcome-guided target addition
 A bounded natural-language summary or abstention for one fitted cluster, evaluated separately from
 the cluster assignment itself.
 _Avoid_: Text annotation, neuron ground truth, witness
+
+**Evidence-degradation calibration**:
+A labeler test in which controlled losses of cluster-evidence resolution should produce
+correspondingly broader descriptions or abstention rather than equally specific process claims.
+_Avoid_: Bad-cluster labeling, label quality by confidence
+
+**Unsupported description specificity**:
+A cluster description that asserts a process distinction finer than the frozen cluster evidence
+and held-out occurrences support.
+_Avoid_: Detailed label, confident label
+
+**Cluster-retention quality**:
+The extent to which a frozen clustering and its projected graphs preserve the measured distinctions
+and relations present in the admitted trace evidence.
+_Avoid_: Cluster interpretability, attractive partition
+
+**Description-fidelity quality**:
+The extent to which a cluster description faithfully and at appropriate specificity summarizes
+the evidence available for its frozen cluster, including calibrated abstention.
+_Avoid_: Label confidence, label detail
+
+**Atlas quality**:
+The joint adequacy of one frozen cluster mapping, its projected graph representation, and its
+bounded cluster descriptions for the declared corpus composition and downstream use.
+_Avoid_: Motif quality, causal validity
+
+**Exploratory adequacy characterization**:
+An outcome-open analysis that measures and helps interpret atlas-quality dimensions without an
+independently validated pass threshold.
+_Avoid_: Adequacy verdict, failed confirmation
+
+**Confirmatory adequacy gate**:
+A frozen decision rule applied to evidence not used to invent or calibrate that rule, yielding the
+declared robust, brittle, or inconclusive verdict.
+_Avoid_: Retrospective threshold, exploratory pass
 
 **Context-conditioned role aliasing**:
 Loss of distinctions when one global signed-neuron assignment represents occurrences whose

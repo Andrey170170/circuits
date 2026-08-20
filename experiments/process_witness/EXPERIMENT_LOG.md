@@ -494,3 +494,71 @@ v6 restores exact v3 request bytes while retaining the corrected fresh-authoriza
 is read-only on VAST, but VAST's 60-day inactivity purge means a verified durable copy is still
 required before scientific reliance. No provider call, upload, campaign initialization, or Batch
 submission occurred during this work.
+
+## 2026-08-18 — Two-stair adequacy ablation structure accepted
+
+The global-atlas adequacy study now has two orthogonal ordered ablation series. The
+**semantic-composition stair** holds total target-context evidence approximately fixed while
+increasing semantic diversity. The **evidence-support stair** holds one semantic selection fixed
+while varying the hierarchical support profile of independent prompt cells, responses per prompt,
+and targets per response or event. Equal total graph counts do not make support profiles
+scientifically interchangeable, and variable trace compute cost remains separate from scientific
+evidence budget.
+
+Same-composition prompt-blocked refits provide the finite-sample perturbation reference for both
+stairs. They remain overlapping resamples of the frozen finite prompt population, not independent
+replicate corpora. All sibling responses from one prompt remain in one evaluation fold, and denser
+within-response extraction cannot be represented as additional independent prompt evidence.
+
+This decision freezes only the two-stair architecture and terminology. Exact quality dimensions,
+metric formulas and aggregation, fine-grained semantic axes and admissible alternatives, viable
+composition cells, support tiers, null/reference conditions, paper-faithful versus released-code
+gate relationship, and final decision margins remain open for discussion before any cluster or
+label outcome is opened.
+
+## 2026-08-20 — Adequacy quality construct and exploratory/confirmatory boundary accepted
+
+Atlas quality is now defined as the conjunction of **cluster-retention quality** and
+**description-fidelity quality**, conditional on the Step-1 assumption that admitted T5 traces
+contain the information needed for the adequacy study. Cluster-retention measurements localize how
+much admitted trace evidence is lost through aggregation, partitioning, and projection.
+Description-fidelity measurements test whether labels stay within the evidence available for their
+frozen clusters, including broadening or abstaining when controlled degradation removes resolution.
+Actual motif utility remains a later experimental layer.
+
+The first outcome-bearing adequacy analysis may report a continuous exploratory quality surface
+without a settled universal pass threshold. Its first-pass measurement registry and allowed anchor
+selection freeze before outcomes open. Outcome-informed metrics, degradation controls, score
+interpretations, and proposed margins remain explicitly exploratory and versioned. They cannot be
+promoted to an independently validated `robust`, `brittle`, or `inconclusive` gate unless the rule
+is frozen and applied to prompt-blocked cells, folds, or new data not used to invent or calibrate it.
+
+This decision does not freeze the metric formulas, semantic classes, exact matrix cells, support
+tiers, anchors, numerical margins, clustering condition, atlas, labels, motif, witness, or causal
+claim.
+
+## 2026-08-20 — Coarse campaign analysis and candidate-only sampling designs frozen
+
+The full coarse-proposal campaign finished at a receipt-derived cost of $30.283011425. Effective
+evidence contains 37,656 successful physical requests out of 37,671; 15 recovery outputs remain
+strictly invalid across 12 windows and 12 responses. The strict full-coverage finalizer therefore
+remains failed closed. The additive `post-campaign-analysis-v1` artifact preserves that missingness
+and defines a conservative exact-ID salvage lane that never maps an unknown unit ID. Under that
+lane, 74,848/74,860 provider-pending atoms retain three votes and 12 remain explicitly incomplete.
+
+The separately versioned `post-campaign-sampling-v2` artifact freezes three candidate sampling
+designs—balanced, process weighted, and uncertainty weighted—at expected unique-position budgets
+of 30k, 35k, and 40k. All use overlapping mechanisms, exact union probabilities and weights,
+fragment-component PSUs, and fixed nested streams. Its manifest self-hash is
+`5d2a49a14123ed819ab404c3da8b4633eab55d8e30cf6996c7e9544c3bfc7089`; the source commit is
+`1399ccf578f3f088b1c05e4b464a060de59e61d1`. Independent strict review verified 94,479 PSUs,
+94,546 atoms, 842,007 positions, all five frame censuses, nine analytic frontiers, 314,649 realized
+candidate rows, nested identities, read-only modes, copied Git blobs, and no probability or
+candidate-status violations.
+
+No sampling policy or target set is selected. All candidates retain `resource_qualified=null`:
+only 102,019/842,007 positions lie inside the previously measured <=1,268-token envelope, and the
+strict T5 receipt still needs to be copied and bound. The audit supplement freezes diagnostic pool
+membership but no reviewer sample, estimator, or acceptance threshold. No tracing, GPU job, or
+provider request was launched during analysis. Both artifacts remain on purgeable VAST and require
+a verified durable copy before long-term scientific reliance.
