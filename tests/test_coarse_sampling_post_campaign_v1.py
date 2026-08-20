@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from circuits.analysis.bonafide import coarse_sampling_post_campaign_v1 as post_campaign
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.analysis.bonafide.coarse_sampling_post_campaign_v1 import (
     load_frozen_post_campaign_analysis,
@@ -173,6 +174,23 @@ def test_frozen_loader_validates_without_source_roots(tmp_path: Path) -> None:
 
     assert loaded["manifest"] == manifest
     assert loaded["completion_report"]["census"]["physical_requests"] == 37_671
+
+
+def test_frozen_loader_streams_large_candidate_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "artifact"
+    _write_minimal_artifact(root)
+    original = post_campaign.read_jsonl
+
+    def reject_bulk_candidate_read(path: Path) -> list[dict[str, object]]:
+        if path.name == "candidate-inclusion-probabilities.jsonl":
+            raise AssertionError("candidate table must be validated as a stream")
+        return original(path)
+
+    monkeypatch.setattr(post_campaign, "read_jsonl", reject_bulk_candidate_read)
+
+    load_frozen_post_campaign_analysis(root)
 
 
 def test_frozen_loader_rejects_tamper_and_mode_drift(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import gc
 import hashlib
 import json
 import math
@@ -136,6 +137,13 @@ def _jsonl_bytes(rows: Iterable[Mapping[str, Any]]) -> bytes:
         (json.dumps(dict(row), sort_keys=True, separators=(",", ":")) + "\n").encode()
         for row in rows
     )
+
+
+def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                yield json.loads(line)
 
 
 def _hashed(value: Mapping[str, Any], field: str) -> dict[str, Any]:
@@ -350,7 +358,7 @@ def _salvage_exact_ids(
 
 
 def _provider_votes(
-    events: Sequence[Mapping[str, Any]],
+    events: Iterable[Mapping[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
     votes: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
@@ -710,33 +718,26 @@ def _candidate_probabilities(
             }
 
 
-def _headline(proposals: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    provider = [row for row in proposals if row["assignment_route"] == "openai_pending"]
-    complete_provider = [
-        row for row in provider if row["proposal_status"] == "complete"
-    ]
+def _headline(proposals: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    coverage_counts: Counter[int] = Counter()
+    broad_counts: Counter[str] = Counter()
+    fine_agreement: Counter[str] = Counter()
+    broad_agreement: Counter[str] = Counter()
+    for row in proposals:
+        broad_counts[str(row["broad_majority"])] += 1
+        if row["assignment_route"] != "openai_pending":
+            continue
+        coverage_counts[int(row["replica_coverage"])] += 1
+        if row["proposal_status"] == "complete":
+            fine_agreement[str(row["fine_agreement_pattern"])] += 1
+            broad_agreement[str(row["broad_agreement_pattern"])] += 1
     return {
         "provider_vote_coverage": {
-            str(coverage): sum(row["replica_coverage"] == coverage for row in provider)
-            for coverage in range(4)
+            str(coverage): coverage_counts[coverage] for coverage in range(4)
         },
-        "broad_counts": dict(
-            sorted(Counter(str(row["broad_majority"]) for row in proposals).items())
-        ),
-        "fine_agreement": dict(
-            sorted(
-                Counter(
-                    str(row["fine_agreement_pattern"]) for row in complete_provider
-                ).items()
-            )
-        ),
-        "broad_agreement": dict(
-            sorted(
-                Counter(
-                    str(row["broad_agreement_pattern"]) for row in complete_provider
-                ).items()
-            )
-        ),
+        "broad_counts": dict(sorted(broad_counts.items())),
+        "fine_agreement": dict(sorted(fine_agreement.items())),
+        "broad_agreement": dict(sorted(broad_agreement.items())),
     }
 
 
@@ -1177,14 +1178,16 @@ def _publish_no_replace(source: Path, destination: Path) -> None:
     raise OSError(error, os.strerror(error), str(destination))
 
 
+def _iter_exact_rows(path: Path) -> Iterable[tuple[int, bytes, dict[str, Any]]]:
+    with path.open("rb") as handle:
+        for ordinal, line in enumerate(handle):
+            if not line.endswith(b"\n"):
+                raise ValueError(f"JSONL source lacks terminal newline: {path}")
+            yield ordinal, line, json.loads(line)
+
+
 def _exact_rows(path: Path) -> list[tuple[int, bytes, dict[str, Any]]]:
-    raw = path.read_bytes()
-    if raw and not raw.endswith(b"\n"):
-        raise ValueError(f"JSONL source lacks terminal newline: {path}")
-    return [
-        (ordinal, line, json.loads(line))
-        for ordinal, line in enumerate(raw.splitlines(keepends=True))
-    ]
+    return list(_iter_exact_rows(path))
 
 
 def _copy_campaign_evidence(
@@ -1598,6 +1601,14 @@ def build_post_campaign_analysis(
             "manifest_sha256",
         )
         atomic_write_json(temporary / "manifest.json", manifest)
+        del bundle, continuation, effective, source_validation, units
+        del request_by_id, residual_events, recovery_events, recovery_ids
+        del pre_recovery_events, superseded, non_success
+        del strict_votes, salvage_additions, exact_cover, salvage_votes
+        del strict_proposals, proposals, contexts, context_by_id, psus, frontiers
+        del strict_missing, salvage_missing, blind, reveal, audit_plan
+        del tables, event_precedence, raw_line_ledger, omission
+        gc.collect()
         _readonly_tree(temporary)
         load_frozen_post_campaign_analysis(temporary)
         _publish_no_replace(temporary, destination)
@@ -1621,47 +1632,62 @@ def _validate_readonly_modes(root: Path) -> None:
 
 def _validate_sampling_design(root: Path) -> None:
     units = read_jsonl(root / "source-evidence/bundle/units.jsonl")
-    psus = read_jsonl(root / "sampling-psus.jsonl")
     unit_ids = [str(row["unit_id"]) for row in units]
-    observed = [str(unit_id) for psu in psus for unit_id in psu["member_unit_ids"]]
-    if observed != unit_ids or len(observed) != len(set(observed)):
+    psu_id_by_unit: dict[str, str] = {}
+    by_response: dict[str, list[tuple[int, bool, str]]] = defaultdict(list)
+    unit_cursor = 0
+    for psu in _iter_jsonl(root / "sampling-psus.jsonl"):
+        psu_id = str(psu["psu_id"])
+        for member in psu["member_unit_ids"]:
+            unit_id = str(member)
+            if (
+                unit_cursor >= len(unit_ids)
+                or unit_ids[unit_cursor] != unit_id
+                or unit_id in psu_id_by_unit
+            ):
+                raise ValueError("sampling PSU ordered unit coverage drift")
+            psu_id_by_unit[unit_id] = psu_id
+            unit_cursor += 1
+        by_response[str(psu["response_id"])].append(
+            (
+                int(psu["response_psu_index"]),
+                bool(psu.get("incomplete_hard_barrier")),
+                str(psu.get("correlation_run_id")),
+            )
+        )
+    if unit_cursor != len(unit_ids):
         raise ValueError("sampling PSU ordered unit coverage drift")
-    psu_by_unit = {
-        str(unit_id): psu for psu in psus for unit_id in psu["member_unit_ids"]
-    }
     fragments: dict[str, set[str]] = defaultdict(set)
     for unit in units:
         fragment = unit.get("fragment_of")
         if fragment is not None:
-            fragments[str(fragment)].add(
-                str(psu_by_unit[str(unit["unit_id"])]["psu_id"])
-            )
+            fragments[str(fragment)].add(psu_id_by_unit[str(unit["unit_id"])])
     if any(len(psu_ids) != 1 for psu_ids in fragments.values()):
         raise ValueError("fragment PSU partition drift")
-    by_response: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
-    for psu in psus:
-        by_response[str(psu["response_id"])].append(psu)
     for response_psus in by_response.values():
-        ordered = sorted(response_psus, key=lambda row: int(row["response_psu_index"]))
-        for index, psu in enumerate(ordered):
-            if not psu.get("incomplete_hard_barrier"):
+        ordered = sorted(response_psus)
+        if [row[0] for row in ordered] != list(range(len(ordered))):
+            raise ValueError("sampling PSU response index drift")
+        for index, (_psu_index, incomplete, correlation_run_id) in enumerate(ordered):
+            if not incomplete:
                 continue
             for neighbor_index in (index - 1, index + 1):
-                if 0 <= neighbor_index < len(ordered) and ordered[neighbor_index].get(
-                    "correlation_run_id"
-                ) == psu.get("correlation_run_id"):
+                if (
+                    0 <= neighbor_index < len(ordered)
+                    and ordered[neighbor_index][2] == correlation_run_id
+                ):
                     raise ValueError("incomplete PSU hard-barrier drift")
-    candidate_rows = read_jsonl(root / "candidate-inclusion-probabilities.jsonl")
-    by_candidate: dict[tuple[str, str, str], list[Mapping[str, Any]]] = defaultdict(
-        list
-    )
-    for candidate in candidate_rows:
+    seen_candidate_units: set[str] = set()
+    for candidate in _iter_jsonl(root / "candidate-inclusion-probabilities.jsonl"):
+        unit_id = str(candidate["unit_id"])
         if (
-            str(candidate["unit_id"]) not in psu_by_unit
-            or str(psu_by_unit[str(candidate["unit_id"])]["psu_id"])
-            != candidate["psu_id"]
+            unit_id not in psu_id_by_unit
+            or psu_id_by_unit[unit_id] != candidate["psu_id"]
+            or unit_id in seen_candidate_units
         ):
             raise ValueError("candidate ownership or policy-status drift")
+        seen_candidate_units.add(unit_id)
+        by_policy: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
         for row in candidate["designs"]:
             if (
                 row.get("selected_or_frozen_trace_policy") is not False
@@ -1686,25 +1712,21 @@ def _validate_sampling_design(root: Path) -> None:
                 or not math.isclose(weight, 1.0 / marginal, rel_tol=1e-12, abs_tol=0)
             ):
                 raise ValueError("candidate numeric inclusion-probability drift")
-            by_candidate[
-                (
-                    str(row["policy"]),
-                    str(candidate["psu_id"]),
-                    str(candidate["unit_id"]),
-                )
-            ].append(row)
-    for rows in by_candidate.values():
-        ordered = sorted(rows, key=lambda row: int(row["nominal_expected_budget"]))
-        if [int(row["nominal_expected_budget"]) for row in ordered] != [
-            30_000,
-            35_000,
-            40_000,
-        ] or any(
-            float(later["group_inclusion_probability"])
-            < float(earlier["group_inclusion_probability"])
-            for earlier, later in pairwise(ordered)
-        ):
-            raise ValueError("candidate nesting drift")
+            by_policy[str(row["policy"])].append(row)
+        for rows in by_policy.values():
+            ordered = sorted(rows, key=lambda row: int(row["nominal_expected_budget"]))
+            if [int(row["nominal_expected_budget"]) for row in ordered] != [
+                30_000,
+                35_000,
+                40_000,
+            ] or any(
+                float(later["group_inclusion_probability"])
+                < float(earlier["group_inclusion_probability"])
+                for earlier, later in pairwise(ordered)
+            ):
+                raise ValueError("candidate nesting drift")
+    if seen_candidate_units != set(psu_id_by_unit):
+        raise ValueError("candidate ownership or policy-status drift")
 
 
 def _compare_jsonl_rows(
@@ -1724,102 +1746,146 @@ def _compare_jsonl_rows(
 
 
 def _validate_embedded_event_sources(root: Path) -> None:
-    precedence = read_jsonl(root / "source-evidence/event-precedence-ledger.jsonl")
-    if len(precedence) != 37_671:
-        raise ValueError("embedded event precedence census drift")
+    effective_hash_by_id: dict[str, str] = {}
+    for event in _iter_jsonl(root / "source-evidence/effective-events.jsonl"):
+        request_id = str(event["request_id"])
+        if request_id in effective_hash_by_id:
+            raise ValueError("embedded effective event identity collision")
+        effective_hash_by_id[request_id] = canonical_sha256(event)
+    sources: dict[Path, dict[int, tuple[str, str, bool]]] = defaultdict(dict)
+    ledger_request_ids: set[str] = set()
+    precedence_count = 0
     replacement_count = 0
-    effective_by_id = {
-        str(row["request_id"]): row
-        for row in read_jsonl(root / "source-evidence/effective-events.jsonl")
-    }
-    event_source_cache: dict[Path, list[tuple[int, bytes, dict[str, Any]]]] = {}
-    for row in precedence:
+    for row in _iter_jsonl(root / "source-evidence/event-precedence-ledger.jsonl"):
+        precedence_count += 1
         request_id = str(row["request_id"])
+        if request_id in ledger_request_ids:
+            raise ValueError("embedded event precedence identity collision")
+        ledger_request_ids.add(request_id)
         candidates = [*row["superseded_sources"], row["effective_source"]]
         replacement_count += int(row["replacement_count"])
         if row["replacement_count"] != len(row["superseded_sources"]):
             raise ValueError("embedded event replacement ledger drift")
-        effective_event: dict[str, Any] | None = None
         for binding_index, binding in enumerate(candidates):
             path = root / binding["source_path"]
-            if path not in event_source_cache:
-                event_source_cache[path] = _exact_rows(path)
-            source_rows = event_source_cache[path]
             ordinal = int(binding["source_ordinal"])
-            if ordinal >= len(source_rows):
-                raise ValueError("embedded event source ordinal drift")
-            _index, line, event = source_rows[ordinal]
+            if ordinal in sources[path]:
+                raise ValueError("embedded event source ordinal collision")
+            sources[path][ordinal] = (
+                request_id,
+                str(binding["source_line_sha256"]),
+                binding_index == len(candidates) - 1,
+            )
+    if (
+        precedence_count != 37_671
+        or replacement_count != 74
+        or ledger_request_ids != set(effective_hash_by_id)
+    ):
+        raise ValueError("embedded event precedence census drift")
+    for path, expected_by_ordinal in sources.items():
+        seen_ordinals: set[int] = set()
+        for ordinal, line, event in _iter_exact_rows(path):
+            expected = expected_by_ordinal.get(ordinal)
+            if expected is None:
+                continue
+            request_id, line_sha256, is_effective = expected
             if (
                 str(event["request_id"]) != request_id
-                or hashlib.sha256(line).hexdigest() != binding["source_line_sha256"]
+                or hashlib.sha256(line).hexdigest() != line_sha256
+                or (
+                    is_effective
+                    and canonical_sha256(event) != effective_hash_by_id[request_id]
+                )
             ):
                 raise ValueError("embedded event source line drift")
-            if binding_index == len(candidates) - 1:
-                effective_event = event
-        if effective_event is None or canonical_sha256(
-            effective_event
-        ) != canonical_sha256(effective_by_id[request_id]):
-            raise ValueError("embedded effective event precedence drift")
-    if replacement_count != 74:
-        raise ValueError("embedded superseded event census drift")
-    raw_ledger = read_jsonl(root / "source-evidence/non-success-raw-line-ledger.jsonl")
-    if len(raw_ledger) != 89:
-        raise ValueError("embedded non-success raw row census drift")
-    raw_source_cache: dict[
-        Path, tuple[str, int, list[tuple[int, bytes, dict[str, Any]]]]
-    ] = {}
-    for binding in raw_ledger:
+            seen_ordinals.add(ordinal)
+        if seen_ordinals != set(expected_by_ordinal):
+            raise ValueError("embedded event source ordinal drift")
+
+    raw_sources: dict[Path, dict[int, tuple[str, str, str, int]]] = defaultdict(dict)
+    raw_count = 0
+    for binding in _iter_jsonl(
+        root / "source-evidence/non-success-raw-line-ledger.jsonl"
+    ):
+        raw_count += 1
         path = root / binding["raw_file_path"]
-        if path not in raw_source_cache:
-            raw_source_cache[path] = (
-                file_sha256(path),
-                path.stat().st_size,
-                _exact_rows(path),
-            )
-        raw_sha256, raw_bytes, rows = raw_source_cache[path]
         ordinal = int(binding["raw_line_ordinal"])
-        if (
-            raw_sha256 != binding["raw_file_sha256"]
-            or raw_bytes != binding["raw_file_bytes"]
-            or ordinal >= len(rows)
-            or str(rows[ordinal][2]["custom_id"]) != binding["request_id"]
-            or hashlib.sha256(rows[ordinal][1]).hexdigest()
-            != binding["raw_line_sha256"]
+        if ordinal in raw_sources[path]:
+            raise ValueError("embedded non-success raw ordinal collision")
+        raw_sources[path][ordinal] = (
+            str(binding["request_id"]),
+            str(binding["raw_line_sha256"]),
+            str(binding["raw_file_sha256"]),
+            int(binding["raw_file_bytes"]),
+        )
+    if raw_count != 89:
+        raise ValueError("embedded non-success raw row census drift")
+    for path, expected_by_ordinal in raw_sources.items():
+        file_bindings = {
+            (raw_sha256, raw_bytes)
+            for _request_id, _line_sha256, raw_sha256, raw_bytes in expected_by_ordinal.values()
+        }
+        if len(file_bindings) != 1 or (file_sha256(path), path.stat().st_size) != next(
+            iter(file_bindings)
         ):
-            raise ValueError("embedded non-success raw provider line drift")
+            raise ValueError("embedded non-success raw provider file drift")
+        seen_ordinals: set[int] = set()
+        for ordinal, line, provider_row in _iter_exact_rows(path):
+            expected = expected_by_ordinal.get(ordinal)
+            if expected is None:
+                continue
+            request_id, line_sha256, _raw_sha256, _raw_bytes = expected
+            if (
+                str(provider_row["custom_id"]) != request_id
+                or hashlib.sha256(line).hexdigest() != line_sha256
+            ):
+                raise ValueError("embedded non-success raw provider line drift")
+            seen_ordinals.add(ordinal)
+        if seen_ordinals != set(expected_by_ordinal):
+            raise ValueError("embedded non-success raw provider ordinal drift")
 
 
 def _validate_independent_recomputation(
     root: Path, manifest: Mapping[str, Any], report: Mapping[str, Any]
 ) -> None:
     units = read_jsonl(root / "source-evidence/bundle/units.jsonl")
-    events = read_jsonl(root / "source-evidence/effective-events.jsonl")
-    residual = [row for row in events if row.get("validation_status") != "success"]
-    strict_votes = _provider_votes(events)
+    events_path = root / "source-evidence/effective-events.jsonl"
+    strict_votes = _provider_votes(_iter_jsonl(events_path))
+    residual = [
+        row
+        for row in _iter_jsonl(events_path)
+        if row.get("validation_status") != "success"
+    ]
     additions, diagnostics = _salvage_exact_ids(residual)
     salvage_votes = {unit_id: list(votes) for unit_id, votes in strict_votes.items()}
     for unit_id, votes in additions.items():
         salvage_votes.setdefault(unit_id, []).extend(votes)
-    strict = [
-        _proposal(unit, strict_votes.get(str(unit["unit_id"]), [])) for unit in units
-    ]
     primary = [
         _proposal(unit, salvage_votes.get(str(unit["unit_id"]), [])) for unit in units
     ]
-    _compare_jsonl_rows(root / "strict-proposals.jsonl", strict, "strict proposals")
+    _compare_jsonl_rows(
+        root / "strict-proposals.jsonl",
+        (_proposal(unit, strict_votes.get(str(unit["unit_id"]), [])) for unit in units),
+        "strict proposals",
+    )
     _compare_jsonl_rows(root / "proposals.jsonl", primary, "primary proposals")
     _compare_jsonl_rows(
         root / "exact-cover-diagnostics.jsonl", diagnostics, "exact-cover diagnostics"
     )
+    strict_headline = _headline(
+        _proposal(unit, strict_votes.get(str(unit["unit_id"]), [])) for unit in units
+    )
+    primary_headline = _headline(primary)
     if (
-        _headline(strict) != report["strict_proposals"]
+        strict_headline != report["strict_proposals"]
         or {
-            key: _headline(primary)[key]
+            key: primary_headline[key]
             for key in ("provider_vote_coverage", "broad_counts", "fine_agreement")
         }
         != report["conservative_exact_id_salvage"]
     ):
         raise ValueError("proposal summary independent recomputation drift")
+    del strict_votes, additions, salvage_votes, residual
     psus = _sampling_psus(units, primary)
     frontiers = _feasibility_frontiers(psus)
     _compare_jsonl_rows(root / "sampling-psus.jsonl", psus, "sampling PSUs")
@@ -1831,6 +1897,8 @@ def _validate_independent_recomputation(
         _candidate_probabilities(psus, frontiers),
         "candidate inclusion probabilities",
     )
+    del units, primary, psus, frontiers
+    gc.collect()
     contexts = read_jsonl(root / "source-evidence/response-contexts.jsonl")
     if len(contexts) != 188 or len({row["prompt_sha256"] for row in contexts}) != 47:
         raise ValueError("embedded response context census drift")
@@ -1842,6 +1910,7 @@ def _validate_independent_recomputation(
             != context["full_response_sha256"]
         ):
             raise ValueError("embedded response context hash drift")
+    del contexts
     audit_plan = _load_object(root / "audit-plan.json")
     _verify_self_hash(audit_plan, "audit_plan_sha256", "audit plan")
     blind_path = root / "blind-audit.jsonl"
@@ -1865,6 +1934,8 @@ def _validate_independent_recomputation(
         for row in reveal
     ):
         raise ValueError("audit reveal binding drift")
+    del blind, reveal
+    gc.collect()
     _validate_embedded_event_sources(root)
     source_manifest = _load_object(root / "source-evidence/bundle/manifest.json")
     _verify_self_hash(source_manifest, "manifest_sha256", "copied source bundle")
