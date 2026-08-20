@@ -369,6 +369,56 @@ def test_loader_rejects_rehashed_arbitrary_context_bins(
         )
 
 
+def test_loader_rejects_rehashed_self_consistent_live_census_drift(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, tokenizer = _source_fixture(tmp_path)
+    destination = tmp_path / "calibration-v1"
+    monkeypatch.setattr(
+        "circuits.analysis.bonafide.process_witness_resource_calibration_v1.load_frozen_post_campaign_sampling_v2",
+        lambda _root: {"manifest": json.loads((_root / "manifest.json").read_text())},
+    )
+    build_resource_calibration_v1(
+        sampling_v2_root=root,
+        destination=destination,
+        tokenizer=tokenizer,
+        system_prompt=SYSTEM_PROMPT,
+    )
+    manifest_path = destination / "manifest.json"
+    manifest_path.chmod(0o644)
+    manifest = json.loads(manifest_path.read_text())
+    runtime_census = manifest["runtime_tokenization_census"]
+    runtime_census["exact_responses"] -= 1
+    runtime_census["excluded_responses"] += 1
+    runtime_census["excluded_response_ids"] = sorted(
+        [*runtime_census["excluded_response_ids"], "exact-reserve-0"]
+    )
+    core = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    manifest["manifest_sha256"] = canonical_sha256(core)
+    _write_json(manifest_path, manifest)
+    manifest_path.chmod(0o444)
+
+    from circuits.analysis.bonafide import (
+        process_witness_resource_calibration_v1 as calibration,
+    )
+
+    original = calibration._exact_runtime_tokenization
+
+    def drift_one_exact_response(**kwargs):
+        if kwargs["document"]["response_id"] == "exact-reserve-0":
+            return None
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        calibration, "_exact_runtime_tokenization", drift_one_exact_response
+    )
+
+    with pytest.raises(ValueError, match="canonical runtime tokenization census drift"):
+        load_frozen_resource_calibration_v1(
+            destination, tokenizer=tokenizer, system_prompt=SYSTEM_PROMPT
+        )
+
+
 def test_launcher_forbids_requeue_and_resume_state() -> None:
     launcher = (
         Path(__file__).parents[1]

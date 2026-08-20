@@ -935,6 +935,19 @@ def load_frozen_resource_calibration_v1(
             excluded.append(response_id)
         else:
             exact[response_id] = value
+    observed_generation_census = (
+        len(documents) - len(non_generation),
+        len(exact),
+        len(excluded),
+    )
+    if (
+        len(documents) != EXPECTED_SOURCE_LITERAL_CENSUS["responses"]
+        or observed_generation_census != EXPECTED_GENERATION_CENSUS
+        or len(non_generation) != EXPECTED_NON_GENERATION_RESPONSES
+    ):
+        raise ValueError(
+            "resource calibration canonical runtime tokenization census drift"
+        )
     expected_census = {
         "source_responses": len(documents),
         "full_generation_responses": len(documents) - len(non_generation),
