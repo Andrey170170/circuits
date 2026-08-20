@@ -562,3 +562,27 @@ strict T5 receipt still needs to be copied and bound. The audit supplement freez
 membership but no reviewer sample, estimator, or acceptance threshold. No tracing, GPU job, or
 provider request was launched during analysis. Both artifacts remain on purgeable VAST and require
 a verified durable copy before long-term scientific reliance.
+
+## 2026-08-20 — Strict-T5 context calibration ladder launched
+
+The label-blind resource-calibration artifact freezes six ascending context waves with five fresh
+targets each. Every wave contains one target from each first-owner sampling mechanism and uses the
+same strict upstream summed-top-five, raw-logit-sum trace family for the frozen Qwen Thinking model
+and historical-continuation serialization. The selected total-context counts range from 254 to
+9,397 tokens. This is a method-development resource ladder, not a selected sampling policy or trace
+corpus, and its graph contents are not an adequacy, motif, witness, faithfulness, or causal result.
+
+The launchable `qualification-v3` artifact is bound to commit
+`6ba1d814c5263e993ca658ead1250d8e9d8dda29`, manifest self-hash
+`27dc60a58457832749f6698c8ed6de74afc10d23f9af4fa1e0a8b3edb0f4b935`, and manifest file SHA-256
+`86fad1dfe342982fdf968808bf705c14c459dfc85a4b7411dc0f15f8ebc5cbc4`. Independent strict replay
+reproduced 188 source responses, 186 generated responses, 177 exact historical token streams, nine
+excluded streams, and two non-generation records. The launcher forbids requeue and partial-wave
+resume, requires exactly five fresh completions, and fails closed on OOM, time, headroom, provenance,
+or accounting drift.
+
+The six Notchpeak jobs were submitted as the exact ascending `afterok` chain
+`14757308 -> 14757309 -> 14757310 -> 14757311 -> 14757312 -> 14757323`. Job `14757308` began on
+`notch370`; every higher wave remains dependency-blocked until the prior wave succeeds. Scheduler
+logs are written under the clean launch worktree's `logs/` directory, and trace artifacts are written
+under `/scratch/general/vast/u1653998/circuits/results/process_witness/resource-calibration-v1/traces-v1`.
