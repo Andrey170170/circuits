@@ -1,7 +1,8 @@
 # Coarse proposal-bank full-corpus continuation v1
 
-Status: **implementation validated offline; production build and provider submission not yet
-performed**.
+Status: **all ten primary tranches and the single failed-only recovery were collected; strict
+all-request finalization remains failed closed on 15 residual invalid outputs; additive analysis
+and sampling artifacts are frozen**.
 
 This is an additive continuation of the immutable v6 `shard-005` calibration. It does not alter or
 rerun the 6,433 valid calibration requests. It adopts the complete calibration receipt tree,
@@ -19,6 +20,22 @@ calibration revalidates hashes of its original v1 sources, so changing those fil
 the evidence being adopted. This module reuses v1 parsing, pricing, provider-validation, and
 write-or-verify primitives while defining a separately versioned receipt state machine for the new
 attempt topology.
+
+## Completed outcome
+
+All 31,224 continuation-primary requests and the inherited 6,447 calibration requests were
+processed. The one 74-request failed-only recovery resolved 59 failures and retained 15
+`invalid_output` rows. Effective coverage is therefore 37,656/37,671 successful physical requests;
+the residuals affect 12 windows and 12 responses. Receipt-derived campaign cost is
+$30.283011425.
+
+The strict finalizer remains correctly blocked because its contract requires every physical
+request to succeed and every provider-pending atom to have three votes. No strict proposal-bank
+artifact was created by weakening that contract. Instead, the additive immutable analysis at
+`post-campaign-analysis-v1` preserves strict missingness and a conservative exact-ID salvage lane,
+and `post-campaign-sampling-v2` freezes candidate-only sampling designs. See
+`PROCESS_WITNESS_COARSE_POST_CAMPAIGN_V1.md`. No trace policy or target set is selected, and tracing
+has not launched.
 
 ## Frozen operational policy
 
