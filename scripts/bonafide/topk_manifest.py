@@ -23,9 +23,15 @@ DISCOVERY_ONLY_PHASES = {
     "c1_policy_resource",
     "c2_scientific_utility",
     "step0_t5_smoke",
+    "process_witness_resource_calibration_v1",
 }
 MODEL_TOP5_PLUS_OBSERVED_COUNT_RULE = "5_if_observed_in_model_top5_else_6"
 STEP0_T5_SMOKE_PHASE = "step0_t5_smoke"
+PROCESS_WITNESS_RESOURCE_CALIBRATION_PHASE = "process_witness_resource_calibration_v1"
+STRICT_T5_PHASES = {
+    STEP0_T5_SMOKE_PHASE,
+    PROCESS_WITNESS_RESOURCE_CALIBRATION_PHASE,
+}
 HISTORICAL_THINKING_SERIALIZATION_MODE = "historical_thinking_continuation"
 
 
@@ -132,7 +138,7 @@ def validate_topk_manifest(manifest: Mapping[str, Any]) -> None:
     if phase not in allowed_phases:
         raise ValueError(f"unsupported top-k manifest phase: {phase!r}")
     trace_family = validate_trace_family(manifest.get("trace_family"))
-    if phase == STEP0_T5_SMOKE_PHASE:
+    if phase in STRICT_T5_PHASES:
         expected = {
             "candidate_policy_id": "model_top5",
             "candidate_count": 5,
@@ -141,38 +147,34 @@ def validate_topk_manifest(manifest: Mapping[str, Any]) -> None:
         for field, expected_value in expected.items():
             if trace_family.get(field) != expected_value:
                 raise ValueError(
-                    "step0_t5_smoke requires strict upstream T5 semantics: "
+                    "strict T5 phases require upstream T5 semantics: "
                     f"trace_family.{field}={expected_value!r}"
                 )
         teacher_forcing_contract = manifest.get("teacher_forcing_contract")
         if not isinstance(teacher_forcing_contract, Mapping):
             raise ValueError(
-                "step0_t5_smoke requires a teacher_forcing_contract object"
+                "strict T5 phases require a teacher_forcing_contract object"
             )
         if (
             teacher_forcing_contract.get("serialization_mode")
             != HISTORICAL_THINKING_SERIALIZATION_MODE
         ):
             raise ValueError(
-                "step0_t5_smoke requires historical thinking continuation serialization"
+                "strict T5 phases require historical thinking continuation serialization"
             )
         if (
             teacher_forcing_contract.get("token_identity_schema_version")
             != "adag.teacher-forced-token-identity.v1"
         ):
-            raise ValueError(
-                "step0_t5_smoke token identity schema version is unsupported"
-            )
+            raise ValueError("strict T5 token identity schema version is unsupported")
         if (
             teacher_forcing_contract.get("hash_encoding")
             != "sha256_utf8_canonical_json_integer_array_v1"
         ):
-            raise ValueError("step0_t5_smoke token hash encoding is unsupported")
+            raise ValueError("strict T5 token hash encoding is unsupported")
         system_hash = teacher_forcing_contract.get("system_prompt_sha256")
         if not isinstance(system_hash, str) or not SHA256.fullmatch(system_hash):
-            raise ValueError(
-                "step0_t5_smoke system_prompt_sha256 must be a SHA-256 digest"
-            )
+            raise ValueError("strict T5 system_prompt_sha256 must be a SHA-256 digest")
 
     source = manifest.get("source")
     if not isinstance(source, Mapping):
@@ -240,11 +242,11 @@ def validate_topk_manifest(manifest: Mapping[str, Any]) -> None:
             for field in ("example_id", "prompt", "response"):
                 if not isinstance(example.get(field), str) or not example[field]:
                     raise ValueError(f"top-k work item example.{field} is required")
-            if phase == STEP0_T5_SMOKE_PHASE:
+            if phase in STRICT_T5_PHASES:
                 system_prompt = example.get("system_prompt")
                 if not isinstance(system_prompt, str) or not system_prompt:
                     raise ValueError(
-                        "step0_t5_smoke example.system_prompt must be non-empty"
+                        "strict T5 example.system_prompt must be non-empty"
                     )
                 if (
                     hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
@@ -257,7 +259,7 @@ def validate_topk_manifest(manifest: Mapping[str, Any]) -> None:
                 token_identity = example.get("token_identity")
                 if not isinstance(token_identity, Mapping):
                     raise ValueError(
-                        "step0_t5_smoke example.token_identity must be an object"
+                        "strict T5 example.token_identity must be an object"
                     )
                 for field in (
                     "assistant_prefix_ids_sha256",
