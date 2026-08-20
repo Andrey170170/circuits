@@ -253,7 +253,7 @@ def validate_topk_manifest(manifest: Mapping[str, Any]) -> None:
                     != manifest["teacher_forcing_contract"]["system_prompt_sha256"]
                 ):
                     raise ValueError(
-                        "step0_t5_smoke example system prompt hash disagrees with "
+                        "strict T5 example system prompt hash disagrees with "
                         "teacher_forcing_contract"
                     )
                 token_identity = example.get("token_identity")

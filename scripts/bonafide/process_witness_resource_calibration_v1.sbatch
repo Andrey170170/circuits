@@ -12,6 +12,7 @@
 #SBATCH --account=marasovic-gpu-np
 #SBATCH --gres=gpu:a100:1
 #SBATCH --signal=B:USR1@300
+#SBATCH --no-requeue
 
 # Execute exactly one increasing-context strict-T5 resource-calibration wave.
 # Submit the six waves as afterok dependencies so a failed resource tier blocks
@@ -75,6 +76,25 @@ CONFIG="$CALIBRATION_ROOT/run-config.json"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${CIRCUITS_RESULTS_DIR}/process_witness/resource-calibration-v1/traces}"
 ATTEMPT_ID="${SLURM_JOB_ID}-r${SLURM_RESTART_COUNT:-0}"
 SUMMARY_JSONL="${SUMMARY_JSONL:-${ARTIFACT_ROOT}/execution-summaries/${WAVE}/${ATTEMPT_ID}.jsonl}"
+if [[ "$ARTIFACT_ROOT" != /* ]] || [[ "$SUMMARY_JSONL" != /* ]]; then
+    echo "ARTIFACT_ROOT and SUMMARY_JSONL must be absolute." >&2
+    exit 2
+fi
+
+"$PYTHON_BIN" -c \
+    'import json,pathlib,sys
+manifest=json.loads(pathlib.Path(sys.argv[1]).read_text())
+wave=sys.argv[2]
+artifact_root=pathlib.Path(sys.argv[3])
+summary_jsonl=pathlib.Path(sys.argv[4])
+family=manifest["trace_family"]["trace_family_id"]
+expected_wave_root=artifact_root/family/wave
+expected_summary_root=artifact_root/"execution-summaries"/wave
+blocked=[path for path in (expected_wave_root, expected_summary_root, summary_jsonl) if path.exists() or path.is_symlink()]
+if blocked:
+    rendered=", ".join(str(path) for path in blocked)
+    raise SystemExit(f"Refusing calibration wave resume; use a fresh ARTIFACT_ROOT: {rendered}")' \
+    "$MANIFEST" "$WAVE" "$ARTIFACT_ROOT" "$SUMMARY_JSONL"
 
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
@@ -129,8 +149,8 @@ manifest=json.loads(pathlib.Path(sys.argv[1]).read_text())
 wave=next(w for w in manifest["waves"] if w["wave_id"]==sys.argv[2])
 expected={item["artifact_id"] for item in wave["items"]}
 rows=[json.loads(line) for line in pathlib.Path(sys.argv[3]).read_text().splitlines() if line.strip()]
-bad=[row for row in rows if row.get("status") not in {"complete","skipped_complete"}]
-seen={row.get("source_width1_artifact_id") for row in rows if row.get("status") in {"complete","skipped_complete"}}
+bad=[row for row in rows if row.get("status") != "complete"]
+seen={row.get("source_width1_artifact_id") for row in rows if row.get("status") == "complete"}
 if bad or seen != expected or len(rows) != len(expected):
     raise SystemExit("calibration wave stopped, failed, or has incomplete accounting")' \
     "$MANIFEST" "$WAVE" "$SUMMARY_JSONL"

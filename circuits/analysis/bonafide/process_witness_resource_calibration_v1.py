@@ -47,6 +47,18 @@ DEFAULT_CONTEXT_BINS = (
     ("context-6001-8000", 6001, 8000),
     ("context-gt-8000", 8001, 10767),
 )
+EXPECTED_SOURCE_LITERAL_CENSUS = {
+    "responses": 188,
+    "assistant_prefix_token_count_min": 175,
+    "assistant_prefix_token_count_max": 2631,
+    "frame_positions": 842_007,
+    "rendered_total_context_token_count_min": 176,
+    "rendered_total_context_token_count_max": 10_767,
+    "within_measured_1268_envelope": 102_019,
+    "above_measured_1268_envelope": 739_988,
+}
+EXPECTED_GENERATION_CENSUS = (186, 177, 9)
+EXPECTED_NON_GENERATION_RESPONSES = 2
 CONTEXT_QUANTILES = (0.1, 0.3, 0.5, 0.7, 0.9)
 CALIBRATION_MECHANISMS = (
     "process_enrichment",
@@ -454,10 +466,6 @@ def build_resource_calibration_v1(
     destination: Path,
     tokenizer: Any,
     system_prompt: str = SYSTEM_PROMPT,
-    context_bins: Sequence[tuple[str, int, int]] = DEFAULT_CONTEXT_BINS,
-    expected_sampling_manifest_sha256: str = EXPECTED_SAMPLING_MANIFEST_SHA256,
-    expected_sampling_inventory_sha256: str = EXPECTED_SAMPLING_INVENTORY_SHA256,
-    expected_generation_census: tuple[int, int, int] | None = (186, 177, 9),
 ) -> dict[str, Any]:
     """Build one immutable, deterministic, label-blind actual-candidate ladder."""
 
@@ -467,15 +475,14 @@ def build_resource_calibration_v1(
     validated = load_frozen_post_campaign_sampling_v2(source)
     source_manifest = validated["manifest"]
     if (
-        source_manifest.get("manifest_sha256") != expected_sampling_manifest_sha256
-        or source_manifest.get("inventory_sha256") != expected_sampling_inventory_sha256
+        source_manifest.get("manifest_sha256") != EXPECTED_SAMPLING_MANIFEST_SHA256
+        or source_manifest.get("inventory_sha256") != EXPECTED_SAMPLING_INVENTORY_SHA256
     ):
         raise ValueError("sampling-v2 manifest/inventory source drift")
-    bins = tuple(
-        (str(name), int(lower), int(upper)) for name, lower, upper in context_bins
-    )
-    if not bins:
-        raise ValueError("resource calibration requires context bins")
+    bins = DEFAULT_CONTEXT_BINS
+    context_binding = _load_object(source / "context-source-binding.json")
+    if context_binding.get("literal_census") != EXPECTED_SOURCE_LITERAL_CENSUS:
+        raise ValueError("sampling-v2 canonical literal census drift")
 
     parent_root = Path(str(source_manifest["parent_v1_root"])).resolve()
     workstation = _load_object(
@@ -507,19 +514,18 @@ def build_resource_calibration_v1(
             excluded_response_ids.append(response_id)
         else:
             exact_tokenizations[response_id] = tokenized
-    if expected_generation_census is not None:
-        observed_generation_census = (
-            len(documents) - len(non_generation_response_ids),
-            len(exact_tokenizations),
-            len(excluded_response_ids),
+    observed_generation_census = (
+        len(documents) - len(non_generation_response_ids),
+        len(exact_tokenizations),
+        len(excluded_response_ids),
+    )
+    if observed_generation_census != EXPECTED_GENERATION_CENSUS:
+        raise ValueError(
+            "runtime exact-generation tokenization census drift: "
+            f"{observed_generation_census!r} != {EXPECTED_GENERATION_CENSUS!r}"
         )
-        if observed_generation_census != expected_generation_census:
-            raise ValueError(
-                "runtime exact-generation tokenization census drift: "
-                f"{observed_generation_census!r} != {expected_generation_census!r}"
-            )
-        if len(non_generation_response_ids) != 2:
-            raise ValueError("runtime non-generation response census drift")
+    if len(non_generation_response_ids) != EXPECTED_NON_GENERATION_RESPONSES:
+        raise ValueError("runtime non-generation response census drift")
 
     candidates = _candidate_union(
         _iter_gzip_jsonl(source / "realized-candidate-tiers.jsonl.gz")
@@ -635,7 +641,7 @@ def build_resource_calibration_v1(
         "schema_version": "bonafide-trace-benchmark/v1",
         "dataset": {
             "path": str(source),
-            "sha256": expected_sampling_manifest_sha256,
+            "sha256": EXPECTED_SAMPLING_MANIFEST_SHA256,
         },
         "tokenizer": {
             "model_id": MODEL_ID,
@@ -703,11 +709,9 @@ def build_resource_calibration_v1(
             "status": "frozen_resource_calibration_not_launched",
             "claim_boundary": CLAIM_BOUNDARY,
             "sampling_v2_root": str(source),
-            "sampling_v2_manifest_sha256": expected_sampling_manifest_sha256,
-            "sampling_v2_inventory_sha256": expected_sampling_inventory_sha256,
-            "source_literal_census": _load_object(
-                source / "context-source-binding.json"
-            )["literal_census"],
+            "sampling_v2_manifest_sha256": EXPECTED_SAMPLING_MANIFEST_SHA256,
+            "sampling_v2_inventory_sha256": EXPECTED_SAMPLING_INVENTORY_SHA256,
+            "source_literal_census": EXPECTED_SOURCE_LITERAL_CENSUS,
             "runtime_tokenization_census": {
                 "source_responses": len(documents),
                 "full_generation_responses": len(documents)
@@ -808,8 +812,20 @@ def load_frozen_resource_calibration_v1(
         or manifest.get("selected_sampling_policy") is not None
         or manifest.get("selected_trace_corpus") is not None
         or manifest.get("semantic_graph_inspection_performed") is not False
+        or manifest.get("sampling_v2_manifest_sha256")
+        != EXPECTED_SAMPLING_MANIFEST_SHA256
+        or manifest.get("sampling_v2_inventory_sha256")
+        != EXPECTED_SAMPLING_INVENTORY_SHA256
     ):
         raise ValueError("resource calibration claim/status drift")
+    expected_context_bins = [
+        {"wave_id": name, "lower_inclusive": lower, "upper_inclusive": upper}
+        for name, lower, upper in DEFAULT_CONTEXT_BINS
+    ]
+    if manifest.get("context_bins") != expected_context_bins:
+        raise ValueError("resource calibration canonical context-bin plan drift")
+    if manifest.get("source_literal_census") != EXPECTED_SOURCE_LITERAL_CENSUS:
+        raise ValueError("resource calibration canonical literal census drift")
     inventory = _load_object(root / "inventory.json")
     _verify_self_hash(inventory, "inventory_sha256", "resource calibration inventory")
     if inventory.get("schema_version") != INVENTORY_SCHEMA_VERSION or inventory.get(
@@ -855,7 +871,7 @@ def load_frozen_resource_calibration_v1(
     ):
         raise ValueError("resource calibration sampling-v2 source drift")
     context_binding = _load_object(sampling_root / "context-source-binding.json")
-    if context_binding.get("literal_census") != manifest.get("source_literal_census"):
+    if context_binding.get("literal_census") != EXPECTED_SOURCE_LITERAL_CENSUS:
         raise ValueError("resource calibration source census drift")
     execution_source = manifest.get("execution_source_revision")
     if not isinstance(execution_source, Mapping):
@@ -934,14 +950,6 @@ def load_frozen_resource_calibration_v1(
     candidates = _candidate_union(
         _iter_gzip_jsonl(sampling_root / "realized-candidate-tiers.jsonl.gz")
     )
-    bins = tuple(
-        (
-            str(row["wave_id"]),
-            int(row["lower_inclusive"]),
-            int(row["upper_inclusive"]),
-        )
-        for row in manifest["context_bins"]
-    )
     prompt_blocks = {
         response_id: _hash_text(str(document["task_context"]["prompt"]))
         for response_id, document in documents.items()
@@ -950,7 +958,7 @@ def load_frozen_resource_calibration_v1(
         candidates=candidates,
         exact_response_ids=set(exact),
         prompt_block_by_response=prompt_blocks,
-        context_bins=bins,
+        context_bins=DEFAULT_CONTEXT_BINS,
     )
     expected_ids = [
         str(row["target_id"]) for wave in selected for row in wave["selected"]
