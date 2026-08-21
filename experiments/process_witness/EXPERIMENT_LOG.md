@@ -586,3 +586,33 @@ The six Notchpeak jobs were submitted as the exact ascending `afterok` chain
 `notch370`; every higher wave remains dependency-blocked until the prior wave succeeds. Scheduler
 logs are written under the clean launch worktree's `logs/` directory, and trace artifacts are written
 under `/scratch/general/vast/u1653998/circuits/results/process_witness/resource-calibration-v1/traces-v1`.
+
+## 2026-08-20 — Strict-T5 calibration portability fix and v4 relaunch
+
+The first v3 job (`14757308`) failed before model loading or trace materialization because the
+sampling-v2 strict loader re-solved frozen Poisson rates with NumPy's CPU-dispatched `expm1` and
+then required byte-identical floating-point frontier rows. A same-node diagnostic on `notch370`
+confirmed that five of nine frontier solutions moved only in their final bits; 129,283 of 314,649
+realized rows consequently had numerical-only drift, while target IDs, categorical fields, ordering,
+eligibility, and audit pools remained exact. The five dependency-blocked v3 jobs were canceled and
+the absent `traces-v1` root was not repaired or reused.
+
+Commit `0487ea7a85096fa6994e5394558da7536843915f` makes the immutable stored Poisson rates the
+canonical replay inputs. It validates each rate against the original NumPy vector owner-mass
+equation at the unchanged absolute `1e-8` solve gate, then retains exact byte/hash comparison for
+all frontier summaries, probability-stream hashes, 314,649 realized rows, target identities,
+ordering, and counts. Focused validation passed 25 tests, and independent code review found no
+remaining blocker.
+
+The immutable `qualification-v4` artifact has manifest self-hash
+`d2733727d4fadc411607e07e222d2dcf2030291bdf198d935f953cf852749141` and manifest-file SHA-256
+`0f8eeeb4e994b0b74cd324d82c2d47237fbb8842e646afa71216fa569577480f`. Its 30 targets, six
+context waves, selection JSONL, width-one source manifest, run config, and tokenization census are
+identical to v3. Validation-only Notchpeak job `14759004` completed on `notch370` in 8:59 with exit
+`0:0` and the explicit success marker `CALIBRATION_V4_NOTCHPEAK_PREFLIGHT_PASSED`.
+
+The corrected six-wave chain is
+`14759086 -> 14759111 -> 14759112 -> 14759113 -> 14759115 -> 14759121`, writing only to the fresh
+`/scratch/general/vast/u1653998/circuits/results/process_witness/resource-calibration-v1/traces-v2`
+root. The ascending `afterok` policy, no-requeue/no-resume contract, five-fresh-completions
+postcondition, and graph-semantic claim boundary are unchanged.
