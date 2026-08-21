@@ -75,6 +75,11 @@ CLAIM_BOUNDARY = (
 )
 EXECUTION_SOURCE_PATHS = (
     "circuits/analysis/bonafide/process_witness_resource_calibration_v1.py",
+    "circuits/analysis/bonafide/coarse_sampling_post_campaign_v2.py",
+    "circuits/analysis/bonafide/coarse_sampling_post_campaign_v1.py",
+    "circuits/analysis/bonafide/coarse_sampling_openai_batch_production_v1.py",
+    "circuits/analysis/bonafide/canonical.py",
+    "circuits/labeling/io.py",
     "circuits/tracing/artifact.py",
     "circuits/tracing/clja.py",
     "circuits/tracing/trace.py",
@@ -455,7 +460,9 @@ def _execution_source_revision(repo_root: Path) -> dict[str, Any]:
         "repo_root": str(repo_root.resolve()),
         "git_commit": git("rev-parse", "HEAD"),
         "git_tree": git("rev-parse", "HEAD^{tree}"),
-        "binding_scope": "strict_t5_calibration_builder_loader_and_runtime_closure",
+        "binding_scope": (
+            "strict_t5_calibration_runtime_and_sampling_v2_validation_surfaces"
+        ),
         "files": files,
     }
 

@@ -798,14 +798,13 @@ def _route_position_probability(rate: float, conditional_mass: float) -> float:
     return -math.expm1(-rate * conditional_mass)
 
 
-def _solve_rate(
+def _owner_mass_arrays(
     *,
-    target: float,
     mechanism: str,
     kernels: Mapping[str, Mapping[str, Mapping[int, float]]],
     group_bases: Mapping[str, Mapping[str, float]],
     prior_survival: Mapping[tuple[str, int], float],
-) -> float:
+) -> tuple[np.ndarray, np.ndarray]:
     pairs = [
         (
             mass * group_bases[mechanism][psu_id],
@@ -816,9 +815,32 @@ def _solve_rate(
     ]
     masses = np.fromiter((pair[0] for pair in pairs), dtype=np.float64)
     priors = np.fromiter((pair[1] for pair in pairs), dtype=np.float64)
+    return masses, priors
+
+
+def _vectorized_owner_mass(
+    rate: float, masses: np.ndarray, priors: np.ndarray
+) -> float:
+    return float(np.sum(-np.expm1(-rate * masses) * priors))
+
+
+def _solve_rate(
+    *,
+    target: float,
+    mechanism: str,
+    kernels: Mapping[str, Mapping[str, Mapping[int, float]]],
+    group_bases: Mapping[str, Mapping[str, float]],
+    prior_survival: Mapping[tuple[str, int], float],
+) -> float:
+    masses, priors = _owner_mass_arrays(
+        mechanism=mechanism,
+        kernels=kernels,
+        group_bases=group_bases,
+        prior_survival=prior_survival,
+    )
 
     def owner_mass(rate: float) -> float:
-        return float(np.sum(-np.expm1(-rate * masses) * priors))
+        return _vectorized_owner_mass(rate, masses, priors)
 
     low, high = 0.0, 1.0
     while owner_mass(high) < target:
@@ -843,6 +865,7 @@ def _solve_frontier(
     *,
     policy: str,
     budget: int,
+    frozen_rates: Mapping[str, float] | None = None,
 ) -> tuple[
     dict[str, float],
     dict[tuple[str, int], dict[str, float]],
@@ -861,13 +884,31 @@ def _solve_frontier(
     diagnostics: dict[str, dict[str, float]] = {}
     for mechanism in OWNERSHIP_ORDER:
         target = budget * shares[mechanism]
-        rate = _solve_rate(
-            target=target,
-            mechanism=mechanism,
-            kernels=kernels,
-            group_bases=group_bases,
-            prior_survival=prior_survival,
-        )
+        if frozen_rates is None:
+            rate = _solve_rate(
+                target=target,
+                mechanism=mechanism,
+                kernels=kernels,
+                group_bases=group_bases,
+                prior_survival=prior_survival,
+            )
+        else:
+            rate = frozen_rates[mechanism]
+            masses, priors = _owner_mass_arrays(
+                mechanism=mechanism,
+                kernels=kernels,
+                group_bases=group_bases,
+                prior_survival=prior_survival,
+            )
+            owner_mass = _vectorized_owner_mass(rate, masses, priors)
+            if not math.isclose(owner_mass, target, rel_tol=0, abs_tol=1e-8):
+                residual = owner_mass - target
+                raise ValueError(
+                    "frozen Poisson mechanism rate target drift: "
+                    f"policy={policy} budget={budget} mechanism={mechanism} "
+                    f"rate={rate!r} target={target!r} "
+                    f"owner_mass={owner_mass!r} residual={residual!r}"
+                )
         rates[mechanism] = rate
         raw_arrivals = 0.0
         route_unique = 0.0
@@ -904,6 +945,8 @@ def build_overlap_frontiers_v2(
     group_bases: Mapping[str, Mapping[str, float]] | None = None,
     *,
     include_candidates: bool = True,
+    frozen_rates_by_frontier: Mapping[tuple[str, int], Mapping[str, float]]
+    | None = None,
 ) -> tuple[
     list[dict[str, Any]],
     dict[tuple[str, int], list[dict[str, Any]]],
@@ -931,7 +974,15 @@ def build_overlap_frontiers_v2(
     for policy, shares in SHARES.items():
         for budget in BUDGETS:
             rates, owner, diagnostics = _solve_frontier(
-                kernels, bases, policy=policy, budget=budget
+                kernels,
+                bases,
+                policy=policy,
+                budget=budget,
+                frozen_rates=(
+                    frozen_rates_by_frontier[(policy, budget)]
+                    if frozen_rates_by_frontier is not None
+                    else None
+                ),
             )
             for mechanism in MECHANISMS:
                 if rates[mechanism] + 1e-12 < prior_rates[policy].get(mechanism, 0.0):
@@ -1064,6 +1115,54 @@ def build_overlap_frontiers_v2(
                 for mechanism, rate in rates.items()
             }
     return frontiers, candidates, solutions
+
+
+def rebuild_overlap_frontiers_from_frozen_rates_v2(
+    kernels: Mapping[str, Mapping[str, Mapping[int, float]]],
+    group_bases: Mapping[str, Mapping[str, float]],
+    frozen_frontiers: Sequence[Mapping[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    dict[tuple[str, int], list[dict[str, Any]]],
+    dict[tuple[str, int], dict[str, dict[str, Any]]],
+]:
+    """Rebuild frontiers from immutable rates after checking their equations.
+
+    The binary-search solution's final bits may vary with NumPy CPU dispatch.
+    Frozen rates are therefore the canonical branch input during strict reload;
+    each rate must still satisfy its sequential first-owner equation within the
+    same absolute 1e-8 gate used by the original solver.
+    """
+
+    expected_pairs = [(policy, budget) for policy in SHARES for budget in BUDGETS]
+    if len(frozen_frontiers) != len(expected_pairs):
+        raise ValueError("frozen frontier identity/order drift")
+    frozen_rates_by_frontier: dict[tuple[str, int], dict[str, float]] = {}
+    for row, expected_pair in zip(frozen_frontiers, expected_pairs, strict=True):
+        policy = row.get("policy")
+        budget = row.get("nominal_expected_unique_target_budget")
+        if (
+            type(policy) is not str
+            or type(budget) is not int
+            or (policy, budget) != expected_pair
+        ):
+            raise ValueError("frozen frontier identity/order drift")
+        raw_rates = row.get("poisson_rates")
+        if not isinstance(raw_rates, Mapping) or set(raw_rates) != set(MECHANISMS):
+            raise ValueError("frozen frontier Poisson rate drift")
+        rates: dict[str, float] = {}
+        for mechanism in MECHANISMS:
+            rate = raw_rates[mechanism]
+            if type(rate) is not float or not math.isfinite(rate) or rate <= 0:
+                raise ValueError("frozen frontier Poisson rate drift")
+            rates[mechanism] = rate
+        frozen_rates_by_frontier[expected_pair] = rates
+    return build_overlap_frontiers_v2(
+        kernels,
+        group_bases,
+        include_candidates=False,
+        frozen_rates_by_frontier=frozen_rates_by_frontier,
+    )
 
 
 def _poisson_psu_arrivals(
@@ -2234,11 +2333,12 @@ def load_frozen_post_campaign_sampling_v2(
     )
     if contract != expected_contract:
         raise ValueError("v2 sampling kernel/base contract drift")
-    frontiers, _discarded, solutions = build_overlap_frontiers_v2(
-        kernels, bases, include_candidates=False
+    frozen_frontiers = list(_iter_jsonl(root / "expected-frontiers.jsonl"))
+    frontiers, _discarded, solutions = rebuild_overlap_frontiers_from_frozen_rates_v2(
+        kernels, bases, frozen_frontiers
     )
     _compare_rows(
-        _iter_jsonl(root / "expected-frontiers.jsonl"),
+        frozen_frontiers,
         frontiers,
         "expected frontiers",
     )

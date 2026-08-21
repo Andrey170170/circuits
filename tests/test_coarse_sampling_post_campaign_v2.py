@@ -60,6 +60,143 @@ def _equal_test_bases() -> dict[str, dict[str, float]]:
     }
 
 
+def _small_frontiers(monkeypatch: pytest.MonkeyPatch, *, budgets=(2,)):
+    shares = {
+        "balanced": {
+            mechanism: 1.0 / len(sampling_v2.MECHANISMS)
+            for mechanism in sampling_v2.MECHANISMS
+        }
+    }
+    monkeypatch.setattr(sampling_v2, "SHARES", shares)
+    monkeypatch.setattr(sampling_v2, "BUDGETS", budgets)
+    return sampling_v2.build_overlap_frontiers_v2(
+        _overlapping_test_kernels(), _equal_test_bases(), include_candidates=False
+    )[0]
+
+
+def test_frozen_rates_reconstruct_exact_frontier_and_checksum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frozen = _small_frontiers(monkeypatch)
+
+    rebuilt, _candidates, solutions = (
+        sampling_v2.rebuild_overlap_frontiers_from_frozen_rates_v2(
+            _overlapping_test_kernels(), _equal_test_bases(), frozen
+        )
+    )
+
+    assert rebuilt == frozen
+    for mechanism in sampling_v2.MECHANISMS:
+        assert (
+            solutions[("balanced", 2)][mechanism]["poisson_rate"]
+            == frozen[0]["poisson_rates"][mechanism]
+        )
+
+
+def test_frozen_rate_within_equation_gate_is_canonical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frozen = _small_frontiers(monkeypatch)
+    rate = frozen[0]["poisson_rates"]["uniform_reserve"]
+    frozen[0]["poisson_rates"]["uniform_reserve"] = math.nextafter(rate, math.inf)
+
+    rebuilt, _candidates, solutions = (
+        sampling_v2.rebuild_overlap_frontiers_from_frozen_rates_v2(
+            _overlapping_test_kernels(), _equal_test_bases(), frozen
+        )
+    )
+
+    assert solutions[("balanced", 2)]["uniform_reserve"]["poisson_rate"] == (
+        math.nextafter(rate, math.inf)
+    )
+    assert rebuilt[0]["poisson_rates"] == frozen[0]["poisson_rates"]
+
+
+def test_frozen_rate_gate_uses_vector_equation_not_scalar_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    position_count = 100_000
+    monkeypatch.setattr(
+        sampling_v2,
+        "SHARES",
+        {"balanced": dict.fromkeys(sampling_v2.MECHANISMS, 0.2)},
+    )
+    monkeypatch.setattr(sampling_v2, "BUDGETS", (60_000,))
+    kernel = dict.fromkeys(range(position_count), 1.0 / position_count)
+    kernels = {"g0": dict.fromkeys(sampling_v2.MECHANISMS, kernel)}
+    bases = {mechanism: {"g0": 1.0} for mechanism in sampling_v2.MECHANISMS}
+    frozen = [
+        {
+            "policy": "balanced",
+            "nominal_expected_unique_target_budget": 60_000,
+            "poisson_rates": {
+                "uniform_reserve": 12_783.337150988486,
+                "uncertainty_missing": 14_660.347419187536,
+                "evaluation_commitment": 17_185.02569266592,
+                "process_enrichment": 20_763.93647782445,
+                "diversity": 26_236.4264467491,
+            },
+        }
+    ]
+
+    rebuilt, _candidates, _solutions = (
+        sampling_v2.rebuild_overlap_frontiers_from_frozen_rates_v2(
+            kernels, bases, frozen
+        )
+    )
+
+    scalar_residuals = [
+        abs(
+            rebuilt[0]["mechanism_diagnostics"][mechanism][
+                "expected_first_owner_unique_positions"
+            ]
+            - 12_000
+        )
+        for mechanism in sampling_v2.MECHANISMS
+    ]
+    assert min(scalar_residuals) > 1e-8
+    assert rebuilt[0]["expected_unique_target_positions"] == 60_000.0
+
+
+def test_frozen_rate_outside_equation_gate_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frozen = _small_frontiers(monkeypatch)
+    frozen[0]["poisson_rates"]["uniform_reserve"] *= 1.01
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"frozen Poisson mechanism rate target drift: "
+            r"policy=balanced budget=2 mechanism=uniform_reserve .*residual="
+        ),
+    ):
+        sampling_v2.rebuild_overlap_frontiers_from_frozen_rates_v2(
+            _overlapping_test_kernels(), _equal_test_bases(), frozen
+        )
+
+
+def test_frozen_frontier_identity_order_and_rate_types_are_exact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frozen = _small_frontiers(monkeypatch, budgets=(2, 3))
+
+    with pytest.raises(ValueError, match="frozen frontier identity/order drift"):
+        sampling_v2.rebuild_overlap_frontiers_from_frozen_rates_v2(
+            _overlapping_test_kernels(), _equal_test_bases(), list(reversed(frozen))
+        )
+    with pytest.raises(ValueError, match="frozen frontier identity/order drift"):
+        sampling_v2.rebuild_overlap_frontiers_from_frozen_rates_v2(
+            _overlapping_test_kernels(), _equal_test_bases(), frozen[:1]
+        )
+
+    frozen[0]["poisson_rates"]["uniform_reserve"] = 1
+    with pytest.raises(ValueError, match="frozen frontier Poisson rate drift"):
+        sampling_v2.rebuild_overlap_frontiers_from_frozen_rates_v2(
+            _overlapping_test_kernels(), _equal_test_bases(), frozen
+        )
+
+
 def test_overlap_frontiers_solve_expected_unique_owner_shares(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

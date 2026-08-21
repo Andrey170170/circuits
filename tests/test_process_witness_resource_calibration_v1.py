@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 
 import pytest
+from circuits.analysis.bonafide import (
+    process_witness_resource_calibration_v1 as calibration,
+)
 from circuits.analysis.bonafide.canonical import canonical_sha256
 from circuits.analysis.bonafide.process_witness_resource_calibration_v1 import (
     DEFAULT_CONTEXT_BINS,
@@ -429,3 +432,15 @@ def test_launcher_forbids_requeue_and_resume_state() -> None:
     assert "Refusing calibration wave resume" in launcher
     assert 'row.get("status") != "complete"' in launcher
     assert "skipped_complete" not in launcher
+
+
+def test_execution_source_binds_sampling_v2_validation_surfaces() -> None:
+    required = {
+        "circuits/analysis/bonafide/coarse_sampling_post_campaign_v2.py",
+        "circuits/analysis/bonafide/coarse_sampling_post_campaign_v1.py",
+        "circuits/analysis/bonafide/coarse_sampling_openai_batch_production_v1.py",
+        "circuits/analysis/bonafide/canonical.py",
+        "circuits/labeling/io.py",
+    }
+
+    assert required <= set(calibration.EXECUTION_SOURCE_PATHS)
