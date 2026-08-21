@@ -6,10 +6,73 @@ import json
 
 import pytest
 from circuits.tracing.instrumentation import (
+    CUDA_MEMORY_SCHEMA_VERSION,
     SCHEMA_VERSION,
     TraceInstrumentation,
     record_selection_predictors,
 )
+
+
+class _FakeCudaAllocator:
+    def __init__(self) -> None:
+        self.allocated = 100
+        self.reserved = 200
+        self.active = 120
+        self.inactive_split = 20
+        self.peak_allocated = self.allocated
+        self.peak_reserved = self.reserved
+        self.peak_active = self.active
+        self.peak_inactive_split = self.inactive_split
+        self.retries = 0
+        self.ooms = 0
+
+    def reset(self, _device=None) -> None:
+        self.peak_allocated = self.allocated
+        self.peak_reserved = self.reserved
+        self.peak_active = self.active
+        self.peak_inactive_split = self.inactive_split
+
+    def set(self, *, allocated: int, reserved: int, inactive_split: int) -> None:
+        self.allocated = allocated
+        self.reserved = reserved
+        self.active = allocated + 10
+        self.inactive_split = inactive_split
+        self.peak_allocated = max(self.peak_allocated, self.allocated)
+        self.peak_reserved = max(self.peak_reserved, self.reserved)
+        self.peak_active = max(self.peak_active, self.active)
+        self.peak_inactive_split = max(self.peak_inactive_split, self.inactive_split)
+
+    def stats(self, _device=None) -> dict[str, int]:
+        return {
+            "active_bytes.all.current": self.active,
+            "active_bytes.all.peak": self.peak_active,
+            "inactive_split_bytes.all.current": self.inactive_split,
+            "inactive_split_bytes.all.peak": self.peak_inactive_split,
+            "num_alloc_retries": self.retries,
+            "num_ooms": self.ooms,
+        }
+
+
+def _install_fake_cuda(monkeypatch) -> _FakeCudaAllocator:
+    allocator = _FakeCudaAllocator()
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("torch.cuda.reset_peak_memory_stats", allocator.reset)
+    monkeypatch.setattr("torch.cuda.memory_stats", allocator.stats)
+    monkeypatch.setattr(
+        "torch.cuda.memory_allocated", lambda _device=None: allocator.allocated
+    )
+    monkeypatch.setattr(
+        "torch.cuda.memory_reserved", lambda _device=None: allocator.reserved
+    )
+    monkeypatch.setattr(
+        "torch.cuda.max_memory_allocated",
+        lambda _device=None: allocator.peak_allocated,
+    )
+    monkeypatch.setattr(
+        "torch.cuda.max_memory_reserved",
+        lambda _device=None: allocator.peak_reserved,
+    )
+    return allocator
 
 
 def test_recorder_accumulates_json_safe_stage_data() -> None:
@@ -38,6 +101,75 @@ def test_recorder_accumulates_json_safe_stage_data() -> None:
     assert snapshot["layers"] == [{"layer": 3, "selected_neuron_count": 7}]
     assert snapshot["layer_pairs"][0]["retained_edges"] == 4
     json.dumps(snapshot, allow_nan=False)
+
+
+def test_cuda_telemetry_is_opt_in(monkeypatch) -> None:
+    def unexpected_cuda_call(*_args, **_kwargs):
+        raise AssertionError("disabled telemetry touched the CUDA allocator")
+
+    monkeypatch.setattr("torch.cuda.memory_stats", unexpected_cuda_call)
+    recorder = TraceInstrumentation(device="cuda:0", synchronize_cuda=False)
+    with recorder.stage("work"):
+        pass
+
+    snapshot = recorder.snapshot()
+    assert "cuda_memory" not in snapshot
+    assert "call_measurements" not in snapshot["stages"]["work"]
+
+
+def test_cuda_telemetry_preserves_nested_and_repeated_stage_peaks(monkeypatch) -> None:
+    allocator = _install_fake_cuda(monkeypatch)
+    recorder = TraceInstrumentation(device="cuda:0", cuda_memory_telemetry=True)
+
+    with recorder.measure_stage("outer") as outer:
+        allocator.set(allocated=300, reserved=500, inactive_split=80)
+        with recorder.measure_stage("repeated") as first:
+            allocator.set(allocated=450, reserved=700, inactive_split=140)
+        allocator.set(allocated=250, reserved=650, inactive_split=120)
+    with recorder.measure_stage("repeated") as second:
+        allocator.set(allocated=500, reserved=800, inactive_split=180)
+
+    snapshot = recorder.snapshot()
+    assert snapshot["cuda_memory"]["schema_version"] == CUDA_MEMORY_SCHEMA_VERSION
+    assert snapshot["cuda_memory"]["overall"]["peak"] == {
+        "peak_allocated_bytes": 500,
+        "peak_reserved_bytes": 800,
+        "peak_active_bytes": 510,
+        "peak_inactive_split_bytes": 180,
+    }
+    assert outer.cuda_memory["peak"]["peak_reserved_bytes"] == 700
+    assert first.cuda_memory["peak"]["peak_allocated_bytes"] == 450
+    assert second.cuda_memory["peak"]["peak_allocated_bytes"] == 500
+    repeated = snapshot["stages"]["repeated"]
+    assert repeated["calls"] == 2
+    assert [call["call_index"] for call in repeated["call_measurements"]] == [0, 1]
+    assert repeated["cuda_memory_peak"]["peak_reserved_bytes"] == 800
+    json.dumps(snapshot, allow_nan=False)
+
+
+def test_nested_manual_stage_failure_unwinds_without_masking_original(
+    monkeypatch,
+) -> None:
+    _install_fake_cuda(monkeypatch)
+    recorder = TraceInstrumentation(device="cuda:0", cuda_memory_telemetry=True)
+
+    def fail_nested_stage() -> None:
+        with recorder.measure_stage("graph_expansion"):
+            recorder.measurement_start("layer_pair_jacobian")
+
+            def fail_reset() -> None:
+                raise RuntimeError("allocator reset failed during unwind")
+
+            monkeypatch.setattr(recorder, "_reset_cuda_peaks", fail_reset)
+            raise ValueError("original tracing failure")
+
+    with pytest.raises(ValueError, match="original tracing failure"):
+        fail_nested_stage()
+
+    snapshot = recorder.snapshot()
+    assert snapshot["stages"]["layer_pair_jacobian"]["failed_calls"] == 1
+    assert snapshot["stages"]["graph_expansion"]["failed_calls"] == 1
+    assert recorder._measurement_stack == []
 
 
 def test_selection_predictors_match_planned_pair_math() -> None:

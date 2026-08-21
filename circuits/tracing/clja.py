@@ -516,52 +516,45 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
 
     # get attributions and contributions for important neurons (same as original)
     if not skip_attr_contrib:
-        selected_attr_started = (
-            instrumentation.timer_start() if instrumentation is not None else None
-        )
-        if ig_steps is None:
-            attr, contrib, embed_grad_contrib, neuron_tags = (
-                _get_neuron_attr_and_contrib(
-                    model,
-                    neuron_cfg,
-                    input_ids,
-                    src_tokens,
-                    contribution_tgt_tokens,
-                    focus_positions,
-                    focus_logits,
-                    attn_mask_final,
-                    disable_stop_grad=disable_stop_grad,
-                    center_logits=center_logits,
-                    neuron_chunk_size=50,
-                    verbose=verbose,
+        with instrumentation_stage(
+            instrumentation, "selected_attribution_contribution"
+        ):
+            if ig_steps is None:
+                attr, contrib, embed_grad_contrib, neuron_tags = (
+                    _get_neuron_attr_and_contrib(
+                        model,
+                        neuron_cfg,
+                        input_ids,
+                        src_tokens,
+                        contribution_tgt_tokens,
+                        focus_positions,
+                        focus_logits,
+                        attn_mask_final,
+                        disable_stop_grad=disable_stop_grad,
+                        center_logits=center_logits,
+                        neuron_chunk_size=50,
+                        verbose=verbose,
+                    )
                 )
-            )
-
-        else:
-            attr, contrib, embed_grad_contrib, neuron_tags = (
-                _get_neuron_attr_and_contrib_ig(
-                    model,
-                    neuron_cfg,
-                    input_ids,
-                    src_tokens,
-                    contribution_tgt_tokens,
-                    focus_positions,
-                    focus_logits,
-                    attn_mask_final,
-                    disable_stop_grad=disable_stop_grad,
-                    center_logits=center_logits,
-                    ig_steps=ig_steps,
-                    ig_mode=ig_mode,
-                    neuron_chunk_size=20,  # Smaller chunk size for IG
-                    verbose=verbose,
+            else:
+                attr, contrib, embed_grad_contrib, neuron_tags = (
+                    _get_neuron_attr_and_contrib_ig(
+                        model,
+                        neuron_cfg,
+                        input_ids,
+                        src_tokens,
+                        contribution_tgt_tokens,
+                        focus_positions,
+                        focus_logits,
+                        attn_mask_final,
+                        disable_stop_grad=disable_stop_grad,
+                        center_logits=center_logits,
+                        ig_steps=ig_steps,
+                        ig_mode=ig_mode,
+                        neuron_chunk_size=20,  # Smaller chunk size for IG
+                        verbose=verbose,
+                    )
                 )
-            )
-
-        if instrumentation is not None and selected_attr_started is not None:
-            instrumentation.record_stage(
-                "selected_attribution_contribution",
-                instrumentation.timer_finish(selected_attr_started),
-            )
 
         if verbose:
             print(
@@ -590,33 +583,28 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
 
     # we repopulate attr and contri maps if stop grad is on to get direct edge weights
     if not disable_stop_grad and use_stop_grad_on_mlps:
-        stop_grad_attr_started = (
-            instrumentation.timer_start() if instrumentation is not None else None
-        )
-        (
-            attr_with_stop_grad_on_mlps,
-            contrib_with_stop_grad_on_mlps,
-            embed_grad_contrib_with_stop_grad_on_mlps,
-            neuron_tags_with_stop_grad_on_mlps,
-        ) = _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
-            model,
-            neuron_cfg,
-            input_ids,
-            src_tokens,
-            contribution_tgt_tokens,
-            focus_positions,
-            focus_logits,
-            attn_mask_final,
-            use_relp_grad=use_relp_grad,
-            center_logits=center_logits,
-            neuron_chunk_size=10,
-            verbose=verbose,
-            attention_backend=stop_gradient_attention_backend,
-        )
-        if instrumentation is not None and stop_grad_attr_started is not None:
-            instrumentation.record_stage(
-                "stop_grad_mlp_attribution_contribution",
-                instrumentation.timer_finish(stop_grad_attr_started),
+        with instrumentation_stage(
+            instrumentation, "stop_grad_mlp_attribution_contribution"
+        ):
+            (
+                attr_with_stop_grad_on_mlps,
+                contrib_with_stop_grad_on_mlps,
+                embed_grad_contrib_with_stop_grad_on_mlps,
+                neuron_tags_with_stop_grad_on_mlps,
+            ) = _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
+                model,
+                neuron_cfg,
+                input_ids,
+                src_tokens,
+                contribution_tgt_tokens,
+                focus_positions,
+                focus_logits,
+                attn_mask_final,
+                use_relp_grad=use_relp_grad,
+                center_logits=center_logits,
+                neuron_chunk_size=10,
+                verbose=verbose,
+                attention_backend=stop_gradient_attention_backend,
             )
         # store neuron attributions and contributions (keep on CPU to save GPU memory)
         neuron_attr_map_with_stop_grad_on_mlps: dict[NeuronIdx, torch.Tensor] = {}
@@ -834,23 +822,18 @@ def _get_cl_ja_based_edges(
     if verbose:
         print("Collecting acts... ", end="", flush=True)
     collect_layers = list(range(model.config.num_hidden_layers))
-    activation_collection_started = (
-        instrumentation.timer_start() if instrumentation is not None else None
-    )
-    (neurons_LBTI, resids_LBTD, tokens, output_norm_const_BTf11D) = collect_neuron_acts(
-        model,
-        tokenizer,
-        cis,
-        attention_masks,
-        collect_layers=collect_layers,
-        keep_tokens=keep_tokens,
-        device=device,
-        verbose=verbose,
-    )
-    if instrumentation is not None and activation_collection_started is not None:
-        instrumentation.record_stage(
-            "activation_collection",
-            instrumentation.timer_finish(activation_collection_started),
+    with instrumentation_stage(instrumentation, "activation_collection"):
+        (neurons_LBTI, resids_LBTD, tokens, output_norm_const_BTf11D) = (
+            collect_neuron_acts(
+                model,
+                tokenizer,
+                cis,
+                attention_masks,
+                collect_layers=collect_layers,
+                keep_tokens=keep_tokens,
+                device=device,
+                verbose=verbose,
+            )
         )
 
     # key constants
@@ -885,8 +868,10 @@ def _get_cl_ja_based_edges(
     # creating final logits nodes
     logit_nodes_before = len(nodes)
     logit_edges_before = len(edges)
-    logit_graph_started = (
-        instrumentation.timer_start() if instrumentation is not None else None
+    logit_graph_measurement = (
+        instrumentation.measurement_start("logit_graph_materialization")
+        if instrumentation is not None
+        else None
     )
     if verbose:
         print("Creating final logits nodes and all incoming edges...")
@@ -1006,19 +991,18 @@ def _get_cl_ja_based_edges(
                     )
                 )
 
-    if instrumentation is not None and logit_graph_started is not None:
-        instrumentation.record_stage(
-            "logit_graph_materialization",
-            instrumentation.timer_finish(logit_graph_started),
-        )
+    if instrumentation is not None and logit_graph_measurement is not None:
+        instrumentation.measurement_finish(logit_graph_measurement)
         instrumentation.set_counter("logit_node_delta", len(nodes) - logit_nodes_before)
         instrumentation.set_counter("logit_edge_delta", len(edges) - logit_edges_before)
 
     # creating MLP neuron nodes
     mlp_nodes_before = len(nodes)
     mlp_edges_before = len(edges)
-    mlp_nodes_started = (
-        instrumentation.timer_start() if instrumentation is not None else None
+    mlp_nodes_measurement = (
+        instrumentation.measurement_start("mlp_node_materialization")
+        if instrumentation is not None
+        else None
     )
     for layer in range(max(start_layer, 0), end_layer):
         important_positions = global_important_neurons_mask[layer].nonzero(
@@ -1049,11 +1033,8 @@ def _get_cl_ja_based_edges(
                     )
                 )
 
-    if instrumentation is not None and mlp_nodes_started is not None:
-        instrumentation.record_stage(
-            "mlp_node_materialization",
-            instrumentation.timer_finish(mlp_nodes_started),
-        )
+    if instrumentation is not None and mlp_nodes_measurement is not None:
+        instrumentation.measurement_finish(mlp_nodes_measurement)
         instrumentation.set_counter("mlp_node_delta", len(nodes) - mlp_nodes_before)
         instrumentation.set_counter("mlp_edge_delta", len(edges) - mlp_edges_before)
 
@@ -1064,8 +1045,10 @@ def _get_cl_ja_based_edges(
     # creating embedding nodes
     embedding_nodes_before = len(nodes)
     embedding_edges_before = len(edges)
-    embedding_graph_started = (
-        instrumentation.timer_start() if instrumentation is not None else None
+    embedding_graph_measurement = (
+        instrumentation.measurement_start("embedding_graph_materialization")
+        if instrumentation is not None
+        else None
     )
     if verbose:
         print("Creating embedding nodes and all outgoing edges...")
@@ -1170,11 +1153,8 @@ def _get_cl_ja_based_edges(
                     )
                 )
 
-    if instrumentation is not None and embedding_graph_started is not None:
-        instrumentation.record_stage(
-            "embedding_graph_materialization",
-            instrumentation.timer_finish(embedding_graph_started),
-        )
+    if instrumentation is not None and embedding_graph_measurement is not None:
+        instrumentation.measurement_finish(embedding_graph_measurement)
         instrumentation.set_counter(
             "embedding_node_delta", len(nodes) - embedding_nodes_before
         )
@@ -1203,8 +1183,10 @@ def _get_cl_ja_based_edges(
     # for any layer pair, we compute the jacobian-based edge weights
     cross_layer_nodes_before = len(nodes)
     cross_layer_edges_before = len(edges)
-    cross_layer_started = (
-        instrumentation.timer_start() if instrumentation is not None else None
+    cross_layer_measurement = (
+        instrumentation.measurement_start("cross_layer_graph_expansion")
+        if instrumentation is not None
+        else None
     )
     if instrumentation is not None:
         for counter_name in (
@@ -1275,8 +1257,10 @@ def _get_cl_ja_based_edges(
                 else 0
             )
             jacobian_pass_count = ig_steps + 1 if ig_steps is not None else 1
-            jacobian_started = (
-                instrumentation.timer_start() if instrumentation is not None else None
+            jacobian_measurement = (
+                instrumentation.measurement_start("layer_pair_jacobian")
+                if instrumentation is not None
+                else None
             )
             if ig_steps is None:
                 relative_attribution = _compute_cl_ja_layer_jacobian(
@@ -1315,18 +1299,26 @@ def _get_cl_ja_based_edges(
                     tgt_chunk_size=20,  # Smaller chunk size for IG to save memory
                     verbose=verbose,
                 )  # shape: (batch, n_src, n_tgt)
+            jacobian_shape = [int(size) for size in relative_attribution.shape]
+            if instrumentation is not None and jacobian_measurement is not None:
+                instrumentation.measurement_finish(jacobian_measurement)
             jacobian_seconds = (
-                instrumentation.timer_finish(jacobian_started)
-                if instrumentation is not None and jacobian_started is not None
+                jacobian_measurement.wall_seconds
+                if jacobian_measurement is not None
                 else None
             )
-            if instrumentation is not None and jacobian_seconds is not None:
-                instrumentation.record_stage("layer_pair_jacobian", jacobian_seconds)
+            jacobian_cuda_memory = (
+                jacobian_measurement.cuda_memory
+                if jacobian_measurement is not None
+                else None
+            )
 
             # adding edges from every src neuron to every tgt neuron
             pair_edges_before = len(edges)
-            materialization_started = (
-                instrumentation.timer_start() if instrumentation is not None else None
+            materialization_measurement = (
+                instrumentation.measurement_start("layer_pair_materialization")
+                if instrumentation is not None
+                else None
             )
             for i, (src_token, src_neuron) in enumerate(src_neuron_list):
                 for j, (tgt_token, tgt_neuron) in enumerate(tgt_neuron_list):
@@ -1370,17 +1362,23 @@ def _get_cl_ja_based_edges(
                         )
                     )
 
+            if instrumentation is not None and materialization_measurement is not None:
+                instrumentation.measurement_finish(materialization_measurement)
             materialization_seconds = (
-                instrumentation.timer_finish(materialization_started)
-                if instrumentation is not None and materialization_started is not None
+                materialization_measurement.wall_seconds
+                if materialization_measurement is not None
                 else None
             )
             retained_edges = len(edges) - pair_edges_before
             if instrumentation is not None:
-                if materialization_seconds is not None:
-                    instrumentation.record_stage(
-                        "layer_pair_materialization", materialization_seconds
-                    )
+                pair_telemetry = (
+                    {
+                        "jacobian_shape": jacobian_shape,
+                        "jacobian_cuda_memory": jacobian_cuda_memory,
+                    }
+                    if instrumentation.cuda_memory_telemetry
+                    else {}
+                )
                 instrumentation.record_layer_pair(
                     src_layer,
                     tgt_layer,
@@ -1394,14 +1392,12 @@ def _get_cl_ja_based_edges(
                     jacobian_seconds=jacobian_seconds,
                     materialization_seconds=materialization_seconds,
                     retained_edges=retained_edges,
+                    **pair_telemetry,
                 )
             del relative_attribution
 
-    if instrumentation is not None and cross_layer_started is not None:
-        instrumentation.record_stage(
-            "cross_layer_graph_expansion",
-            instrumentation.timer_finish(cross_layer_started),
-        )
+    if instrumentation is not None and cross_layer_measurement is not None:
+        instrumentation.measurement_finish(cross_layer_measurement)
         instrumentation.set_counter(
             "cross_layer_node_delta", len(nodes) - cross_layer_nodes_before
         )

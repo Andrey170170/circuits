@@ -34,6 +34,7 @@ from scripts.bonafide.runner import (
     collect_code_revision,
     collect_runtime_environment,
     load_json,
+    normalized_instrumentation,
     normalized_trace_warmup,
     trace_warmup_applies,
     validate_run_config,
@@ -88,6 +89,8 @@ def topk_runtime_artifact_identity(
         "code_revision": dict(code_revision),
         "runtime_environment": dict(runtime_environment),
     }
+    if "instrumentation" in config:
+        identity["instrumentation"] = normalized_instrumentation(config)
     if teacher_forced_serialization_mode is not None:
         identity["teacher_forced_serialization_mode"] = (
             teacher_forced_serialization_mode
@@ -144,6 +147,35 @@ def _candidate_profile_diagnostics(frame, candidate_count: int) -> dict[str, Any
             for index in range(candidate_count)
         ],
     }
+
+
+def _trace_cuda_peak_bytes(
+    instrumentation: Mapping[str, Any],
+    *,
+    cuda_memory_telemetry: bool,
+    uses_cuda: bool,
+) -> tuple[int, int]:
+    """Read reset-safe trace peaks or the legacy process-global CUDA peaks."""
+
+    if not cuda_memory_telemetry:
+        return (
+            int(torch.cuda.max_memory_allocated()) if uses_cuda else 0,
+            int(torch.cuda.max_memory_reserved()) if uses_cuda else 0,
+        )
+    cuda_memory = instrumentation.get("cuda_memory")
+    if not isinstance(cuda_memory, Mapping):
+        raise ValueError("instrumentation lacks CUDA memory telemetry")
+    overall = cuda_memory.get("overall")
+    peak = overall.get("peak") if isinstance(overall, Mapping) else None
+    if not isinstance(peak, Mapping):
+        raise ValueError("instrumentation lacks overall CUDA memory peaks")
+    values = []
+    for field in ("peak_allocated_bytes", "peak_reserved_bytes"):
+        value = peak.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"instrumentation CUDA peak {field} is invalid")
+        values.append(value)
+    return values[0], values[1]
 
 
 def _stable_text_sha256(value: str | None) -> str | None:
@@ -305,7 +337,7 @@ def run_topk_wave(
 ) -> list[dict[str, Any]]:
     """Run or dry-run one immutable top-k trace-family wave."""
 
-    validate_run_config(config)
+    validate_run_config(config, allow_instrumentation=True)
     if config["adag_config"].get("center_logits", False):
         raise ValueError(
             "top-k tracing requires center_logits=false; centering belongs in "
@@ -321,6 +353,7 @@ def run_topk_wave(
     code_revision = dict(_code_revision or collect_code_revision(repo_root))
     runtime_environment = dict(_runtime_environment or collect_runtime_environment())
     trace_family = dict(manifest["trace_family"])
+    instrumentation_policy = normalized_instrumentation(config)
     if manifest["source"]["model_id"] != config["model"]["model_id"]:
         raise ValueError("top-k source model ID disagrees with run config")
     if manifest["source"]["model_revision"] != config["model"]["revision"]:
@@ -486,7 +519,9 @@ def run_topk_wave(
             else:
                 allocated_before = reserved_before = 0
             instrumentation = TraceInstrumentation(
-                device=device, synchronize_cuda=uses_cuda
+                device=device,
+                synchronize_cuda=uses_cuda,
+                cuda_memory_telemetry=(instrumentation_policy["cuda_memory_telemetry"]),
             )
             config_before = _model_config_sha256(model)
             started = time.perf_counter()
@@ -540,6 +575,13 @@ def run_topk_wave(
                 trace_elapsed = time.perf_counter() - started
                 snapshot = instrumentation.snapshot()
                 trace.circuit_data.trace_metadata["instrumentation"] = snapshot
+                peak_allocated, peak_reserved = _trace_cuda_peak_bytes(
+                    snapshot,
+                    cuda_memory_telemetry=(
+                        instrumentation_policy["cuda_memory_telemetry"]
+                    ),
+                    uses_cuda=uses_cuda,
+                )
                 profile_diagnostics = _candidate_profile_diagnostics(
                     trace.circuit_data.df_node, trace.candidate_count
                 )
@@ -554,15 +596,10 @@ def run_topk_wave(
                     "cuda_reserved_after_trace_bytes": (
                         torch.cuda.memory_reserved() if uses_cuda else 0
                     ),
-                    "cuda_peak_allocated_bytes": (
-                        torch.cuda.max_memory_allocated() if uses_cuda else 0
-                    ),
-                    "cuda_peak_reserved_bytes": (
-                        torch.cuda.max_memory_reserved() if uses_cuda else 0
-                    ),
+                    "cuda_peak_allocated_bytes": peak_allocated,
+                    "cuda_peak_reserved_bytes": peak_reserved,
                     "cuda_headroom_after_peak_bytes": (
-                        gpu_info["total_memory_bytes"]
-                        - torch.cuda.max_memory_reserved()
+                        gpu_info["total_memory_bytes"] - peak_reserved
                         if uses_cuda and gpu_info is not None
                         else 0
                     ),

@@ -12,11 +12,13 @@ import math
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
 
 SCHEMA_VERSION = "adag.trace-instrumentation.v1"
+CUDA_MEMORY_SCHEMA_VERSION = "adag.cuda-memory-telemetry.v1"
 
 
 def _json_safe(value: Any) -> Any:
@@ -35,6 +37,19 @@ def _json_safe(value: Any) -> Any:
     raise TypeError(f"instrumentation value is not JSON serializable: {type(value)!r}")
 
 
+@dataclass
+class StageMeasurement:
+    """One completed stage call, populated when its context exits."""
+
+    name: str
+    wall_seconds: float | None = None
+    failed: bool = False
+    cuda_memory: dict[str, Any] | None = None
+    _started: float = field(default=0.0, repr=False)
+    _cuda_start: dict[str, int | float] | None = field(default=None, repr=False)
+    _cuda_peak: dict[str, int] = field(default_factory=dict, repr=False)
+
+
 class TraceInstrumentation:
     """Accumulate stage timings and workload counters for one trace.
 
@@ -48,15 +63,35 @@ class TraceInstrumentation:
         *,
         device: str | torch.device | None = None,
         synchronize_cuda: bool = False,
+        cuda_memory_telemetry: bool = False,
     ) -> None:
         self.device = str(device) if device is not None else None
         self.synchronize_cuda = bool(synchronize_cuda)
+        self.cuda_memory_telemetry = bool(cuda_memory_telemetry)
         self._started = time.perf_counter()
-        self._stages: dict[str, dict[str, float | int]] = {}
+        self._stages: dict[str, dict[str, Any]] = {}
         self._counters: dict[str, Any] = {}
         self._early_predictors: dict[str, Any] = {}
         self._layers: dict[int, dict[str, Any]] = {}
         self._layer_pairs: list[dict[str, Any]] = []
+        self._measurement_stack: list[StageMeasurement] = []
+        self._cuda_device: torch.device | None = None
+        self._cuda_overall_start: dict[str, int | float] | None = None
+        self._cuda_overall_peak: dict[str, int] = {}
+        if self.cuda_memory_telemetry:
+            device_value = (
+                torch.device(self.device) if self.device is not None else None
+            )
+            if device_value is None or device_value.type != "cuda":
+                raise ValueError(
+                    "CUDA memory telemetry requires an explicit CUDA device"
+                )
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA memory telemetry requested without CUDA")
+            self._cuda_device = device_value
+            torch.cuda.reset_peak_memory_stats(self._cuda_device)
+            self._cuda_overall_start = self._cuda_metrics()
+            self._update_overall_peak(self._cuda_overall_start)
 
     def _synchronize(self) -> None:
         if not self.synchronize_cuda:
@@ -75,6 +110,170 @@ class TraceInstrumentation:
         self._synchronize()
         return time.perf_counter() - started
 
+    def _cuda_metrics(self) -> dict[str, int | float]:
+        if self._cuda_device is None:
+            raise RuntimeError("CUDA metrics requested when telemetry is disabled")
+        stats = torch.cuda.memory_stats(self._cuda_device)
+        allocated = int(torch.cuda.memory_allocated(self._cuda_device))
+        reserved = int(torch.cuda.memory_reserved(self._cuda_device))
+        active = int(stats.get("active_bytes.all.current", allocated))
+        inactive_split = int(stats.get("inactive_split_bytes.all.current", 0))
+        return {
+            "allocated_bytes": allocated,
+            "reserved_bytes": reserved,
+            "active_bytes": active,
+            "inactive_split_bytes": inactive_split,
+            "reserved_minus_allocated_bytes": max(0, reserved - allocated),
+            "inactive_split_fraction_of_reserved": (
+                inactive_split / reserved if reserved else 0.0
+            ),
+            "num_alloc_retries": int(stats.get("num_alloc_retries", 0)),
+            "num_ooms": int(stats.get("num_ooms", 0)),
+            "peak_allocated_bytes": int(
+                torch.cuda.max_memory_allocated(self._cuda_device)
+            ),
+            "peak_reserved_bytes": int(
+                torch.cuda.max_memory_reserved(self._cuda_device)
+            ),
+            "peak_active_bytes": int(stats.get("active_bytes.all.peak", active)),
+            "peak_inactive_split_bytes": int(
+                stats.get("inactive_split_bytes.all.peak", inactive_split)
+            ),
+        }
+
+    @staticmethod
+    def _peak_values(metrics: Mapping[str, int | float]) -> dict[str, int]:
+        return {
+            name: int(metrics[name])
+            for name in (
+                "peak_allocated_bytes",
+                "peak_reserved_bytes",
+                "peak_active_bytes",
+                "peak_inactive_split_bytes",
+            )
+        }
+
+    @staticmethod
+    def _merge_peak(target: dict[str, int], values: Mapping[str, int]) -> None:
+        for name, value in values.items():
+            target[name] = max(target.get(name, 0), int(value))
+
+    def _update_overall_peak(self, metrics: Mapping[str, int | float]) -> None:
+        self._merge_peak(self._cuda_overall_peak, self._peak_values(metrics))
+
+    def _checkpoint_cuda(self) -> dict[str, int | float]:
+        """Capture peaks before a reset, including them in all nested calls."""
+
+        metrics = self._cuda_metrics()
+        peaks = self._peak_values(metrics)
+        self._update_overall_peak(metrics)
+        for measurement in self._measurement_stack:
+            self._merge_peak(measurement._cuda_peak, peaks)
+        return metrics
+
+    def _reset_cuda_peaks(self) -> None:
+        if self._cuda_device is not None:
+            torch.cuda.reset_peak_memory_stats(self._cuda_device)
+
+    @staticmethod
+    def _allocator_delta(
+        start: Mapping[str, int | float], end: Mapping[str, int | float]
+    ) -> dict[str, int]:
+        return {
+            name: int(end[name]) - int(start[name])
+            for name in ("num_alloc_retries", "num_ooms")
+        }
+
+    def _finish_cuda_measurement(
+        self,
+        measurement: StageMeasurement,
+        *,
+        failed: bool,
+    ) -> None:
+        if self._cuda_device is None or measurement._cuda_start is None:
+            return
+        try:
+            end = self._checkpoint_cuda()
+            measurement.cuda_memory = {
+                "schema_version": CUDA_MEMORY_SCHEMA_VERSION,
+                "start": measurement._cuda_start,
+                "end": end,
+                "peak": measurement._cuda_peak,
+                "allocator_activity_delta": self._allocator_delta(
+                    measurement._cuda_start, end
+                ),
+            }
+        except Exception as error:
+            if not failed:
+                raise
+            # Preserve the original CUDA/tracing exception while retaining an
+            # explicit diagnostic that telemetry could not be finalized.
+            measurement.cuda_memory = {
+                "schema_version": CUDA_MEMORY_SCHEMA_VERSION,
+                "measurement_error": f"{type(error).__name__}: {error}",
+            }
+
+    def measurement_start(self, name: str) -> StageMeasurement:
+        """Start one stage call for code that cannot naturally use ``with``."""
+
+        self._synchronize()
+        if self.cuda_memory_telemetry:
+            self._checkpoint_cuda()
+            self._reset_cuda_peaks()
+        measurement = StageMeasurement(name=name, _started=time.perf_counter())
+        if self.cuda_memory_telemetry:
+            measurement._cuda_start = self._cuda_metrics()
+            measurement._cuda_peak = self._peak_values(measurement._cuda_start)
+        self._measurement_stack.append(measurement)
+        return measurement
+
+    def measurement_finish(
+        self,
+        measurement: StageMeasurement,
+        *,
+        failed: bool = False,
+        synchronize: bool = True,
+    ) -> StageMeasurement:
+        """Finish a stage call and return its wall/memory measurement."""
+
+        if measurement.wall_seconds is not None:
+            raise RuntimeError("stage measurement was already finished")
+        if synchronize:
+            self._synchronize()
+        measurement.failed = bool(failed)
+        measurement.wall_seconds = time.perf_counter() - measurement._started
+        self._finish_cuda_measurement(measurement, failed=failed)
+        if (
+            not self._measurement_stack
+            or self._measurement_stack[-1] is not measurement
+        ):
+            raise RuntimeError("stage measurements must finish in nested order")
+        self._measurement_stack.pop()
+        if self.cuda_memory_telemetry:
+            try:
+                self._reset_cuda_peaks()
+            except Exception:
+                if not failed:
+                    raise
+        self._record_measurement(measurement)
+        return measurement
+
+    def _fail_measurements_through(self, measurement: StageMeasurement) -> None:
+        """Best-effort LIFO unwind that never replaces a tracing exception."""
+
+        while self._measurement_stack:
+            current = self._measurement_stack[-1]
+            try:
+                self.measurement_finish(current, failed=True, synchronize=False)
+            except Exception:
+                # measurement_finish normally preserves failures itself. If an
+                # allocator or recorder failure still escapes, force progress
+                # through the stack so the original tracing error wins.
+                if self._measurement_stack and self._measurement_stack[-1] is current:
+                    self._measurement_stack.pop()
+            if current is measurement:
+                return
+
     def record_stage(
         self, name: str, wall_seconds: float, *, failed: bool = False
     ) -> None:
@@ -86,18 +285,53 @@ class TraceInstrumentation:
         stage["failed_calls"] = int(stage["failed_calls"]) + int(failed)
 
     @contextmanager
-    def stage(self, name: str) -> Iterator[None]:
-        started = self.timer_start()
+    def measure_stage(self, name: str) -> Iterator[StageMeasurement]:
+        """Measure one possibly nested call and return its completed record."""
+
+        measurement = self.measurement_start(name)
         try:
-            yield
+            yield measurement
         except BaseException:
             # Never synchronize while unwinding: a CUDA error here could mask
             # the original tracing failure. This partial duration is host wall
             # time and is intentionally not promoted to synchronized timing.
-            self.record_stage(name, time.perf_counter() - started, failed=True)
+            self._fail_measurements_through(measurement)
             raise
         else:
-            self.record_stage(name, self.timer_finish(started))
+            self.measurement_finish(measurement)
+
+    def _record_measurement(self, measurement: StageMeasurement) -> None:
+        if measurement.wall_seconds is None:
+            raise RuntimeError("cannot record an unfinished stage measurement")
+        self.record_stage(
+            measurement.name,
+            measurement.wall_seconds,
+            failed=measurement.failed,
+        )
+        if measurement.cuda_memory is not None:
+            stage = self._stages[measurement.name]
+            calls = stage.setdefault("call_measurements", [])
+            if not isinstance(calls, list):
+                raise RuntimeError("stage call_measurements is not a list")
+            calls.append(
+                {
+                    "call_index": len(calls),
+                    "failed": measurement.failed,
+                    "wall_seconds": measurement.wall_seconds,
+                    "cuda_memory": measurement.cuda_memory,
+                }
+            )
+            peak = measurement.cuda_memory.get("peak")
+            if isinstance(peak, Mapping):
+                aggregate = stage.setdefault("cuda_memory_peak", {})
+                if not isinstance(aggregate, dict):
+                    raise RuntimeError("stage cuda_memory_peak is not an object")
+                self._merge_peak(aggregate, peak)
+
+    @contextmanager
+    def stage(self, name: str) -> Iterator[None]:
+        with self.measure_stage(name):
+            yield
 
     def set_counter(self, name: str, value: Any) -> None:
         self._counters[name] = value
@@ -131,6 +365,23 @@ class TraceInstrumentation:
         return time.perf_counter() - self._started
 
     def snapshot(self) -> dict[str, Any]:
+        cuda_memory = None
+        if self.cuda_memory_telemetry:
+            current = self._checkpoint_cuda()
+            if self._cuda_overall_start is None:
+                raise RuntimeError("CUDA telemetry lacks its initial measurement")
+            cuda_memory = {
+                "schema_version": CUDA_MEMORY_SCHEMA_VERSION,
+                "reset_safe_peak_semantics": "max_across_public_allocator_peak_windows_v1",
+                "overall": {
+                    "start": self._cuda_overall_start,
+                    "current": current,
+                    "peak": self._cuda_overall_peak,
+                    "allocator_activity_delta": self._allocator_delta(
+                        self._cuda_overall_start, current
+                    ),
+                },
+            }
         snapshot = _json_safe(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -149,6 +400,7 @@ class TraceInstrumentation:
                 "early_predictors": self._early_predictors,
                 "layers": [self._layers[layer] for layer in sorted(self._layers)],
                 "layer_pairs": self._layer_pairs,
+                **({"cuda_memory": cuda_memory} if cuda_memory is not None else {}),
             }
         )
         # Keep the guarantee local rather than relying on the artifact writer.
@@ -157,11 +409,11 @@ class TraceInstrumentation:
 
 
 def instrumentation_stage(instrumentation: TraceInstrumentation | None, name: str):
-    """Return a timing context that becomes a no-op without a recorder."""
+    """Return a measured context that becomes a no-op without a recorder."""
 
     if instrumentation is None:
         return nullcontext()
-    return instrumentation.stage(name)
+    return instrumentation.measure_stage(name)
 
 
 def record_selection_predictors(

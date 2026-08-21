@@ -1,0 +1,52 @@
+{
+  "adag_config": {
+    "ablation_mode": "zero",
+    "apply_blacklist": true,
+    "batch_aggregation": "any",
+    "center_logits": false,
+    "disable_half_rule": false,
+    "disable_stop_grad": false,
+    "edge_threshold": 0.01,
+    "focus_last_residual": false,
+    "ig_mode": "ig-inputs",
+    "ig_steps": null,
+    "node_attribution_threshold": null,
+    "parent_threshold": null,
+    "percentage_threshold": 0.005,
+    "return_nodes_only": false,
+    "return_only_important_neurons": false,
+    "skip_attr_contrib": false,
+    "stop_gradient_attention_backend": "flash_sdpa_causal_v1",
+    "topk": null,
+    "topk_neurons": null,
+    "use_relp_grad": true,
+    "use_stop_grad_on_mlps": true,
+    "verbose": false
+  },
+  "artifact_root": "results/bonafide/process-witness-resource-calibration-v1",
+  "batch_size": 1,
+  "continue_on_error": false,
+  "instrumentation": {
+    "cuda_memory_telemetry": true
+  },
+  "model": {
+    "device": "cuda:0",
+    "dtype": "bfloat16",
+    "from_pretrained_kwargs": {},
+    "local_files_only": true,
+    "local_snapshot_path": "${HF_HUB_CACHE}/models--Qwen--Qwen3-4B-Thinking-2507/snapshots/768f209d9ea81521153ed38c47d515654e938aea",
+    "model_id": "Qwen/Qwen3-4B-Thinking-2507",
+    "revision": "768f209d9ea81521153ed38c47d515654e938aea"
+  },
+  "schema_version": "bonafide-trace-run-config/v1",
+  "trace_warmup": {
+    "enabled": false,
+    "mode": "first_wave_item_full_trace_discard",
+    "wave_id_prefixes": []
+  },
+  "wave_limits": {
+    "max_trace_seconds": 1800,
+    "min_cuda_headroom_bytes": 8589934592,
+    "stop_on_oom": true
+  }
+}

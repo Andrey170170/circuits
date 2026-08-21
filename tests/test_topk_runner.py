@@ -8,6 +8,7 @@ import pytest
 from circuits.tracing.trace import TOPK_TRACE_FAMILY_ID
 from scripts.bonafide.execution_plan import sha256_file
 from scripts.bonafide.topk_runner import (
+    _trace_cuda_peak_bytes,
     run_topk_wave,
     topk_runtime_artifact_identity,
 )
@@ -84,6 +85,75 @@ def test_topk_runtime_identity_changes_with_candidate_policy() -> None:
     assert observed_identity["sha256"] != model_identity["sha256"]
 
 
+def test_topk_runtime_identity_binds_explicit_instrumentation_policy() -> None:
+    manifest = _runner_manifest()
+    item = manifest["waves"][0]["items"][0]
+    common = {
+        "item": item,
+        "trace_family": manifest["trace_family"],
+        "code_revision": _code_revision(),
+        "runtime_environment": _runtime_environment(),
+        "source_manifest_sha256": "d" * 64,
+        "topk_manifest_sha256": "e" * 64,
+        "wave_id": "parity-01",
+    }
+    base_config = _cpu_config()
+    profiling_config = deepcopy(base_config)
+    profiling_config["instrumentation"] = {"cuda_memory_telemetry": True}
+
+    base_id, base_identity = topk_runtime_artifact_identity(
+        config=base_config, **common
+    )
+    profiling_id, profiling_identity = topk_runtime_artifact_identity(
+        config=profiling_config, **common
+    )
+
+    assert profiling_id != base_id
+    assert "instrumentation" not in base_identity
+    assert profiling_identity["instrumentation"] == {"cuda_memory_telemetry": True}
+
+
+def test_topk_metrics_use_reset_safe_instrumentation_peaks(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "torch.cuda.max_memory_allocated",
+        lambda: (_ for _ in ()).throw(AssertionError("used reset CUDA peak")),
+    )
+    monkeypatch.setattr(
+        "torch.cuda.max_memory_reserved",
+        lambda: (_ for _ in ()).throw(AssertionError("used reset CUDA peak")),
+    )
+    assert _trace_cuda_peak_bytes(
+        {
+            "cuda_memory": {
+                "overall": {
+                    "peak": {
+                        "peak_allocated_bytes": 123,
+                        "peak_reserved_bytes": 456,
+                    }
+                }
+            }
+        },
+        cuda_memory_telemetry=True,
+        uses_cuda=True,
+    ) == (123, 456)
+
+    with pytest.raises(ValueError, match="peak_reserved_bytes is invalid"):
+        _trace_cuda_peak_bytes(
+            {
+                "cuda_memory": {
+                    "overall": {
+                        "peak": {
+                            "peak_allocated_bytes": 123,
+                            "peak_reserved_bytes": "456",
+                        }
+                    }
+                }
+            },
+            cuda_memory_telemetry=True,
+            uses_cuda=True,
+        )
+
+
 def test_topk_wave_dry_run_does_not_load_model_or_write(monkeypatch, tmp_path) -> None:
     import scripts.bonafide.topk_runner as runner_module
 
@@ -109,6 +179,37 @@ def test_topk_wave_dry_run_does_not_load_model_or_write(monkeypatch, tmp_path) -
     assert len(records) == 1
     assert records[0]["status"] == "planned"
     assert TOPK_TRACE_FAMILY_ID in records[0]["artifact_path"]
+    assert not (tmp_path / "summary.jsonl").exists()
+
+
+def test_topk_wave_dry_run_accepts_cuda_memory_instrumentation(
+    monkeypatch, tmp_path
+) -> None:
+    import scripts.bonafide.topk_runner as runner_module
+
+    monkeypatch.setattr(
+        runner_module,
+        "_load_model_and_tokenizer",
+        lambda _config: (_ for _ in ()).throw(
+            AssertionError("dry-run loaded the model")
+        ),
+    )
+    config = _cpu_config()
+    config["instrumentation"] = {"cuda_memory_telemetry": True}
+
+    records = run_topk_wave(
+        config=config,
+        manifest=_runner_manifest(),
+        wave_id="parity-01",
+        artifact_root=tmp_path / "artifacts",
+        summary_jsonl=tmp_path / "summary.jsonl",
+        dry_run=True,
+        verify_source=False,
+        _code_revision=_code_revision(),
+        _runtime_environment=_runtime_environment(),
+    )
+
+    assert [record["status"] for record in records] == ["planned"]
     assert not (tmp_path / "summary.jsonl").exists()
 
 

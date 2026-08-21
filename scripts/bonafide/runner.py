@@ -102,7 +102,30 @@ def trace_warmup_applies(policy: Mapping[str, Any], wave_id: str) -> bool:
     )
 
 
-def validate_run_config(config: Mapping[str, Any]) -> None:
+def normalized_instrumentation(config: Mapping[str, Any]) -> dict[str, bool]:
+    """Return the validated, identity-bound trace instrumentation policy."""
+
+    raw = config.get("instrumentation", {})
+    if not isinstance(raw, Mapping):
+        raise ValueError("run config instrumentation must be an object")
+    allowed = {"cuda_memory_telemetry"}
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(
+            "run config instrumentation has unsupported fields: "
+            + ", ".join(sorted(str(field) for field in unknown))
+        )
+    cuda_memory_telemetry = raw.get("cuda_memory_telemetry", False)
+    if not isinstance(cuda_memory_telemetry, bool):
+        raise ValueError(
+            "run config instrumentation.cuda_memory_telemetry must be boolean"
+        )
+    return {"cuda_memory_telemetry": cuda_memory_telemetry}
+
+
+def validate_run_config(
+    config: Mapping[str, Any], *, allow_instrumentation: bool = False
+) -> None:
     if config.get("schema_version") != RUN_CONFIG_SCHEMA:
         raise ValueError(
             f"Unsupported run config schema: {config.get('schema_version')!r}"
@@ -118,6 +141,12 @@ def validate_run_config(config: Mapping[str, Any]) -> None:
     if int(config.get("batch_size", 1)) != 1:
         raise ValueError("BonaFide performance runs require batch_size=1")
     normalized_trace_warmup(config)
+    if "instrumentation" in config and not allow_instrumentation:
+        raise ValueError(
+            "run config instrumentation is supported only by the top-k runner"
+        )
+    if allow_instrumentation:
+        normalized_instrumentation(config)
 
 
 def _require_manifest_int(value: Any, field: str) -> int:

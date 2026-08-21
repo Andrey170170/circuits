@@ -454,6 +454,22 @@ def test_run_config_rejects_non_unit_batch() -> None:
         validate_run_config(config)
 
 
+def test_run_config_validates_cuda_memory_instrumentation_policy() -> None:
+    config = _config()
+    config["instrumentation"] = {"cuda_memory_telemetry": True}
+    with pytest.raises(ValueError, match="supported only by the top-k runner"):
+        validate_run_config(config)
+    validate_run_config(config, allow_instrumentation=True)
+
+    config["instrumentation"]["cuda_memory_telemetry"] = "yes"
+    with pytest.raises(ValueError, match="cuda_memory_telemetry must be boolean"):
+        validate_run_config(config, allow_instrumentation=True)
+
+    config["instrumentation"] = {"cuda_memory_telemetry": True, "typo": False}
+    with pytest.raises(ValueError, match="unsupported fields: typo"):
+        validate_run_config(config, allow_instrumentation=True)
+
+
 def test_run_config_normalizes_and_validates_trace_warmup() -> None:
     assert normalized_trace_warmup(_config()) == {
         "enabled": False,
