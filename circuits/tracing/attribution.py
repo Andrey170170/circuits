@@ -17,6 +17,10 @@ from circuits.tracing.grad import (
     remove_forward_hooks,
     revert_stop_nonlinear_grad,
 )
+from circuits.tracing.instrumentation import (
+    TraceInstrumentation,
+    cuda_memory_instrumentation_stage,
+)
 from circuits.tracing.utils import NeuronIdx
 
 
@@ -461,6 +465,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
     center_logits: bool = False,
     neuron_chunk_size: int = 50,
     verbose: bool = False,
+    instrumentation: TraceInstrumentation | None = None,
     attention_backend: StopGradientAttentionBackend = (
         DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
     ),
@@ -555,13 +560,31 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
 
             # attribution to inputs for this layer chunk
             embeds.grad = None
-            layer_grad_attr = torch.autograd.grad(
-                layer_neuron_acts.flatten(),  # (n_chunk * batch)
-                embeds,  # (batch, seq, d)
-                grad_outputs=grad_outputs,  # (n_chunk * batch, n_chunk * batch)
-                is_grads_batched=True,
-                retain_graph=True,
-            )[0]
+            with cuda_memory_instrumentation_stage(
+                instrumentation,
+                "stop_grad_selected_attribution_vjp",
+                metadata={
+                    "operation_kind": "batched_vjp",
+                    "layer": lid,
+                    "chunk_start": chunk_start,
+                    "chunk_neuron_count": n_chunk,
+                    "lane_count": n_chunk * batch,
+                    "differentiated_output_shape": list(layer_neuron_acts.shape),
+                    "differentiated_input_shape": list(embeds.shape),
+                    "grad_outputs_shape": list(grad_outputs.shape),
+                },
+            ) as vjp_measurement:
+                layer_grad_attr = torch.autograd.grad(
+                    layer_neuron_acts.flatten(),  # (n_chunk * batch)
+                    embeds,  # (batch, seq, d)
+                    grad_outputs=grad_outputs,  # (n_chunk * batch, n_chunk * batch)
+                    is_grads_batched=True,
+                    retain_graph=True,
+                )[0]
+                if vjp_measurement is not None:
+                    vjp_measurement.metadata["vjp_result_shape"] = list(
+                        layer_grad_attr.shape
+                    )
             # shape: (n_chunk * batch, batch, seq, d)
             # convert back to (n_chunk, batch, batch, seq, d)
             layer_grad_attr = layer_grad_attr.reshape(
@@ -651,13 +674,28 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
 
     # compute embed grad contribs
     embeds.grad = None
-    embed_grad_contrib_full = torch.autograd.grad(
-        tgt_vec.flatten(),
-        embeds,
-        grad_outputs=grad_outputs,
-        is_grads_batched=True,
-        retain_graph=True,
-    )[0]
+    with cuda_memory_instrumentation_stage(
+        instrumentation,
+        "stop_grad_embed_contribution_vjp",
+        metadata={
+            "operation_kind": "batched_vjp",
+            "lane_count": t * batch,
+            "differentiated_output_shape": list(tgt_vec.shape),
+            "differentiated_input_shape": list(embeds.shape),
+            "grad_outputs_shape": list(grad_outputs.shape),
+        },
+    ) as vjp_measurement:
+        embed_grad_contrib_full = torch.autograd.grad(
+            tgt_vec.flatten(),
+            embeds,
+            grad_outputs=grad_outputs,
+            is_grads_batched=True,
+            retain_graph=True,
+        )[0]
+        if vjp_measurement is not None:
+            vjp_measurement.metadata["vjp_result_shape"] = list(
+                embed_grad_contrib_full.shape
+            )
     # shape (t * batch, batch, seq, d)
     # convert back to (t, batch, batch, seq, d)
     embed_grad_contrib = embed_grad_contrib_full.reshape(
@@ -737,13 +775,30 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
 
         layer_acts = cache[lid]  # (batch, seq, d)
         layer_acts.grad = None
-        layer_grad_contrib = torch.autograd.grad(
-            tgt_vec.flatten(),
-            layer_acts,
-            grad_outputs=grad_outputs,
-            is_grads_batched=True,
-            retain_graph=True,
-        )[0]
+        with cuda_memory_instrumentation_stage(
+            instrumentation,
+            "stop_grad_neuron_contribution_vjp",
+            metadata={
+                "operation_kind": "batched_vjp",
+                "layer": lid,
+                "selected_neuron_count": len(pairs),
+                "lane_count": t * batch,
+                "differentiated_output_shape": list(tgt_vec.shape),
+                "differentiated_input_shape": list(layer_acts.shape),
+                "grad_outputs_shape": list(grad_outputs.shape),
+            },
+        ) as vjp_measurement:
+            layer_grad_contrib = torch.autograd.grad(
+                tgt_vec.flatten(),
+                layer_acts,
+                grad_outputs=grad_outputs,
+                is_grads_batched=True,
+                retain_graph=True,
+            )[0]
+            if vjp_measurement is not None:
+                vjp_measurement.metadata["vjp_result_shape"] = list(
+                    layer_grad_contrib.shape
+                )
         # shape: (t * batch, batch, seq, d)
         # convert back to (t, batch, batch, seq, d)
         layer_grad_contrib = layer_grad_contrib.reshape(
@@ -806,6 +861,7 @@ def _get_neuron_attr_and_contrib(
     alpha: float | None = None,
     neuron_chunk_size: int = 50,
     verbose: bool = False,
+    instrumentation: TraceInstrumentation | None = None,
 ) -> (
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx]]
     | tuple[
@@ -924,13 +980,31 @@ def _get_neuron_attr_and_contrib(
 
             # attribution to inputs for this layer chunk
             embeds.grad = None
-            layer_grad_attr = torch.autograd.grad(
-                layer_neuron_acts.flatten(),  # (n_chunk * batch)
-                embeds,  # (batch, seq, d)
-                grad_outputs=grad_outputs,  # (n_chunk * batch, n_chunk * batch)
-                is_grads_batched=True,
-                retain_graph=True,
-            )[0]
+            with cuda_memory_instrumentation_stage(
+                instrumentation,
+                "selected_attribution_vjp",
+                metadata={
+                    "operation_kind": "batched_vjp",
+                    "layer": lid,
+                    "chunk_start": chunk_start,
+                    "chunk_neuron_count": n_chunk,
+                    "lane_count": n_chunk * batch,
+                    "differentiated_output_shape": list(layer_neuron_acts.shape),
+                    "differentiated_input_shape": list(embeds.shape),
+                    "grad_outputs_shape": list(grad_outputs.shape),
+                },
+            ) as vjp_measurement:
+                layer_grad_attr = torch.autograd.grad(
+                    layer_neuron_acts.flatten(),  # (n_chunk * batch)
+                    embeds,  # (batch, seq, d)
+                    grad_outputs=grad_outputs,  # (n_chunk * batch, n_chunk * batch)
+                    is_grads_batched=True,
+                    retain_graph=True,
+                )[0]
+                if vjp_measurement is not None:
+                    vjp_measurement.metadata["vjp_result_shape"] = list(
+                        layer_grad_attr.shape
+                    )
             # shape: (n_chunk * batch, batch, seq, d)
             # convert back to (n_chunk, batch, batch, seq, d)
             layer_grad_attr = layer_grad_attr.reshape(
@@ -990,13 +1064,28 @@ def _get_neuron_attr_and_contrib(
 
     # compute embed grad contribs
     embeds.grad = None
-    embed_grad_contrib_full = torch.autograd.grad(
-        tgt_vec.flatten(),
-        embeds,
-        grad_outputs=grad_outputs,
-        is_grads_batched=True,
-        retain_graph=True,
-    )[0]
+    with cuda_memory_instrumentation_stage(
+        instrumentation,
+        "selected_embed_contribution_vjp",
+        metadata={
+            "operation_kind": "batched_vjp",
+            "lane_count": t * batch,
+            "differentiated_output_shape": list(tgt_vec.shape),
+            "differentiated_input_shape": list(embeds.shape),
+            "grad_outputs_shape": list(grad_outputs.shape),
+        },
+    ) as vjp_measurement:
+        embed_grad_contrib_full = torch.autograd.grad(
+            tgt_vec.flatten(),
+            embeds,
+            grad_outputs=grad_outputs,
+            is_grads_batched=True,
+            retain_graph=True,
+        )[0]
+        if vjp_measurement is not None:
+            vjp_measurement.metadata["vjp_result_shape"] = list(
+                embed_grad_contrib_full.shape
+            )
     # shape (t * batch, batch, seq, d)
     # convert back to (t, batch, batch, seq, d)
     embed_grad_contrib = embed_grad_contrib_full.reshape(
@@ -1035,13 +1124,30 @@ def _get_neuron_attr_and_contrib(
     ):
         layer_acts = cache[lid]  # (batch, seq, d)
         layer_acts.grad = None
-        layer_grad_contrib = torch.autograd.grad(
-            tgt_vec.flatten(),
-            layer_acts,
-            grad_outputs=grad_outputs,
-            is_grads_batched=True,
-            retain_graph=True,
-        )[0]
+        with cuda_memory_instrumentation_stage(
+            instrumentation,
+            "selected_neuron_contribution_vjp",
+            metadata={
+                "operation_kind": "batched_vjp",
+                "layer": lid,
+                "selected_neuron_count": len(pairs),
+                "lane_count": t * batch,
+                "differentiated_output_shape": list(tgt_vec.shape),
+                "differentiated_input_shape": list(layer_acts.shape),
+                "grad_outputs_shape": list(grad_outputs.shape),
+            },
+        ) as vjp_measurement:
+            layer_grad_contrib = torch.autograd.grad(
+                tgt_vec.flatten(),
+                layer_acts,
+                grad_outputs=grad_outputs,
+                is_grads_batched=True,
+                retain_graph=True,
+            )[0]
+            if vjp_measurement is not None:
+                vjp_measurement.metadata["vjp_result_shape"] = list(
+                    layer_grad_contrib.shape
+                )
         # shape: (t * batch, batch, seq, d)
         # convert back to (t, batch, batch, seq, d)
         layer_grad_contrib = layer_grad_contrib.reshape(
@@ -1116,6 +1222,7 @@ def _get_neuron_attr_and_contrib_ig(
     ig_mode: Literal["ig-inputs", "conductance"] = "ig-inputs",
     neuron_chunk_size: int = 50,
     verbose: bool = False,
+    instrumentation: TraceInstrumentation | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions and contributions using Integrated Gradients.
@@ -1166,6 +1273,7 @@ def _get_neuron_attr_and_contrib_ig(
                 alpha=alpha,
                 neuron_chunk_size=neuron_chunk_size,
                 verbose=verbose,
+                instrumentation=instrumentation,
             )
         )
 

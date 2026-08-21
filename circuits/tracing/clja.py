@@ -534,6 +534,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                         center_logits=center_logits,
                         neuron_chunk_size=50,
                         verbose=verbose,
+                        instrumentation=instrumentation,
                     )
                 )
             else:
@@ -553,6 +554,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                         ig_mode=ig_mode,
                         neuron_chunk_size=20,  # Smaller chunk size for IG
                         verbose=verbose,
+                        instrumentation=instrumentation,
                     )
                 )
 
@@ -604,6 +606,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 center_logits=center_logits,
                 neuron_chunk_size=10,
                 verbose=verbose,
+                instrumentation=instrumentation,
                 attention_backend=stop_gradient_attention_backend,
             )
         # store neuron attributions and contributions (keep on CPU to save GPU memory)

@@ -45,6 +45,7 @@ class StageMeasurement:
     wall_seconds: float | None = None
     failed: bool = False
     cuda_memory: dict[str, Any] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     _started: float = field(default=0.0, repr=False)
     _cuda_start: dict[str, int | float] | None = field(default=None, repr=False)
     _cuda_peak: dict[str, int] = field(default_factory=dict, repr=False)
@@ -213,14 +214,20 @@ class TraceInstrumentation:
                 "measurement_error": f"{type(error).__name__}: {error}",
             }
 
-    def measurement_start(self, name: str) -> StageMeasurement:
+    def measurement_start(
+        self, name: str, *, metadata: Mapping[str, Any] | None = None
+    ) -> StageMeasurement:
         """Start one stage call for code that cannot naturally use ``with``."""
 
         self._synchronize()
         if self.cuda_memory_telemetry:
             self._checkpoint_cuda()
             self._reset_cuda_peaks()
-        measurement = StageMeasurement(name=name, _started=time.perf_counter())
+        measurement = StageMeasurement(
+            name=name,
+            metadata=dict(metadata or {}),
+            _started=time.perf_counter(),
+        )
         if self.cuda_memory_telemetry:
             measurement._cuda_start = self._cuda_metrics()
             measurement._cuda_peak = self._peak_values(measurement._cuda_start)
@@ -285,10 +292,12 @@ class TraceInstrumentation:
         stage["failed_calls"] = int(stage["failed_calls"]) + int(failed)
 
     @contextmanager
-    def measure_stage(self, name: str) -> Iterator[StageMeasurement]:
+    def measure_stage(
+        self, name: str, *, metadata: Mapping[str, Any] | None = None
+    ) -> Iterator[StageMeasurement]:
         """Measure one possibly nested call and return its completed record."""
 
-        measurement = self.measurement_start(name)
+        measurement = self.measurement_start(name, metadata=metadata)
         try:
             yield measurement
         except BaseException:
@@ -318,6 +327,7 @@ class TraceInstrumentation:
                     "call_index": len(calls),
                     "failed": measurement.failed,
                     "wall_seconds": measurement.wall_seconds,
+                    "metadata": measurement.metadata,
                     "cuda_memory": measurement.cuda_memory,
                 }
             )
@@ -414,6 +424,19 @@ def instrumentation_stage(instrumentation: TraceInstrumentation | None, name: st
     if instrumentation is None:
         return nullcontext()
     return instrumentation.measure_stage(name)
+
+
+def cuda_memory_instrumentation_stage(
+    instrumentation: TraceInstrumentation | None,
+    name: str,
+    *,
+    metadata: Mapping[str, Any],
+):
+    """Return a measured stage only when fine-grained CUDA telemetry is enabled."""
+
+    if instrumentation is None or not instrumentation.cuda_memory_telemetry:
+        return nullcontext()
+    return instrumentation.measure_stage(name, metadata=metadata)
 
 
 def record_selection_predictors(

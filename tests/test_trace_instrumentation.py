@@ -9,6 +9,7 @@ from circuits.tracing.instrumentation import (
     CUDA_MEMORY_SCHEMA_VERSION,
     SCHEMA_VERSION,
     TraceInstrumentation,
+    cuda_memory_instrumentation_stage,
     record_selection_predictors,
 )
 
@@ -170,6 +171,62 @@ def test_nested_manual_stage_failure_unwinds_without_masking_original(
     assert snapshot["stages"]["layer_pair_jacobian"]["failed_calls"] == 1
     assert snapshot["stages"]["graph_expansion"]["failed_calls"] == 1
     assert recorder._measurement_stack == []
+
+
+def test_cuda_memory_stage_records_json_safe_vjp_metadata(monkeypatch) -> None:
+    _install_fake_cuda(monkeypatch)
+    recorder = TraceInstrumentation(device="cuda:0", cuda_memory_telemetry=True)
+
+    with cuda_memory_instrumentation_stage(
+        recorder,
+        "stop_grad_selected_attribution_vjp",
+        metadata={
+            "operation_kind": "batched_vjp",
+            "layer": 7,
+            "chunk_start": 10,
+            "chunk_neuron_count": 4,
+            "lane_count": 4,
+            "differentiated_output_shape": [4, 1],
+            "differentiated_input_shape": [1, 2951, 2560],
+            "grad_outputs_shape": [4, 4],
+        },
+    ) as measurement:
+        assert measurement is not None
+        measurement.metadata["vjp_result_shape"] = [4, 1, 2951, 2560]
+
+    snapshot = recorder.snapshot()
+    calls = snapshot["stages"]["stop_grad_selected_attribution_vjp"][
+        "call_measurements"
+    ]
+    assert calls[0]["metadata"] == {
+        "operation_kind": "batched_vjp",
+        "layer": 7,
+        "chunk_start": 10,
+        "chunk_neuron_count": 4,
+        "lane_count": 4,
+        "differentiated_output_shape": [4, 1],
+        "differentiated_input_shape": [1, 2951, 2560],
+        "grad_outputs_shape": [4, 4],
+        "vjp_result_shape": [4, 1, 2951, 2560],
+    }
+    json.dumps(snapshot, allow_nan=False)
+
+
+def test_cuda_memory_stage_is_noop_without_telemetry(monkeypatch) -> None:
+    recorder = TraceInstrumentation(device="cuda:0", synchronize_cuda=True)
+
+    def unexpected_synchronize() -> None:
+        raise AssertionError("disabled fine-grained telemetry synchronized CUDA")
+
+    monkeypatch.setattr(recorder, "_synchronize", unexpected_synchronize)
+    with cuda_memory_instrumentation_stage(
+        recorder,
+        "selected_attribution_vjp",
+        metadata={"operation_kind": "batched_vjp"},
+    ) as measurement:
+        assert measurement is None
+
+    assert "selected_attribution_vjp" not in recorder.snapshot()["stages"]
 
 
 def test_selection_predictors_match_planned_pair_math() -> None:
