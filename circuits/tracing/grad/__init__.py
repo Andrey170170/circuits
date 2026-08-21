@@ -7,13 +7,19 @@ Supports multiple model architectures (Llama, Qwen3) with a shared interface.
 
 import torch
 from torch import nn
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
+from circuits.tracing.grad.attention import (
+    DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND,
+    StopGradientAttentionBackend,
+    resolve_stop_gradient_attention_backend,
+)
+from circuits.tracing.grad.attention import (
+    noqk_attention_forward as noqk_attention_forward,
+)
 from circuits.tracing.grad.llama import (
     LlamaAttention,
     LlamaMLP,
     LlamaRMSNorm,
-    repeat_kv,
 )
 from circuits.tracing.grad.qwen3 import Qwen3Attention, Qwen3MLP, Qwen3RMSNorm
 
@@ -87,43 +93,6 @@ class StraightThroughRMSNorm(StopGradientModule):
             self.norm.variance_epsilon,
         ).detach()
         return x * coeff.permute(1, 0, 2).view(B, L, D)
-
-
-def noqk_attention_forward(
-    module: nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask,
-    scaling: float,
-    dropout: float = 0.0,
-    **kwargs,
-):
-    """Attention forward that detaches attention weights so gradient only flows through OV."""
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
-
-    attn_scores = torch.matmul(query, key_states.transpose(2, 3)) * scaling
-    if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        attn_scores = attn_scores + causal_mask
-
-    attn_weights = (
-        nn.functional.softmax(attn_scores, dim=-1, dtype=torch.float32)
-        .to(query.dtype)
-        .detach()
-    )
-
-    attn_weights = nn.functional.dropout(
-        attn_weights, p=dropout, training=module.training
-    )
-    attn_output = torch.matmul(attn_weights, value_states)
-    attn_output = attn_output.transpose(1, 2).contiguous()
-
-    return attn_output, attn_weights
-
-
-ALL_ATTENTION_FUNCTIONS["noqk"] = noqk_attention_forward
 
 
 class NoQKGradAttention(StopGradientModule):
@@ -258,10 +227,17 @@ def _layerwise_scope(model, start_layer: int, end_layer: int) -> tuple[int, ...]
 
 
 def _begin_stop_gradient_state(
-    model, *, operation: str, scope: tuple[int, ...]
+    model,
+    *,
+    operation: str,
+    scope: tuple[int, ...],
+    attention_backend: StopGradientAttentionBackend,
 ) -> None:
     """Snapshot exact modules and mutable state before any replacement."""
 
+    attention_implementation = resolve_stop_gradient_attention_backend(
+        attention_backend
+    )
     if hasattr(model, _STOP_GRAD_STATE_ATTRIBUTE):
         raise RuntimeError("stop-gradient model state is already active")
     layer_modules = {
@@ -316,7 +292,7 @@ def _begin_stop_gradient_state(
     )
     try:
         for config, _had_attribute, _original_value in attention_configs:
-            config._attn_implementation = "noqk"
+            config._attn_implementation = attention_implementation
     except BaseException:
         _restore_stop_gradient_state(
             model, expected_operation=operation, expected_scope=scope
@@ -364,6 +340,9 @@ def stop_nonlinear_grad(
     model,
     use_relp_grad: bool = False,
     use_half_rule: bool = True,
+    attention_backend: StopGradientAttentionBackend = (
+        DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
+    ),
 ):
     """
     Stop gradient for all non-linear layers in the model.
@@ -374,7 +353,12 @@ def stop_nonlinear_grad(
            otherwise, entire gate branch is detached
     """
     scope = _valid_layer_scope(model, range(len(model.model.layers)))
-    _begin_stop_gradient_state(model, operation="global", scope=scope)
+    _begin_stop_gradient_state(
+        model,
+        operation="global",
+        scope=scope,
+        attention_backend=attention_backend,
+    )
     try:
         model.model.norm = StraightThroughRMSNorm(model.model.norm)
         for layer in scope:
@@ -414,6 +398,19 @@ def revert_stop_nonlinear_grad(model):
     return model
 
 
+def revert_active_stop_nonlinear_grad(model):
+    """Restore whichever stop-gradient transaction is active, if any."""
+
+    state = getattr(model, _STOP_GRAD_STATE_ATTRIBUTE, None)
+    if state is not None:
+        _restore_stop_gradient_state(
+            model,
+            expected_operation=state["operation"],
+            expected_scope=state["scope"],
+        )
+    return model
+
+
 def layerwise_stop_nonlinear_grad(
     model,
     start_layer: int,
@@ -421,9 +418,17 @@ def layerwise_stop_nonlinear_grad(
     use_relp_grad: bool = False,
     use_stop_grad_on_mlps: bool = True,
     use_half_rule: bool = True,
+    attention_backend: StopGradientAttentionBackend = (
+        DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
+    ),
 ):
     scope = _layerwise_scope(model, start_layer, end_layer)
-    _begin_stop_gradient_state(model, operation="layerwise", scope=scope)
+    _begin_stop_gradient_state(
+        model,
+        operation="layerwise",
+        scope=scope,
+        attention_backend=attention_backend,
+    )
     boundary_layers = {layer for layer in (start_layer, end_layer) if layer in scope}
     interior_layers = [layer for layer in scope if layer not in boundary_layers]
     try:

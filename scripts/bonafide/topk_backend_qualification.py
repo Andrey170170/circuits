@@ -1,0 +1,125 @@
+"""CLI for qualifying numerical drift between top-k attention backends."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import uuid
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from circuits.tracing.backend_qualification import (
+    TOLERANCE_GROUPS,
+    NumericTolerance,
+    compare_attention_backend_artifacts,
+)
+
+
+def save_qualification_report(path: Path, report: Mapping[str, Any]) -> Path:
+    """Publish a JSON qualification report atomically without overwriting evidence."""
+
+    if path.exists():
+        raise FileExistsError(f"qualification report already exists: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.tmp-{uuid.uuid4().hex}"
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return path
+
+
+def _tolerance_arguments(
+    values: Mapping[str, tuple[float | None, float | None]],
+) -> dict[str, NumericTolerance]:
+    tolerances: dict[str, NumericTolerance] = {}
+    for group, (absolute, relative) in values.items():
+        if absolute is None and relative is None:
+            continue
+        tolerances[group] = NumericTolerance(
+            absolute=0.0 if absolute is None else absolute,
+            relative=0.0 if relative is None else relative,
+        )
+    return tolerances
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compare two compact top-k traces from different attention backends. "
+            "No numerical threshold is assumed: provide tolerances to create "
+            "numerical pass/fail gates."
+        )
+    )
+    parser.add_argument("--reference", type=Path, required=True)
+    parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--allow-identity-difference",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Explicit artifact_identity path allowed to differ. Suffix .* allows "
+            "a subtree. Only adag_config, code_revision, and runtime_environment "
+            "paths are accepted. Repeat as needed."
+        ),
+    )
+    parser.add_argument("--require-same-gpu-family", action="store_true")
+    parser.add_argument("--require-same-gpu-model", action="store_true")
+    parser.add_argument("--require-exact-node-topology", action="store_true")
+    parser.add_argument("--require-exact-edge-topology", action="store_true")
+    parser.add_argument(
+        "--require-exact-topology",
+        action="store_true",
+        help="Require both node and edge topology to match exactly.",
+    )
+    for group in TOLERANCE_GROUPS:
+        option = group.replace("_", "-")
+        parser.add_argument(f"--{option}-atol", type=float)
+        parser.add_argument(f"--{option}-rtol", type=float)
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    tolerances = _tolerance_arguments(
+        {
+            group: (
+                getattr(args, f"{group}_atol"),
+                getattr(args, f"{group}_rtol"),
+            )
+            for group in TOLERANCE_GROUPS
+        }
+    )
+    report = compare_attention_backend_artifacts(
+        args.reference,
+        args.candidate,
+        allowed_identity_difference_paths=args.allow_identity_difference,
+        tolerances=tolerances,
+        require_same_gpu_model=args.require_same_gpu_model,
+        require_same_gpu_family=args.require_same_gpu_family,
+        require_exact_node_topology=(
+            args.require_exact_topology or args.require_exact_node_topology
+        ),
+        require_exact_edge_topology=(
+            args.require_exact_topology or args.require_exact_edge_topology
+        ),
+    )
+    save_qualification_report(args.output, report)
+    print(json.dumps(report, sort_keys=True, allow_nan=False))
+    if not report["validation_passed"]:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -25,9 +25,13 @@ from circuits.tracing.candidates import (
     reduce_candidate_contributions,
 )
 from circuits.tracing.grad import (
+    DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND,
+    StopGradientAttentionBackend,
     layerwise_revert_stop_nonlinear_grad,
     layerwise_stop_nonlinear_grad,
     remove_forward_hooks,
+    resolve_stop_gradient_attention_backend,
+    revert_active_stop_nonlinear_grad,
     revert_stop_nonlinear_grad,
     stop_nonlinear_grad,
 )
@@ -78,6 +82,9 @@ class ADAGConfig:
     disable_half_rule: bool = False
     disable_stop_grad: bool = False
     use_stop_grad_on_mlps: bool = False
+    stop_gradient_attention_backend: StopGradientAttentionBackend = (
+        DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
+    )
     ablation_mode: Literal["zero", "mean"] = "zero"
     center_logits: bool = False
 
@@ -102,6 +109,19 @@ class ADAGConfig:
 
     # Tracing settings
     focus_last_residual: bool = False
+
+    def __post_init__(self) -> None:
+        resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Load artifacts pickled before the attention backend became explicit."""
+
+        self.__dict__.update(state)
+        if "stop_gradient_attention_backend" not in state:
+            self.stop_gradient_attention_backend = (
+                DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
+            )
+        resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
 
 
 @dataclass(frozen=True)
@@ -220,6 +240,12 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     disable_half_rule = config.disable_half_rule
     disable_stop_grad = config.disable_stop_grad
     use_stop_grad_on_mlps = config.use_stop_grad_on_mlps
+    stop_gradient_attention_backend = config.stop_gradient_attention_backend
+    if instrumentation is not None:
+        instrumentation.set_counter(
+            "stop_gradient_attention_backend",
+            stop_gradient_attention_backend,
+        )
     ablation_mode = config.ablation_mode
     center_logits = config.center_logits
     ig_steps = config.ig_steps
@@ -319,6 +345,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 model,
                 use_relp_grad=use_relp_grad,
                 use_half_rule=not disable_half_rule,
+                attention_backend=stop_gradient_attention_backend,
             )
 
     # get attributions (same as original)
@@ -584,6 +611,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             center_logits=center_logits,
             neuron_chunk_size=10,
             verbose=verbose,
+            attention_backend=stop_gradient_attention_backend,
         )
         if instrumentation is not None and stop_grad_attr_started is not None:
             instrumentation.record_stage(
@@ -653,6 +681,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             use_relp_grad=use_relp_grad,
             disable_stop_grad=disable_stop_grad,
             use_stop_grad_on_mlps=use_stop_grad_on_mlps,
+            stop_gradient_attention_backend=stop_gradient_attention_backend,
             neuron_attr_map_with_stop_grad_on_mlps=neuron_attr_map_with_stop_grad_on_mlps,
             neuron_contrib_map_with_stop_grad_on_mlps=neuron_contrib_map_with_stop_grad_on_mlps,
             candidate_objective_weights=objective_weights,
@@ -686,31 +715,12 @@ def get_all_pairs_cl_ja_effects_with_attributions(
     | tuple[torch.Tensor, torch.Tensor]
     | CLJAProbeSelection
 ):
-    """Run CLJA, with exception-safe cleanup for the graph-free probe path."""
+    """Run CLJA with exception-safe stop-gradient state cleanup."""
 
     if probe_only and config.return_only_important_neurons:
         raise ValueError(
             "probe_only and return_only_important_neurons cannot be enabled together"
         )
-    if not probe_only:
-        # Keep normal full-trace control flow and cleanup semantics unchanged.
-        return _get_all_pairs_cl_ja_effects_with_attributions_impl(
-            model=model,
-            tokenizer=tokenizer,
-            cis=cis,
-            config=config,
-            src_tokens=src_tokens,
-            tgt_tokens=tgt_tokens,
-            keep_tokens=keep_tokens,
-            attention_masks=attention_masks,
-            focus_positions=focus_positions,
-            focus_logits=focus_logits,
-            candidate_axis=candidate_axis,
-            frozen_topology=frozen_topology,
-            instrumentation=instrumentation,
-            probe_only=False,
-        )
-
     tracing_failed = False
     try:
         return _get_all_pairs_cl_ja_effects_with_attributions_impl(
@@ -727,7 +737,7 @@ def get_all_pairs_cl_ja_effects_with_attributions(
             candidate_axis=candidate_axis,
             frozen_topology=frozen_topology,
             instrumentation=instrumentation,
-            probe_only=True,
+            probe_only=probe_only,
         )
     except BaseException:
         tracing_failed = True
@@ -735,10 +745,13 @@ def get_all_pairs_cl_ja_effects_with_attributions(
     finally:
         if not config.disable_stop_grad:
             try:
-                revert_stop_nonlinear_grad(model)
+                if probe_only:
+                    revert_stop_nonlinear_grad(model)
+                else:
+                    revert_active_stop_nonlinear_grad(model)
             except BaseException:
-                # Preserve the scientific tracing failure. On a successful
-                # probe, cleanup failure remains fatal.
+                # Preserve the scientific tracing failure. After a successful
+                # trace, cleanup failure remains fatal.
                 if not tracing_failed:
                     raise
 
@@ -783,6 +796,9 @@ def _get_cl_ja_based_edges(
     use_relp_grad: bool = False,
     disable_stop_grad: bool = False,
     use_stop_grad_on_mlps: bool = False,
+    stop_gradient_attention_backend: StopGradientAttentionBackend = (
+        DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
+    ),
     neuron_attr_map_with_stop_grad_on_mlps=None,
     neuron_contrib_map_with_stop_grad_on_mlps=None,
     candidate_objective_weights: tuple[float, ...] | None = None,
@@ -1278,6 +1294,7 @@ def _get_cl_ja_based_edges(
                     disable_stop_grad,
                     use_stop_grad_on_mlps,
                     device,
+                    attention_backend=stop_gradient_attention_backend,
                     tgt_chunk_size=50,  # Can use larger chunk for non-IG
                     verbose=verbose,
                 )  # shape: (batch, n_src, n_tgt)
@@ -1413,6 +1430,9 @@ def _compute_cl_ja_layer_jacobian(
     disable_stop_grad: bool,
     use_stop_grad_on_mlps: bool,
     device: str,
+    attention_backend: StopGradientAttentionBackend = (
+        DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
+    ),
     alpha: float | None = None,
     tgt_chunk_size: int = 50,
     verbose: bool = False,
@@ -1440,6 +1460,7 @@ def _compute_cl_ja_layer_jacobian(
             tgt_layer,
             use_relp_grad=use_relp_grad,
             use_stop_grad_on_mlps=use_stop_grad_on_mlps,
+            attention_backend=attention_backend,
         )
     model.zero_grad()
     # populate activation cache for getting jacobian

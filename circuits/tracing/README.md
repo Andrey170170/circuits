@@ -7,5 +7,23 @@ Circuit tracing via Cross-Layer Jacobian Attribution (CLJA). Identifies importan
 - **`trace.py`** — High-level tracing pipeline: prepares tokenized inputs, runs CLJA, and returns a `CircuitData` artifact containing node/edge DataFrames, tokenized inputs, target logits, and config metadata.
 - **`clja.py`** — Core CLJA algorithm (`get_all_pairs_cl_ja_effects_with_attributions`). Orchestrates node selection, attribution/contribution computation, and edge tracing via jacobians.
 - **`attribution.py`** — Gradient-based attribution helpers for scoring neuron importance (used by `clja.py` to filter neurons before edge computation).
-- **`grad.py`** — Custom backward-pass wrappers (straight-through layernorm, stop-grad on attention/MLP gate, Shapley gradient approximations).
+- **`grad/`** — Custom backward-pass wrappers and selectable stop-gradient
+  attention adapters (straight-through layernorm, stop-grad on attention/MLP
+  gate, Shapley gradient approximations).
 - **`utils.py`** — Data classes (`NeuronIdx`, `Node`, `Edge`) and activation collection utilities.
+
+## Stop-gradient attention backends
+
+`ADAGConfig.stop_gradient_attention_backend` is a provenance-bearing choice:
+
+- `legacy_eager_unmasked_v1` is the default solely for reproduction of frozen
+  traces. With Transformers 4.57, the historical custom attention key did not
+  prepare a causal or padding mask.
+- `eager_causal_v1` is the materialized, corrected causal reference.
+- `flash_sdpa_causal_v1` detaches Q/K, preserves V/O gradients, returns no
+  attention weights, and permits only PyTorch Flash SDPA. It fails instead of
+  falling back to a math or memory-efficient kernel.
+
+Qualify corrected eager against Flash SDPA on one GPU model before promotion.
+Do not compare `legacy_eager_unmasked_v1` and either causal backend as if they
+differed only by floating-point implementation drift.

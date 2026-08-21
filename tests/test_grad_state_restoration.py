@@ -9,6 +9,7 @@ import torch
 from circuits.tracing.grad import (
     layerwise_revert_stop_nonlinear_grad,
     layerwise_stop_nonlinear_grad,
+    revert_active_stop_nonlinear_grad,
     revert_stop_nonlinear_grad,
     stop_nonlinear_grad,
 )
@@ -107,6 +108,28 @@ def test_layerwise_stop_and_revert_restore_shared_backend_and_flags() -> None:
     assert _requires_grad_state(model) == original_flags
 
 
+@pytest.mark.parametrize(
+    ("backend", "implementation"),
+    [
+        ("eager_causal_v1", "noqk_eager_causal_v1"),
+        ("flash_sdpa_causal_v1", "noqk_flash_sdpa_causal_v1"),
+    ],
+)
+def test_selectable_backend_is_applied_and_restored(
+    backend: str, implementation: str
+) -> None:
+    model = FakeModel("sdpa")
+    original_flags = _requires_grad_state(model)
+
+    stop_nonlinear_grad(model, attention_backend=backend)
+    assert model.config._attn_implementation == implementation
+    revert_stop_nonlinear_grad(model)
+
+    assert model.config._attn_implementation == "sdpa"
+    assert _requires_grad_state(model) == original_flags
+    assert not hasattr(model, "_adag_stop_gradient_model_state")
+
+
 def test_global_then_layerwise_use_restores_backend_sequentially() -> None:
     model = FakeModel("eager")
     original_flags = _requires_grad_state(model)
@@ -160,7 +183,7 @@ def test_partial_global_construction_rolls_back_exact_modules(monkeypatch) -> No
 
     monkeypatch.setattr(grad_module, "NoQKGradAttention", failing_wrapper)
     with pytest.raises(RuntimeError, match="partial wrapper construction"):
-        stop_nonlinear_grad(model)
+        stop_nonlinear_grad(model, attention_backend="flash_sdpa_causal_v1")
 
     assert model.model.norm is original_norm
     assert [
@@ -173,6 +196,39 @@ def test_partial_global_construction_rolls_back_exact_modules(monkeypatch) -> No
         for layer in model.model.layers
     ] == original_layers
     assert model.config._attn_implementation == "sdpa"
+    assert _requires_grad_state(model) == original_flags
+    assert not hasattr(model, "_adag_stop_gradient_model_state")
+
+
+def test_invalid_backend_does_not_begin_a_transaction() -> None:
+    model = FakeModel("sdpa")
+    original_modules = [layer.self_attn for layer in model.model.layers]
+    original_flags = _requires_grad_state(model)
+
+    with pytest.raises(ValueError, match="invalid stop-gradient attention backend"):
+        stop_nonlinear_grad(model, attention_backend="auto")
+
+    assert model.config._attn_implementation == "sdpa"
+    assert [layer.self_attn for layer in model.model.layers] == original_modules
+    assert _requires_grad_state(model) == original_flags
+    assert not hasattr(model, "_adag_stop_gradient_model_state")
+
+
+def test_revert_active_stop_gradient_restores_layerwise_transaction() -> None:
+    model = FakeModel("sdpa")
+    original_modules = [layer.self_attn for layer in model.model.layers]
+    original_flags = _requires_grad_state(model)
+
+    layerwise_stop_nonlinear_grad(
+        model,
+        0,
+        1,
+        attention_backend="flash_sdpa_causal_v1",
+    )
+    revert_active_stop_nonlinear_grad(model)
+
+    assert model.config._attn_implementation == "sdpa"
+    assert [layer.self_attn for layer in model.model.layers] == original_modules
     assert _requires_grad_state(model) == original_flags
     assert not hasattr(model, "_adag_stop_gradient_model_state")
 

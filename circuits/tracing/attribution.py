@@ -10,6 +10,8 @@ import torch
 from tqdm import tqdm
 
 from circuits.tracing.grad import (
+    DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND,
+    StopGradientAttentionBackend,
     layerwise_revert_stop_nonlinear_grad,
     layerwise_stop_nonlinear_grad,
     remove_forward_hooks,
@@ -459,6 +461,9 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
     center_logits: bool = False,
     neuron_chunk_size: int = 50,
     verbose: bool = False,
+    attention_backend: StopGradientAttentionBackend = (
+        DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
+    ),
 ) -> tuple[torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions from source tokens and contributions to target tokens
@@ -490,6 +495,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             lid,
             use_relp_grad=use_relp_grad,
             use_stop_grad_on_mlps=True,
+            attention_backend=attention_backend,
         )
 
         cache = {}
@@ -622,6 +628,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         len(model.model.layers),
         use_relp_grad=use_relp_grad,
         use_stop_grad_on_mlps=True,
+        attention_backend=attention_backend,
     )
 
     # differentiable embeds
@@ -691,6 +698,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             len(model.model.layers),
             use_relp_grad=use_relp_grad,
             use_stop_grad_on_mlps=True,
+            attention_backend=attention_backend,
         )
 
         cache = {}
