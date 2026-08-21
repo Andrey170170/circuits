@@ -268,7 +268,14 @@ def test_html_has_safe_payload_target_controls_filters_and_export() -> None:
         "renderedEnd",
         "component-overlap",
         "token-whitespace",
-        "whitespaceGlyphs",
+        "token-linebreak",
+        "original spacing and line breaks are preserved",
+        "isSameDraft",
+        "Click the yellow draft again to deselect it",
+        ":hover:not(.draft):not(.saved)",
+        "box-decoration-break:clone",
+        'setAttribute("role","button")',
+        'event.key==="Enter"||event.key===" "',
         "Localized unfaithful overlap",
         "Causal context at response end",
         "crypto.subtle.digest",
@@ -276,6 +283,7 @@ def test_html_has_safe_payload_target_controls_filters_and_export() -> None:
         "localStorage",
     ):
         assert marker in html
+    assert "whitespaceGlyphs" not in html
     match = re.search(r'atob\("([A-Za-z0-9+/=]+)"\)', html)
     assert match is not None
     decoded = json.loads(gzip.decompress(base64.b64decode(match.group(1))))

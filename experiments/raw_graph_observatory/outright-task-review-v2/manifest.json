@@ -102,12 +102,12 @@
   "export_schema_version": "adag.raw-graph-observatory.outright-target-selection.v2",
   "files": {
     "review.html": {
-      "bytes": 9592261,
-      "sha256": "c90e4addf457a908f61c3491e17d61f57dc7c06507213b80a32128c821e90db2"
+      "bytes": 9593780,
+      "sha256": "953925ca946af2f05826b28c4db5e4e51faabfe9b6de166c664c2c46e3b41837"
     }
   },
-  "manifest_sha256": "2832a4c503d17bbf7c4947d5ef31718ff3ff7981d975f03036fff9d9ce4a2836",
-  "page_sha256": "c90e4addf457a908f61c3491e17d61f57dc7c06507213b80a32128c821e90db2",
+  "manifest_sha256": "3e26f6c58e21ce8642b04f69c45f8c6d88b0317f7c1b0136bafe004a4d5f5b05",
+  "page_sha256": "953925ca946af2f05826b28c4db5e4e51faabfe9b6de166c664c2c46e3b41837",
   "payload_sha256": "6e0749b1cfc957882cc3a720f6a6e5a1b54793bad438c19bd8c89eb935af3eaf",
   "schema_version": "adag.raw-graph-observatory.outright-review.v2",
   "scope": {
