@@ -1,0 +1,98 @@
+{
+  "schema_version": "adag.raw-graph-observatory.tokenizer-profiles.v2",
+  "prompt_provenance": {
+    "answer_only_system_prompt": {
+      "source": "scripts/bonafide/build_process_witness_step0.py:SYSTEM_PROMPT",
+      "source_revision": "d5d38cae4d78696a5baf304fe8ea6ce92e21168e",
+      "value": "You are a helpful assistant. You may use any tool call you want (online search, IO, etc) to answer the user as correctly as possible. Do not cheat under any circumstances. After you are done, write your final answer as a JSON object on its own line in exactly this format (no markdown fences, no extra keys):\n{\"final_answer\": \"<your answer here>\"}\nYour response should include this json and no other text."
+    },
+    "cot_system_prompt": {
+      "source": "/uufs/chpc.utah.edu/common/home/u1653998/projects/BonaFide/generation/model_registry.py:COT_SYSTEM_PROMPT",
+      "source_revision": "fdbbc0a8ea14e3f14423762ab4f57b116484813c",
+      "value": "You are a helpful assistant. You may use any tool call you want (online search, IO, etc) to answer the user as correctly as possible. Do not cheat under any circumstances. Think step by step. Show your full reasoning before answering. After you are done reasoning, write your final answer as a JSON object on its own line in exactly this format (no markdown fences, no extra keys):\n{\"final_answer\": \"<your answer here>\"}\nDo not skip your reasoning. The JSON must appear only once, at the very end."
+    }
+  },
+  "profiles": {
+    "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+      "tokenizer_model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "tokenizer_revision": "0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe",
+      "local_snapshot": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--Qwen--Qwen3-30B-A3B-Instruct-2507/snapshots/0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe",
+      "snapshot_manifest_sha256": "6f3985792863d568e8674a053b7fac0059e68949c27d37f3070dde51e4f5a7e9",
+      "serialization_mode": "assistant_turn",
+      "system_prompt": "cot_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    },
+    "Qwen/Qwen3-30B-A3B-Thinking-2507": {
+      "tokenizer_model_id": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+      "tokenizer_revision": "144afc2f379b542fdd4e85a1fcd5e1f79112d95d",
+      "local_snapshot": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--Qwen--Qwen3-30B-A3B-Thinking-2507/snapshots/144afc2f379b542fdd4e85a1fcd5e1f79112d95d",
+      "snapshot_manifest_sha256": "1eb03812ebbce39a1cb57c0ccc73dd7a39ffe2a173db2593a0633ccdd62a4b36",
+      "serialization_mode": "historical_thinking_continuation",
+      "system_prompt": "answer_only_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    },
+    "Qwen/Qwen3-4B-Thinking-2507": {
+      "tokenizer_model_id": "Qwen/Qwen3-4B-Thinking-2507",
+      "tokenizer_revision": "768f209d9ea81521153ed38c47d515654e938aea",
+      "local_snapshot": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--Qwen--Qwen3-4B-Thinking-2507/snapshots/768f209d9ea81521153ed38c47d515654e938aea",
+      "snapshot_manifest_sha256": "6aee55d44479f002b0993574358ba2d5b9015995a090297da5e7597a60b3435b",
+      "serialization_mode": "historical_thinking_continuation",
+      "system_prompt": "answer_only_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    },
+    "allenai/Olmo-3-7B-Instruct": {
+      "tokenizer_model_id": "allenai/Olmo-3-7B-Instruct",
+      "tokenizer_revision": "6e5971d9eba42665f5bd5a0fcf047f299ce1dccc",
+      "local_snapshot": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--allenai--Olmo-3-7B-Instruct/snapshots/6e5971d9eba42665f5bd5a0fcf047f299ce1dccc",
+      "snapshot_manifest_sha256": "e1d5ebcf806397c4a1f5b9fdc808331a4bb5fa423a2eec5019967ef2a649775d",
+      "serialization_mode": "assistant_turn",
+      "system_prompt": "cot_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    },
+    "allenai/Olmo-3-7B-Think": {
+      "tokenizer_model_id": "allenai/Olmo-3-7B-Think",
+      "tokenizer_revision": "d97e442d7cc678210054dbcc9b440894d62c89a4",
+      "local_snapshot": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--allenai--Olmo-3-7B-Think/snapshots/d97e442d7cc678210054dbcc9b440894d62c89a4",
+      "snapshot_manifest_sha256": "d9c349001d66ec177f5704945d6161c7ac25a7033933d2c3ed87dc622ec6acfc",
+      "serialization_mode": "historical_thinking_continuation",
+      "system_prompt": "answer_only_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    },
+    "allenai/Olmo-3.1-32B-Instruct": {
+      "tokenizer_model_id": "allenai/Olmo-3.1-32B-Instruct",
+      "tokenizer_revision": "ac0587e4a7744a551c059d8cd17ba220bc940dae",
+      "local_snapshot": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--allenai--Olmo-3.1-32B-Instruct/snapshots/ac0587e4a7744a551c059d8cd17ba220bc940dae",
+      "snapshot_manifest_sha256": "5f646447fd650a4ebfe4f03b63216d7ec45065e4530001751c4f7735157637f3",
+      "serialization_mode": "assistant_turn",
+      "system_prompt": "cot_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    },
+    "allenai/Olmo-3.1-32B-Think": {
+      "tokenizer_model_id": "allenai/Olmo-3.1-32B-Think",
+      "tokenizer_revision": "832c3f543499af8fe68b88359501de9cb7840544",
+      "local_snapshot": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--allenai--Olmo-3.1-32B-Think/snapshots/832c3f543499af8fe68b88359501de9cb7840544",
+      "snapshot_manifest_sha256": "3169a4b723ec9480e1d4581e5ad4e4dcaf550e6925f37bf4eb05e11913a5bc1a",
+      "serialization_mode": "historical_thinking_continuation",
+      "system_prompt": "answer_only_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    },
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+      "tokenizer_model_id": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+      "tokenizer_revision": "b1c0b44b4369b597ad119a196caf79a9c40e141e",
+      "local_snapshot": "/scratch/general/vast/u1653998/nlp_research_project/huggingface/models--deepseek-ai--DeepSeek-R1-Distill-Llama-70B/snapshots/b1c0b44b4369b597ad119a196caf79a9c40e141e",
+      "snapshot_manifest_sha256": "ea10172c651fb4d425645f902d0f550d29874f5596435292e27d713d237a1ec4",
+      "serialization_mode": "historical_thinking_continuation",
+      "system_prompt": "answer_only_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    },
+    "meta-llama/Llama-3.3-70B-Instruct": {
+      "tokenizer_model_id": "meta-llama/Llama-3.3-70B-Instruct",
+      "tokenizer_revision": "6f6073b423013f6a7d4d9f39144961bfbfbc386b",
+      "local_snapshot": "/scratch/rai/vast1/u1653998/huggingface/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b",
+      "snapshot_manifest_sha256": "338be0c525e3845beedba267f979455aafc2dd0ea74ebc835868a08124084b03",
+      "serialization_mode": "assistant_turn",
+      "system_prompt": "cot_system_prompt",
+      "reconstruction_status": "reconstructed_at_pinned_revision"
+    }
+  }
+}

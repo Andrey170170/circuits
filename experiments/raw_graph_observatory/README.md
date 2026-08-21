@@ -25,5 +25,25 @@ From the repository root, rebuild a new version with the locked environment and 
 ```bash
 source scripts/chpc_env.sh
 "$UV_PROJECT_ENVIRONMENT/bin/python" -m scripts.bonafide.build_outright_task_review \
-  --destination experiments/raw_graph_observatory/outright-task-review-v2
+  --destination experiments/raw_graph_observatory/outright-task-review-v1-rebuild
+```
+
+## Candidate and token-target review v2
+
+`outright-task-review-v2/review.html` is the all-model exploratory browser defined by
+[`plans/2026-08-21-raw-graph-observatory-review-v2.md`](../../plans/2026-08-21-raw-graph-observatory-review-v2.md).
+It leaves v1 unchanged, restores Qwen, shows exact reconstructed response-token statistics, and
+lets a reviewer save multiple trace targets with optional comments.
+
+V2 token positions are rebuilt under the exact pinned profiles recorded in its manifest. They are
+not claimed to be recovered generation token IDs. The exported JSON is a review/discussion
+artifact; re-tokenization and a separate immutable tracing manifest are required before launch.
+Open the checked-in HTML directly in a current Chromium- or Firefox-family browser; its embedded
+payload is decoded locally and selections persist in browser storage scoped to the payload hash.
+
+Rebuild v2 from the repository root after sourcing the locked environment:
+
+```bash
+source scripts/chpc_env.sh
+"$UV_PROJECT_ENVIRONMENT/bin/python" -m scripts.bonafide.build_outright_target_review
 ```

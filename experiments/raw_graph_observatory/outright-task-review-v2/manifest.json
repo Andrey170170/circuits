@@ -1,0 +1,255 @@
+{
+  "claim_boundaries": [
+    "This is exploratory human candidate and token-target selection, not evaluation.",
+    "Exact token identities are reconstructed at pinned revisions, not recovered original generation IDs.",
+    "Source labels are displayed verbatim and are not independently validated here.",
+    "No tracing, scoring, clustering, neuron labeling, or faithfulness validation occurs."
+  ],
+  "counts": {
+    "by_broad_label": {
+      "contains-unfaithful": 7,
+      "faithful-only": 265,
+      "mixed": 7
+    },
+    "by_label_type": {
+      "FAITHFUL_COT": {
+        "completions": 3,
+        "source_rows": 3
+      },
+      "FAITHFUL_STEP": {
+        "completions": 272,
+        "source_rows": 486
+      },
+      "UNFAITHFUL_COT": {
+        "completions": 7,
+        "source_rows": 7
+      }
+    },
+    "by_model": {
+      "Qwen/Qwen3-30B-A3B-Instruct-2507": {
+        "completions": 24,
+        "source_rows": 63,
+        "tasks": 24
+      },
+      "Qwen/Qwen3-30B-A3B-Thinking-2507": {
+        "completions": 47,
+        "source_rows": 61,
+        "tasks": 39
+      },
+      "Qwen/Qwen3-4B-Thinking-2507": {
+        "completions": 43,
+        "source_rows": 55,
+        "tasks": 34
+      },
+      "allenai/Olmo-3-7B-Instruct": {
+        "completions": 16,
+        "source_rows": 63,
+        "tasks": 15
+      },
+      "allenai/Olmo-3-7B-Think": {
+        "completions": 15,
+        "source_rows": 34,
+        "tasks": 15
+      },
+      "allenai/Olmo-3.1-32B-Instruct": {
+        "completions": 17,
+        "source_rows": 36,
+        "tasks": 14
+      },
+      "allenai/Olmo-3.1-32B-Think": {
+        "completions": 44,
+        "source_rows": 56,
+        "tasks": 37
+      },
+      "deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+        "completions": 45,
+        "source_rows": 68,
+        "tasks": 37
+      },
+      "meta-llama/Llama-3.3-70B-Instruct": {
+        "completions": 21,
+        "source_rows": 60,
+        "tasks": 14
+      }
+    },
+    "by_source_type": {
+      "complex": {
+        "completions": 145,
+        "source_rows": 268,
+        "tasks": 22
+      },
+      "graph": {
+        "completions": 127,
+        "source_rows": 228,
+        "tasks": 26
+      }
+    },
+    "completions": 272,
+    "models": 9,
+    "response_token_range": {
+      "maximum": 27420,
+      "minimum": 204,
+      "total": 814350
+    },
+    "source_rows": 496,
+    "tasks": 48
+  },
+  "embedded_payload": {
+    "compressed_bytes": 7168759,
+    "encoding": "base64(gzip(canonical-json))",
+    "uncompressed_bytes": 35149657
+  },
+  "export_schema_version": "adag.raw-graph-observatory.outright-target-selection.v2",
+  "files": {
+    "review.html": {
+      "bytes": 9592261,
+      "sha256": "c90e4addf457a908f61c3491e17d61f57dc7c06507213b80a32128c821e90db2"
+    }
+  },
+  "manifest_sha256": "2832a4c503d17bbf7c4947d5ef31718ff3ff7981d975f03036fff9d9ce4a2836",
+  "page_sha256": "c90e4addf457a908f61c3491e17d61f57dc7c06507213b80a32128c821e90db2",
+  "payload_sha256": "6e0749b1cfc957882cc3a720f6a6e5a1b54793bad438c19bd8c89eb935af3eaf",
+  "schema_version": "adag.raw-graph-observatory.outright-review.v2",
+  "scope": {
+    "deduplication_key": [
+      "target_model",
+      "prompt",
+      "cot"
+    ],
+    "model_policy": "all models, including Qwen",
+    "outright_source_types": [
+      "complex",
+      "graph"
+    ]
+  },
+  "source": {
+    "authoritative_sha256": "5833b500c378bbdcc7103340987749efda10b5944897168e10aed2be4538e13e",
+    "name": "BonaFide.csv",
+    "sha256": "5833b500c378bbdcc7103340987749efda10b5944897168e10aed2be4538e13e"
+  },
+  "status": "exploratory_all_model_trace_target_review",
+  "tokenization": {
+    "identity_status": "reconstructed_at_pinned_revision",
+    "profiles": [
+      {
+        "chatTemplateSha256": "f5186d42d99c8a0445d37fd8a6c7ccf07fe3e24a29ce622d8bd245da9507b12b",
+        "model": "allenai/Olmo-3-7B-Instruct",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "assistant_turn",
+        "snapshotManifestSha256": "e1d5ebcf806397c4a1f5b9fdc808331a4bb5fa423a2eec5019967ef2a649775d",
+        "systemPromptName": "cot_system_prompt",
+        "systemPromptSha256": "6ceadfe02d55fa97555851a55cf7c09ff83beb9c67ad1528880c6ecd0fb29ee9",
+        "systemPromptSource": "/uufs/chpc.utah.edu/common/home/u1653998/projects/BonaFide/generation/model_registry.py:COT_SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "fdbbc0a8ea14e3f14423762ab4f57b116484813c",
+        "tokenizerModelId": "allenai/Olmo-3-7B-Instruct",
+        "tokenizerRevision": "6e5971d9eba42665f5bd5a0fcf047f299ce1dccc"
+      },
+      {
+        "chatTemplateSha256": "6d549883b5ed12879e191845c256a30c7dfd4eced0a4f160060a3ea0199d9e3a",
+        "model": "allenai/Olmo-3-7B-Think",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "historical_thinking_continuation",
+        "snapshotManifestSha256": "d9c349001d66ec177f5704945d6161c7ac25a7033933d2c3ed87dc622ec6acfc",
+        "systemPromptName": "answer_only_system_prompt",
+        "systemPromptSha256": "1d3e818c32d265a2a59b3ba0dd9139319cc981fb2bab8d38f0267225cad9f6d8",
+        "systemPromptSource": "scripts/bonafide/build_process_witness_step0.py:SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "d5d38cae4d78696a5baf304fe8ea6ce92e21168e",
+        "tokenizerModelId": "allenai/Olmo-3-7B-Think",
+        "tokenizerRevision": "d97e442d7cc678210054dbcc9b440894d62c89a4"
+      },
+      {
+        "chatTemplateSha256": "49a944c9814e130bd3cc80a2420c55ff22e24a4e4ba97009aa60000909b5eac3",
+        "model": "allenai/Olmo-3.1-32B-Instruct",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "assistant_turn",
+        "snapshotManifestSha256": "5f646447fd650a4ebfe4f03b63216d7ec45065e4530001751c4f7735157637f3",
+        "systemPromptName": "cot_system_prompt",
+        "systemPromptSha256": "6ceadfe02d55fa97555851a55cf7c09ff83beb9c67ad1528880c6ecd0fb29ee9",
+        "systemPromptSource": "/uufs/chpc.utah.edu/common/home/u1653998/projects/BonaFide/generation/model_registry.py:COT_SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "fdbbc0a8ea14e3f14423762ab4f57b116484813c",
+        "tokenizerModelId": "allenai/Olmo-3.1-32B-Instruct",
+        "tokenizerRevision": "ac0587e4a7744a551c059d8cd17ba220bc940dae"
+      },
+      {
+        "chatTemplateSha256": "fb2b8736121ab4001112a9ccfb33c0081230536c861c706bf24b1b390964c1cd",
+        "model": "allenai/Olmo-3.1-32B-Think",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "historical_thinking_continuation",
+        "snapshotManifestSha256": "3169a4b723ec9480e1d4581e5ad4e4dcaf550e6925f37bf4eb05e11913a5bc1a",
+        "systemPromptName": "answer_only_system_prompt",
+        "systemPromptSha256": "1d3e818c32d265a2a59b3ba0dd9139319cc981fb2bab8d38f0267225cad9f6d8",
+        "systemPromptSource": "scripts/bonafide/build_process_witness_step0.py:SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "d5d38cae4d78696a5baf304fe8ea6ce92e21168e",
+        "tokenizerModelId": "allenai/Olmo-3.1-32B-Think",
+        "tokenizerRevision": "832c3f543499af8fe68b88359501de9cb7840544"
+      },
+      {
+        "chatTemplateSha256": "56a1447ad31926fdc21fb07e56e5642bd9c850c4f52d8c8af7bbe5f079a84f5f",
+        "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "historical_thinking_continuation",
+        "snapshotManifestSha256": "ea10172c651fb4d425645f902d0f550d29874f5596435292e27d713d237a1ec4",
+        "systemPromptName": "answer_only_system_prompt",
+        "systemPromptSha256": "1d3e818c32d265a2a59b3ba0dd9139319cc981fb2bab8d38f0267225cad9f6d8",
+        "systemPromptSource": "scripts/bonafide/build_process_witness_step0.py:SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "d5d38cae4d78696a5baf304fe8ea6ce92e21168e",
+        "tokenizerModelId": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+        "tokenizerRevision": "b1c0b44b4369b597ad119a196caf79a9c40e141e"
+      },
+      {
+        "chatTemplateSha256": "e10ca381b1ccc5cf9db52e371f3b6651576caee0a630b452e2816b2d404d4b65",
+        "model": "meta-llama/Llama-3.3-70B-Instruct",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "assistant_turn",
+        "snapshotManifestSha256": "338be0c525e3845beedba267f979455aafc2dd0ea74ebc835868a08124084b03",
+        "systemPromptName": "cot_system_prompt",
+        "systemPromptSha256": "6ceadfe02d55fa97555851a55cf7c09ff83beb9c67ad1528880c6ecd0fb29ee9",
+        "systemPromptSource": "/uufs/chpc.utah.edu/common/home/u1653998/projects/BonaFide/generation/model_registry.py:COT_SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "fdbbc0a8ea14e3f14423762ab4f57b116484813c",
+        "tokenizerModelId": "meta-llama/Llama-3.3-70B-Instruct",
+        "tokenizerRevision": "6f6073b423013f6a7d4d9f39144961bfbfbc386b"
+      },
+      {
+        "chatTemplateSha256": "64f85b198065d0fba2a81f37e10ed68161ce2c19a754c7100e67e0ca2ee9c326",
+        "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "assistant_turn",
+        "snapshotManifestSha256": "6f3985792863d568e8674a053b7fac0059e68949c27d37f3070dde51e4f5a7e9",
+        "systemPromptName": "cot_system_prompt",
+        "systemPromptSha256": "6ceadfe02d55fa97555851a55cf7c09ff83beb9c67ad1528880c6ecd0fb29ee9",
+        "systemPromptSource": "/uufs/chpc.utah.edu/common/home/u1653998/projects/BonaFide/generation/model_registry.py:COT_SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "fdbbc0a8ea14e3f14423762ab4f57b116484813c",
+        "tokenizerModelId": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+        "tokenizerRevision": "0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe"
+      },
+      {
+        "chatTemplateSha256": "3802169b2a02b81e6adb7ab4f64f91ff02db753c8c3a64a01c35192d3a61d8d7",
+        "model": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "historical_thinking_continuation",
+        "snapshotManifestSha256": "1eb03812ebbce39a1cb57c0ccc73dd7a39ffe2a173db2593a0633ccdd62a4b36",
+        "systemPromptName": "answer_only_system_prompt",
+        "systemPromptSha256": "1d3e818c32d265a2a59b3ba0dd9139319cc981fb2bab8d38f0267225cad9f6d8",
+        "systemPromptSource": "scripts/bonafide/build_process_witness_step0.py:SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "d5d38cae4d78696a5baf304fe8ea6ce92e21168e",
+        "tokenizerModelId": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+        "tokenizerRevision": "144afc2f379b542fdd4e85a1fcd5e1f79112d95d"
+      },
+      {
+        "chatTemplateSha256": "3802169b2a02b81e6adb7ab4f64f91ff02db753c8c3a64a01c35192d3a61d8d7",
+        "model": "Qwen/Qwen3-4B-Thinking-2507",
+        "reconstructionStatus": "reconstructed_at_pinned_revision",
+        "serializationMode": "historical_thinking_continuation",
+        "snapshotManifestSha256": "6aee55d44479f002b0993574358ba2d5b9015995a090297da5e7597a60b3435b",
+        "systemPromptName": "answer_only_system_prompt",
+        "systemPromptSha256": "1d3e818c32d265a2a59b3ba0dd9139319cc981fb2bab8d38f0267225cad9f6d8",
+        "systemPromptSource": "scripts/bonafide/build_process_witness_step0.py:SYSTEM_PROMPT",
+        "systemPromptSourceRevision": "d5d38cae4d78696a5baf304fe8ea6ce92e21168e",
+        "tokenizerModelId": "Qwen/Qwen3-4B-Thinking-2507",
+        "tokenizerRevision": "768f209d9ea81521153ed38c47d515654e938aea"
+      }
+    ],
+    "registry_name": "outright_review_tokenizer_profiles_v2.json",
+    "registry_sha256": "02b05065f43d04abaf5fd677de55863cd5877c36876b7f0b8dc4c72897ade687"
+  }
+}
