@@ -1,0 +1,107 @@
+{
+  "claim_boundaries": [
+    "This is a human browsing and selection packet, not an evaluation.",
+    "Source labels are displayed verbatim and are not independently validated here.",
+    "Selection does not establish faithfulness, causal mechanism, or neuron meaning.",
+    "No graph tracing, ADAG clustering, neuron labeling, scoring, or ranking occurs."
+  ],
+  "counts": {
+    "by_broad_label": {
+      "contains-unfaithful": 5,
+      "faithful-only": 153,
+      "mixed": 5
+    },
+    "by_label_type": {
+      "FAITHFUL_COT": {
+        "completions": 3,
+        "source_rows": 3
+      },
+      "FAITHFUL_STEP": {
+        "completions": 158,
+        "source_rows": 309
+      },
+      "UNFAITHFUL_COT": {
+        "completions": 5,
+        "source_rows": 5
+      }
+    },
+    "by_model": {
+      "allenai/Olmo-3-7B-Instruct": {
+        "completions": 16,
+        "source_rows": 63,
+        "tasks": 15
+      },
+      "allenai/Olmo-3-7B-Think": {
+        "completions": 15,
+        "source_rows": 34,
+        "tasks": 15
+      },
+      "allenai/Olmo-3.1-32B-Instruct": {
+        "completions": 17,
+        "source_rows": 36,
+        "tasks": 14
+      },
+      "allenai/Olmo-3.1-32B-Think": {
+        "completions": 44,
+        "source_rows": 56,
+        "tasks": 37
+      },
+      "deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+        "completions": 45,
+        "source_rows": 68,
+        "tasks": 37
+      },
+      "meta-llama/Llama-3.3-70B-Instruct": {
+        "completions": 21,
+        "source_rows": 60,
+        "tasks": 14
+      }
+    },
+    "by_source_type": {
+      "complex": {
+        "completions": 90,
+        "source_rows": 183,
+        "tasks": 21
+      },
+      "graph": {
+        "completions": 68,
+        "source_rows": 134,
+        "tasks": 24
+      }
+    },
+    "completions": 158,
+    "excluded_completions": 114,
+    "excluded_source_rows": 179,
+    "models": 6,
+    "source_rows": 317,
+    "tasks": 45
+  },
+  "files": {
+    "review.html": {
+      "bytes": 2684952,
+      "sha256": "f154cd93ceccd06d287bddb099fc9e3fb0c6f4314b10925998eccef8b75ad1fe"
+    }
+  },
+  "manifest_sha256": "fde6481e76b91b30b01dd89309b3a1e8423a9fd38e5cf3a4eaf3d98332c88ac5",
+  "page_sha256": "f154cd93ceccd06d287bddb099fc9e3fb0c6f4314b10925998eccef8b75ad1fe",
+  "payload_sha256": "f00cfd11c0145d8bb46762bb4e8096bc0d1cf3c82444ddb6cc3bb03e76fbb426",
+  "schema_version": "adag.raw-graph-observatory.outright-review.v1",
+  "scope": {
+    "deduplication_key": [
+      "target_model",
+      "prompt",
+      "cot"
+    ],
+    "excluded_model_policy": "lowercase target_model containing qwen is removed before payload assembly",
+    "outright_source_types": [
+      "complex",
+      "graph"
+    ]
+  },
+  "source": {
+    "authoritative_sha256": "5833b500c378bbdcc7103340987749efda10b5944897168e10aed2be4538e13e",
+    "name": "BonaFide.csv",
+    "sha256": "5833b500c378bbdcc7103340987749efda10b5944897168e10aed2be4538e13e"
+  },
+  "status": "initial_exploratory_candidate_review"
+}
