@@ -3,7 +3,7 @@ Core functionality for computing gradient-based attributions in language models,
 modifications to the backward pass in grad.py.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Literal
 
 import torch
@@ -22,6 +22,37 @@ from circuits.tracing.instrumentation import (
     cuda_memory_instrumentation_stage,
 )
 from circuits.tracing.utils import NeuronIdx
+
+
+def _nonempty_neuron_layers(
+    neuron_cfg: dict[int, list[list[int]]],
+) -> Iterator[tuple[int, list[list[int]]]]:
+    """Yield selected layers in insertion order, omitting empty selections."""
+
+    return ((layer, pairs) for layer, pairs in neuron_cfg.items() if pairs)
+
+
+def _copy_selected_neuron_contributions(
+    layer_grad_contrib: torch.Tensor,
+    pairs: list[list[int]],
+) -> torch.Tensor:
+    """Copy selected ``(position, neuron)`` values into compact pair order."""
+
+    if layer_grad_contrib.ndim != 4:
+        raise ValueError("layer contribution gradients must have shape (t, b, s, d)")
+    if not pairs:
+        raise ValueError("cannot gather an empty neuron selection")
+    positions = torch.tensor(
+        [int(position) for position, _neuron in pairs],
+        device=layer_grad_contrib.device,
+    )
+    neurons = torch.tensor(
+        [int(neuron) for _position, neuron in pairs],
+        device=layer_grad_contrib.device,
+    )
+    # Advanced indexing creates compact storage. The permutation only views
+    # that compact result, never the dense (target, batch, sequence, MLP) VJP.
+    return layer_grad_contrib[:, :, positions, neurons].permute(2, 1, 0)
 
 
 def _get_grad_attributions_from_logits(
@@ -727,7 +758,9 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
     # compute neuron grad contribs
     grad_contrib = []
     for lid, pairs in tqdm(
-        neuron_cfg.items(), desc="Computing neuron contributions", disable=not verbose
+        _nonempty_neuron_layers(neuron_cfg),
+        desc="Computing neuron contributions",
+        disable=not verbose,
     ):
         # stop gradient on MLPs
         model = layerwise_stop_nonlinear_grad(
@@ -808,9 +841,11 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         layer_grad_contrib = layer_grad_contrib.diagonal(dim1=1, dim2=2).permute(
             0, 3, 1, 2
         )
-        # now (t, batch, seq, d)
-        for pos, nid in pairs:
-            grad_contrib.append(layer_grad_contrib[:, :, pos, nid])
+        # Copy only the selected values so the dense VJP can be released now.
+        grad_contrib.append(
+            _copy_selected_neuron_contributions(layer_grad_contrib, pairs)
+        )
+        del layer_grad_contrib
 
         # revert stop grad for the next attribution
         model = layerwise_revert_stop_nonlinear_grad(
@@ -820,11 +855,11 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         )
         remove_forward_hooks(model.model.layers[lid].mlp.down_proj)
 
-        del layer_grad_contrib, layer_acts, embeds, tgt_vec, grad_outputs
+        del layer_acts, embeds, tgt_vec, grad_outputs
         torch.cuda.empty_cache()
 
     # multiple by acts to get contributions
-    grad_contrib = torch.stack(grad_contrib).permute(0, 2, 1)  # (neurons, batch, tgt)
+    grad_contrib = torch.cat(grad_contrib, dim=0)  # (neurons, batch, tgt)
     contrib = grad_contrib * neuron_acts.detach()[:, :, None]  # (neurons, batch, tgt)
 
     # Clean up
@@ -1120,7 +1155,9 @@ def _get_neuron_attr_and_contrib(
     # compute neuron grad contribs
     grad_contrib = []
     for lid, pairs in tqdm(
-        neuron_cfg.items(), desc="Computing neuron contributions", disable=not verbose
+        _nonempty_neuron_layers(neuron_cfg),
+        desc="Computing neuron contributions",
+        disable=not verbose,
     ):
         layer_acts = cache[lid]  # (batch, seq, d)
         layer_acts.grad = None
@@ -1157,16 +1194,17 @@ def _get_neuron_attr_and_contrib(
         layer_grad_contrib = layer_grad_contrib.diagonal(dim1=1, dim2=2).permute(
             0, 3, 1, 2
         )
-        # now (t, batch, seq, d)
-        for pos, nid in pairs:
-            grad_contrib.append(layer_grad_contrib[:, :, pos, nid])
+        # Copy only the selected values so the dense VJP can be released now.
+        grad_contrib.append(
+            _copy_selected_neuron_contributions(layer_grad_contrib, pairs)
+        )
 
         # Clean up memory after each layer
         del layer_grad_contrib
         torch.cuda.empty_cache()
 
     # multiple by acts to get contributions
-    grad_contrib = torch.stack(grad_contrib).permute(0, 2, 1)  # (neurons, batch, tgt)
+    grad_contrib = torch.cat(grad_contrib, dim=0)  # (neurons, batch, tgt)
     if alpha is not None:
         # For IG: return gradient only
         contrib = grad_contrib
