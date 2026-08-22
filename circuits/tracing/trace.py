@@ -1305,6 +1305,9 @@ def trace_teacher_forced_response(
     *,
     label: str = "teacher_forced",
     system_prompt: str | None = None,
+    serialization_mode: TeacherForcedSerializationMode = (
+        DEFAULT_TEACHER_FORCED_SERIALIZATION
+    ),
     ignore_bos: bool = False,
     benchmark_only: bool = False,
     instrumentation: TraceInstrumentation | None = None,
@@ -1329,6 +1332,7 @@ def trace_teacher_forced_response(
             response,
             target_response_positions,
             system_prompt=system_prompt,
+            serialization_mode=serialization_mode,
         )
     with instrumentation_stage(instrumentation, "target_scoring"):
         target_logit_values, target_probs = _teacher_forced_target_scores(
@@ -1376,6 +1380,13 @@ def trace_teacher_forced_response(
         "response_sha256": _stable_text_hash(response),
         "system_prompt": system_prompt,
         "system_prompt_sha256": _stable_text_hash(system_prompt),
+        "teacher_forced_serialization_mode": serialization_mode,
+        "teacher_forced_token_identity": {
+            "schema_version": TEACHER_FORCED_TOKEN_IDENTITY_SCHEMA_VERSION,
+            "hash_encoding": TOKEN_ID_HASH_ENCODING,
+            "assistant_prefix_ids_sha256": prepared.assistant_prefix_ids_sha256,
+            "response_ids_sha256": prepared.response_ids_sha256,
+        },
         "assistant_prefix_token_count": prepared.assistant_prefix_token_count,
         "response_token_count": prepared.response_token_count,
         "included_response_token_count": prepared.included_response_token_count,

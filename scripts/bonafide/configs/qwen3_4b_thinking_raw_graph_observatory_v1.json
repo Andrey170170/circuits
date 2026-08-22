@@ -1,0 +1,48 @@
+{
+  "schema_version": "bonafide-trace-run-config/v1",
+  "artifact_root": "results/bonafide/raw-graph-observatory-qwen-selected-v1",
+  "batch_size": 1,
+  "continue_on_error": false,
+  "trace_warmup": {
+    "enabled": false,
+    "mode": "first_wave_item_full_trace_discard",
+    "wave_id_prefixes": []
+  },
+  "wave_limits": {
+    "max_trace_seconds": 7200,
+    "min_cuda_headroom_bytes": 4294967296,
+    "stop_on_oom": true
+  },
+  "model": {
+    "model_id": "Qwen/Qwen3-4B-Thinking-2507",
+    "revision": "768f209d9ea81521153ed38c47d515654e938aea",
+    "device": "cuda:0",
+    "dtype": "bfloat16",
+    "local_files_only": true,
+    "local_snapshot_path": "${HF_HUB_CACHE}/models--Qwen--Qwen3-4B-Thinking-2507/snapshots/768f209d9ea81521153ed38c47d515654e938aea",
+    "from_pretrained_kwargs": {}
+  },
+  "adag_config": {
+    "verbose": false,
+    "parent_threshold": null,
+    "edge_threshold": 0.01,
+    "node_attribution_threshold": null,
+    "topk": null,
+    "batch_aggregation": "any",
+    "topk_neurons": null,
+    "percentage_threshold": 0.005,
+    "use_relp_grad": true,
+    "disable_half_rule": false,
+    "disable_stop_grad": false,
+    "ablation_mode": "zero",
+    "use_stop_grad_on_mlps": true,
+    "return_nodes_only": false,
+    "focus_last_residual": false,
+    "skip_attr_contrib": false,
+    "center_logits": false,
+    "ig_steps": null,
+    "ig_mode": "ig-inputs",
+    "return_only_important_neurons": false,
+    "apply_blacklist": true
+  }
+}

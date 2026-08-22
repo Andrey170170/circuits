@@ -200,6 +200,135 @@ def validate_target_selection(item: Mapping[str, Any]) -> None:
         raise ValueError("target sampling projection_weight is inconsistent")
 
 
+def _serialization_mode_for_example(example: Mapping[str, Any]) -> str:
+    value = example.get("teacher_forced_serialization_mode", "assistant_turn")
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            "example.teacher_forced_serialization_mode must be a non-empty string"
+        )
+    return value
+
+
+def _teacher_forcing_contract(
+    manifest: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    value = manifest.get("teacher_forcing_contract")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("teacher_forcing_contract must be an object")
+    return value
+
+
+def _stable_text_sha256(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def validate_frozen_serialization_contract(
+    item: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> None:
+    """Validate historical replay identity before model loading or tracing."""
+
+    contract = _teacher_forcing_contract(manifest)
+    if contract is None:
+        return
+    example = item.get("example")
+    if not isinstance(example, Mapping):
+        raise ValueError("work item requires an example object")
+    serialization_mode = _serialization_mode_for_example(example)
+    if contract.get("serialization_mode") != serialization_mode:
+        raise ValueError(
+            "example serialization mode disagrees with teacher_forcing_contract"
+        )
+    system_prompt = example.get("system_prompt")
+    if not isinstance(system_prompt, str) or not system_prompt:
+        raise ValueError("frozen historical example requires a non-empty system_prompt")
+    if contract.get("system_prompt_sha256") != _stable_text_sha256(system_prompt):
+        raise ValueError("frozen system prompt disagrees with teacher_forcing_contract")
+    token_identity = example.get("token_identity")
+    if not isinstance(token_identity, Mapping):
+        raise ValueError("frozen historical example requires token_identity")
+    required_identity = {
+        "schema_version": contract.get("token_identity_schema_version"),
+        "hash_encoding": contract.get("hash_encoding"),
+    }
+    for field, expected in required_identity.items():
+        if not isinstance(expected, str) or not expected:
+            raise ValueError(f"teacher_forcing_contract.{field} is required")
+        if token_identity.get(field) != expected:
+            raise ValueError(f"frozen token identity {field} disagrees with contract")
+    for field in ("assistant_prefix_ids_sha256", "response_ids_sha256"):
+        value = token_identity.get(field)
+        if not isinstance(value, str) or len(value) != 64:
+            raise ValueError(f"frozen token identity {field} must be a SHA-256")
+    if token_identity.get("response_token_count") != item.get("response_token_count"):
+        raise ValueError("frozen token identity response count disagrees with item")
+    prefix_count = token_identity.get("assistant_prefix_token_count")
+    if isinstance(prefix_count, bool) or not isinstance(prefix_count, int):
+        raise ValueError("frozen assistant prefix token count must be an integer")
+
+
+def validate_runtime_serialization_contract(
+    trace: CircuitData, item: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> None:
+    """Bind a live width-one trace to its frozen replay and token identities."""
+
+    example = item["example"]
+    contract = _teacher_forcing_contract(manifest)
+    should_validate = (
+        contract is not None
+        or example.get("system_prompt") is not None
+        or "teacher_forced_serialization_mode" in example
+    )
+    if not should_validate:
+        return
+    metadata = trace.trace_metadata
+    system_prompt = example.get("system_prompt")
+    if metadata.get("system_prompt") != system_prompt:
+        raise ValueError("runtime system prompt disagrees with frozen example")
+    if metadata.get("system_prompt_sha256") != _stable_text_sha256(system_prompt):
+        raise ValueError("runtime system prompt hash disagrees with frozen example")
+    serialization_mode = _serialization_mode_for_example(example)
+    if metadata.get("teacher_forced_serialization_mode") != serialization_mode:
+        raise ValueError(
+            "runtime teacher-forced serialization mode disagrees with frozen example"
+        )
+    if contract is None:
+        return
+    frozen_identity = example["token_identity"]
+    runtime_identity = metadata.get("teacher_forced_token_identity")
+    if not isinstance(runtime_identity, Mapping):
+        raise ValueError("runtime trace lacks teacher-forced token identity")
+    expected_identity = {
+        "schema_version": contract["token_identity_schema_version"],
+        "hash_encoding": contract["hash_encoding"],
+        "assistant_prefix_ids_sha256": frozen_identity["assistant_prefix_ids_sha256"],
+        "response_ids_sha256": frozen_identity["response_ids_sha256"],
+    }
+    for field, expected in expected_identity.items():
+        if runtime_identity.get(field) != expected:
+            raise ValueError(
+                f"runtime {field} disagrees with frozen tokenization contract"
+            )
+    if (
+        metadata.get("assistant_prefix_token_count")
+        != frozen_identity["assistant_prefix_token_count"]
+    ):
+        raise ValueError(
+            "runtime assistant prefix count disagrees with frozen identity"
+        )
+    if metadata.get("response_token_count") != frozen_identity["response_token_count"]:
+        raise ValueError("runtime response count disagrees with frozen identity")
+    expected_template_hash = manifest.get("tokenizer", {}).get("chat_template_sha256")
+    if (
+        expected_template_hash is not None
+        and metadata.get("chat_template_sha256") != expected_template_hash
+    ):
+        raise ValueError("runtime chat template disagrees with frozen manifest")
+
+
 def validate_wave_sampling_design(
     wave: Mapping[str, Any], manifest: Mapping[str, Any]
 ) -> None:
@@ -722,6 +851,7 @@ def _base_record(
 def _discarded_trace_warmup(
     *,
     item: Mapping[str, Any],
+    manifest: Mapping[str, Any],
     model: Any,
     tokenizer: Any,
     adag_config: ADAGConfig,
@@ -751,10 +881,13 @@ def _discarded_trace_warmup(
             target_response_positions=positions,
             config=adag_config,
             label=example["example_id"],
+            system_prompt=example.get("system_prompt"),
+            serialization_mode=_serialization_mode_for_example(example),
             benchmark_only=bool(item["objective"]["benchmark_only_multi_target"]),
             instrumentation=instrumentation,
         )
         validate_runtime_trace_against_item(trace, item)
+        validate_runtime_serialization_contract(trace, item, manifest)
         if uses_cuda:
             torch.cuda.synchronize()
         node_count = len(trace.df_node)
@@ -834,6 +967,8 @@ def run_wave(
     wave = select_wave(manifest, wave_id)
     validate_wave_sampling_design(wave, manifest)
     wave_items = list(wave["items"])
+    for item in wave_items:
+        validate_frozen_serialization_contract(item, manifest)
     warmup_policy = normalized_trace_warmup(config)
     warmup_source_item = (
         wave_items[0] if trace_warmup_applies(warmup_policy, wave_id) else None
@@ -938,6 +1073,7 @@ def run_wave(
     if warmup_source_item is not None:
         warmup_provenance, warmup_record, warmup_failure = _discarded_trace_warmup(
             item=warmup_source_item,
+            manifest=manifest,
             model=model,
             tokenizer=tokenizer,
             adag_config=adag_config,
@@ -1001,10 +1137,13 @@ def run_wave(
                 target_response_positions=positions,
                 config=adag_config,
                 label=example["example_id"],
+                system_prompt=example.get("system_prompt"),
+                serialization_mode=_serialization_mode_for_example(example),
                 benchmark_only=benchmark_only,
                 instrumentation=instrumentation,
             )
             validate_runtime_trace_against_item(trace, item)
+            validate_runtime_serialization_contract(trace, item, manifest)
             if uses_cuda:
                 torch.cuda.synchronize()
             trace_elapsed = time.perf_counter() - started

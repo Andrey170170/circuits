@@ -203,6 +203,12 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
     import circuits.tracing.trace as trace_module
 
     captured = {}
+    real_prepare = trace_module.prepare_teacher_forced_input
+
+    def capture_serialization_mode(*args, **kwargs):
+        captured["serialization_mode"] = kwargs["serialization_mode"]
+        kwargs["serialization_mode"] = "assistant_turn"
+        return real_prepare(*args, **kwargs)
 
     def fake_convert(nodes, edges, labels, starts, **kwargs):
         assert nodes == [[captured_nodes]]
@@ -223,6 +229,11 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
         "get_all_pairs_cl_ja_effects_with_attributions",
         fake_clja_with_known_values,
     )
+    monkeypatch.setattr(
+        trace_module,
+        "prepare_teacher_forced_input",
+        capture_serialization_mode,
+    )
     monkeypatch.setattr(trace_module, "convert_circuit_to_dataframes", fake_convert)
 
     model = FakeModel()
@@ -235,6 +246,7 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
         [2],
         ADAGConfig(device="cpu"),
         label="row-1",
+        serialization_mode="historical_thinking_continuation",
         instrumentation=instrumentation,
     )
 
@@ -245,12 +257,19 @@ def test_trace_teacher_forced_response_wires_single_target_to_clja(monkeypatch):
     assert captured["tgt_tokens"] == [5]
     assert captured["src_tokens"] == list(range(6))
     assert captured["instrumentation"] is instrumentation
+    assert captured["serialization_mode"] == "historical_thinking_continuation"
     assert data.target_logits == [[79]]
     assert data.target_logit_values == [[79.0]]
     assert data.target_provenance[0]["response_token_position"] == 2
     assert data.target_provenance[0]["absolute_token_position"] == 6
     assert data.target_provenance[0]["prediction_token_position"] == 5
     assert data.benchmark_only is False
+    assert data.trace_metadata["teacher_forced_serialization_mode"] == (
+        "historical_thinking_continuation"
+    )
+    assert data.trace_metadata["teacher_forced_token_identity"]["schema_version"] == (
+        "adag.teacher-forced-token-identity.v1"
+    )
     snapshot = data.trace_metadata["instrumentation"]
     assert {
         "prepare_input",

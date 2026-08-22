@@ -710,6 +710,97 @@ def test_runner_persists_instrumentation_in_success_record_and_artifact(
     )
 
 
+def test_runner_honors_and_validates_frozen_historical_serialization(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import hashlib
+
+    import scripts.bonafide.runner as runner_module
+
+    config = _config()
+    config["model"]["device"] = "cpu"
+    manifest = _single_item_manifest()
+    example = manifest["waves"][0]["items"][0]["example"]
+    system_prompt = "frozen system prompt"
+    token_identity = {
+        "schema_version": "adag.teacher-forced-token-identity.v1",
+        "hash_encoding": "sha256_utf8_canonical_json_integer_array_v1",
+        "assistant_prefix_ids_sha256": "a" * 64,
+        "response_ids_sha256": "b" * 64,
+        "assistant_prefix_token_count": 4,
+        "response_token_count": 8,
+    }
+    example.update(
+        {
+            "system_prompt": system_prompt,
+            "teacher_forced_serialization_mode": ("historical_thinking_continuation"),
+            "token_identity": token_identity,
+        }
+    )
+    manifest["teacher_forcing_contract"] = {
+        "serialization_mode": "historical_thinking_continuation",
+        "system_prompt_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
+        "token_identity_schema_version": token_identity["schema_version"],
+        "hash_encoding": token_identity["hash_encoding"],
+    }
+    manifest["tokenizer"]["chat_template_sha256"] = "c" * 64
+
+    def fake_trace(**kwargs):
+        assert kwargs["system_prompt"] == system_prompt
+        assert kwargs["serialization_mode"] == "historical_thinking_continuation"
+        trace = _valid_runtime_trace()
+        trace.trace_metadata.update(
+            {
+                "system_prompt": system_prompt,
+                "system_prompt_sha256": hashlib.sha256(
+                    system_prompt.encode()
+                ).hexdigest(),
+                "teacher_forced_serialization_mode": (
+                    "historical_thinking_continuation"
+                ),
+                "teacher_forced_token_identity": {
+                    field: token_identity[field]
+                    for field in (
+                        "schema_version",
+                        "hash_encoding",
+                        "assistant_prefix_ids_sha256",
+                        "response_ids_sha256",
+                    )
+                },
+                "assistant_prefix_token_count": 4,
+                "chat_template_sha256": "c" * 64,
+            }
+        )
+        return trace
+
+    monkeypatch.setattr(
+        runner_module, "_load_model_and_tokenizer", lambda _config: (object(), object())
+    )
+    monkeypatch.setattr(runner_module, "trace_teacher_forced_response", fake_trace)
+    records = run_wave(
+        config=config,
+        manifest=manifest,
+        wave_id="instrumented",
+        artifact_root=tmp_path / "artifacts",
+        summary_jsonl=tmp_path / "summary.jsonl",
+    )
+
+    assert records[0]["status"] == "complete"
+
+    drifted = copy.deepcopy(manifest)
+    drifted["waves"][0]["items"][0]["example"]["token_identity"][
+        "response_ids_sha256"
+    ] = "d" * 64
+    with pytest.raises(ValueError, match="response_ids_sha256"):
+        run_wave(
+            config=config,
+            manifest=drifted,
+            wave_id="instrumented",
+            artifact_root=tmp_path / "drifted",
+            summary_jsonl=tmp_path / "drifted.jsonl",
+        )
+
+
 def test_runner_discards_full_warmup_then_measures_every_planned_item(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -47,3 +47,39 @@ Rebuild v2 from the repository root after sourcing the locked environment:
 source scripts/chpc_env.sh
 "$UV_PROJECT_ENVIRONMENT/bin/python" -m scripts.bonafide.build_outright_target_review
 ```
+
+## First Qwen width-one trace wave
+
+The first approved trace set is frozen independently of the browser export in
+`scripts/bonafide/selections/qwen3_4b_thinking_raw_graph_observatory_v1.json`.
+It contains response positions `65, 88, 120, 135, 162, 181, 184` from one
+Qwen3-4B-Thinking completion. Each position is a separate observed-token-logit
+trace; the tracing pipeline does not merge their graphs. Position 120 is the
+`4` subtoken in the displayed value `45` (position 121 is the `5` subtoken).
+
+The checked manifest binds the review-payload, frozen-selection, tokenizer,
+chat-template, system-prompt, assistant-prefix, and response-token hashes. The
+runner fails closed if live historical-thinking serialization disagrees with
+those identities. Rebuild and compare the manifest with:
+
+```bash
+source scripts/chpc_env.sh
+"$UV_PROJECT_ENVIRONMENT/bin/python" \
+  -m scripts.bonafide.build_outright_trace_manifest \
+  --output /tmp/qwen3_4b_thinking_raw_graph_observatory_v1.json
+cmp /tmp/qwen3_4b_thinking_raw_graph_observatory_v1.json \
+  scripts/bonafide/manifests/qwen3_4b_thinking_raw_graph_observatory_v1.json
+```
+
+Submit all seven independent units in one model-resident A100 job from the
+repository root:
+
+```bash
+source scripts/chpc_env.sh
+sbatch --export=ALL,\
+MANIFEST="$PWD/scripts/bonafide/manifests/qwen3_4b_thinking_raw_graph_observatory_v1.json",\
+CONFIG="$PWD/scripts/bonafide/configs/qwen3_4b_thinking_raw_graph_observatory_v1.json",\
+WAVE=raw-observatory-qwen-modular-q1-width1-v1,\
+ARTIFACT_ROOT="$CIRCUITS_RESULTS_DIR/bonafide/raw-graph-observatory-qwen-selected-v1" \
+  scripts/bonafide/benchmark_tracing.sbatch
+```
