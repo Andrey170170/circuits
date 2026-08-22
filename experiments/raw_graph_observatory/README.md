@@ -83,3 +83,19 @@ WAVE=raw-observatory-qwen-modular-q1-width1-v1,\
 ARTIFACT_ROOT="$CIRCUITS_RESULTS_DIR/bonafide/raw-graph-observatory-qwen-selected-v1" \
   scripts/bonafide/benchmark_tracing.sbatch
 ```
+
+The first execution completed on 2026-08-21 as Notchpeak job `14774593` from
+commit `e7d5aeaf7eb4505c5d12c624b7d784c541cf6281`. All seven compact artifacts
+passed checksum and frozen target-identity validation. The job used one A100
+80GB on `notch370`, exited `0:0` after 7m44s, and wrote 4,774,093 artifact bytes
+under:
+
+```text
+/scratch/general/vast/u1653998/circuits/results/bonafide/raw-graph-observatory-qwen-selected-v1
+```
+
+The execution summary SHA-256 is
+`be73bac9ad9d761b9796b2bb31754f011040087e1db112b9e7c21c096ad00537`.
+Per-target trace times were 48.3--74.4 seconds and peak reserved GPU memory was
+11.85--13.70 GiB. These measurements establish successful trace production,
+not graph adequacy or semantic interpretation.
