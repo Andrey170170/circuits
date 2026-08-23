@@ -71,6 +71,19 @@ Startup validates the bundle manifest, canonical JSON hashes, trace/model/source
 synthetic label occurrence/basis bindings. It fails closed if the bundle or state root is invalid
 or unwritable. Stop it with `Ctrl-C`.
 
+For a service that survives the launching shell, submit the lightweight scheduler-owned launcher
+from the repository root:
+
+```bash
+sbatch scripts/bonafide/serve_trace_observatory.sbatch
+squeue --name trace-observatory --me -o '%.18i %.8T %.20R'
+```
+
+Use the running job's node from the last column as the worker in the SSH command below. The default
+job requests one CPU, 1 GiB, and four hours; override the walltime at submission if needed. Stop a
+scheduler-owned viewer with `scancel JOB_ID`. The launcher remains localhost-only and accepts
+optional `SITE_ROOT`, `STATE_ROOT`, and `PORT` exports; it refuses a non-loopback `HOST`.
+
 ## Forward the port
 
 If the server runs on a CHPC login host, run this on the local computer:
