@@ -1,7 +1,7 @@
 # ADAG exact-trace memory and runtime optimization plan
 
-Status: active optimization plan; source-leaf contribution execution is implemented and awaiting
-A100 artifact qualification.
+Status: active optimization plan; source-leaf contribution execution is implemented, qualified,
+and accepted. Allocator-policy qualification is the next checkpoint.
 
 ## Objective and claim boundary
 
@@ -51,12 +51,14 @@ Fine telemetry identifies two independent resource problems:
 2. Coarse stage and fine VJP CUDA telemetry, including allocator peaks and lane shapes.
 3. Compact extraction of selected neuron contributions, allowing dense VJP storage to be released
    immediately. The compact artifact has exact parity with its trusted reference.
+4. Source-leaf stop-gradient contribution execution, qualified on the 2,951-token A100 reference
+   with exact topology and zero numerical error.
 
 ## Ordered optimization work
 
 ### P1. Source-leaf stop-gradient contribution execution
 
-Implementation status: complete in the development checkpoint; GPU acceptance is pending.
+Implementation status: accepted at commit `d7cc45f63d070640fd71e1a447d99f60882798f8`.
 
 Run the prefix to a selected MLP source without an autograd graph, replace the selected
 `down_proj` input with a detached leaf requiring gradients, and build the graph only from that
@@ -128,7 +130,33 @@ For each checkpoint:
 
 ## P1 acceptance decision
 
-P1 is accepted only if the new source-leaf strategy is provenance-visible, the legacy strategy
-remains available, focused tests pass, the reference artifact comparison passes, and measured A100
-peak allocation decreases without a material trace-time regression. Otherwise retain the trusted
-contribution-compaction checkpoint and diagnose the failed gate before proceeding.
+P1 is accepted. Slurm job `14966195` completed the frozen 2,951-token target on an NVIDIA A100
+80GB PCIe. The candidate artifact is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/source-leaf-contribution-v1/a100/d7cc45f63d070640fd71e1a447d99f60882798f8/flash_sdpa_causal_v1/bonafide.t5-upstream-summed-top5.v1/context-2501-4000/topk-trace-93757737c07a5c8546958174`
+
+The execution-qualification report is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/source-leaf-contribution-v1/a100/d7cc45f63d070640fd71e1a447d99f60882798f8/flash_sdpa_causal_v1/parity-reports/contribution-compaction-vs-source-leaf-2951-exact.json`
+
+All identity and requested result gates passed. The candidate exactly matched 3,094 nodes, 2,366
+edges, target values, node activation/attribution/source profiles, edge attribution/weight values,
+and all 15,470 candidate-profile values at zero absolute and relative tolerance. This establishes
+exact execution equivalence for the saved artifact; it does not upgrade the tracing method's
+scientific claim boundary.
+
+Resource result relative to the trusted contribution-compaction artifact:
+
+- peak allocated: 54.74 GB -> 46.99 GB, down 7.75 GB or 14.2 percent;
+- peak reserved: 69.62 GB -> 51.66 GB, down 17.96 GB or 25.8 percent;
+- physical CUDA headroom: 15.47 GB -> 33.43 GB, up 17.96 GB;
+- trace time: 261.44 seconds -> 258.77 seconds, down 2.67 seconds or 1.0 percent;
+- stop-gradient attribution/contribution stage: 24.87 seconds -> 21.69 seconds;
+- stop-gradient neuron-contribution VJPs: 7.73 seconds -> 5.13 seconds;
+- allocator retries and OOMs: zero.
+
+The per-layer contribution-VJP baseline no longer grows with source-layer depth: the trusted run
+rose from 27.49 GB at layer 0 to 38.70 GB at layer 35, while the accepted run ranged from 28.18 GB
+to 30.84 GB and ended at 28.18 GB. The remaining global 46.99 GB peak is therefore not the old
+deep differentiable-prefix failure mode. P2 should proceed as an allocator-pressure experiment,
+not as a substitute for missing live-tensor reduction.
