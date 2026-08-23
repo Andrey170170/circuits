@@ -1,8 +1,10 @@
 # Raw-graph observatory viewer v1
 
-Status: **proposed implementation plan**. This plan defines a persistent, single-user viewer for
-the seven selected Qwen traces. It does not interpret a graph, assign neuron semantics, run a
-labeler, or alter the frozen trace artifacts.
+Status: **initial v1 implemented and validated on 2026-08-23**. The implementation provides the
+persistent single-user viewer, lossless projection, synthetic label-comparison seam, and saved
+workspace described below. Side-by-side target canvases, real neuron labels, exemplars, clustering,
+and read-only workspace fallback remain later increments. It does not interpret a graph, assign
+neuron semantics, run a real labeler, or alter the frozen trace artifacts.
 
 ## Decision
 
@@ -269,17 +271,19 @@ hop rather than exposing the worker port.
 
 ## Failure behavior
 
-- A checksum, schema, endpoint, or identity failure quarantines that trace with a visible error;
-  strict sync fails the whole bundle.
+- Synchronization and startup are currently strict: a checksum, schema, endpoint, label binding,
+  or identity failure fails the whole bundle rather than serving partial evidence. Per-trace
+  quarantine and raw-only fallback remain later increments.
 - Unsupported, benchmark-only, or multi-target artifacts are refused.
 - Two artifacts with one artifact ID and different hashes fail sync.
-- A label set bound to another model, revision, basis schema, or source hash is rejected while the
-  raw graph remains viewable.
+- A label set bound to another model, revision, basis schema, or source hash is rejected at sync or
+  startup.
 - Duplicate occurrence IDs, missing edge endpoints, non-finite values, or cross-trace edges fail
   projection validation.
-- Corrupt derived cache entries are rebuilt; source artifacts are never repaired by the viewer.
-- An unwritable state root makes the site visibly read-only unless writable state was explicitly
-  required.
+- Corrupt derived entries require a new atomic `sync`; source artifacts are never repaired by the
+  viewer.
+- An invalid or unwritable state root currently fails server startup; a visibly read-only fallback
+  remains a later increment.
 - A stale workspace update returns a conflict rather than overwriting.
 - Path traversal, arbitrary file reads, and browser-supplied pickle paths are rejected.
 
@@ -290,7 +294,7 @@ hop rather than exposing the worker port.
 1. Freeze the viewer graph, label-set, and workspace schemas.
 2. Implement compact-trace discovery, verification, and one-trace-at-a-time projection.
 3. Add golden synthetic fixtures for polarity, attribution sign, edge attribution versus weight,
-   missing values, and cross-slice false paths.
+   and cross-slice false paths.
 4. Build and validate a bundle over all seven real traces.
 
 Gate: every source hash remains unchanged; all seven targets appear in deterministic order; exact

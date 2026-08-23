@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <meta name="color-scheme" content="light" />
+    <title>Trace Observatory</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#graph-panel">Skip to graph</a>
+    <div id="app" class="app-shell" aria-busy="true">
+      <header class="command-bar">
+        <button
+          id="trajectory-toggle"
+          class="icon-button command-menu"
+          type="button"
+          aria-label="Toggle target trajectory"
+          aria-controls="trajectory-rail"
+          aria-expanded="false"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+        </button>
+        <h1>Trace Observatory</h1>
+
+        <div class="command-field model-field">
+          <span class="command-label">Model</span>
+          <span id="model-value" class="command-value" title="Loading model">Loading…</span>
+        </div>
+
+        <label class="command-field target-field" for="target-select">
+          <span class="command-label">Target</span>
+          <select id="target-select" class="command-select" disabled>
+            <option>Loading…</option>
+          </select>
+        </label>
+
+        <label class="command-field label-field" for="label-primary-select">
+          <span class="command-label">Labels</span>
+          <select id="label-primary-select" class="command-select" disabled>
+            <option value="raw">Raw identity</option>
+          </select>
+        </label>
+
+        <div id="save-state" class="save-state" role="status" aria-live="polite"></div>
+        <button id="save-workspace" class="save-button" type="button" disabled>
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6" />
+          </svg>
+          <span>Save workspace</span>
+        </button>
+        <button
+          id="evidence-toggle"
+          class="icon-button evidence-menu"
+          type="button"
+          aria-label="Toggle neuron evidence"
+          aria-controls="evidence-rail"
+          aria-expanded="false"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <circle cx="12" cy="8" r="3" /><path d="M5 20c.5-4 2.8-6 7-6s6.5 2 7 6" />
+          </svg>
+        </button>
+      </header>
+
+      <aside id="trajectory-rail" class="trajectory-rail" aria-label="Target trajectory">
+        <div class="rail-heading">
+          <h2>Target trajectory</h2>
+          <button id="trajectory-close" class="icon-button drawer-close" type="button" aria-label="Close target trajectory">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+        <ol id="target-list" class="target-list"></ol>
+      </aside>
+
+      <main class="workspace">
+        <section class="context-panel" aria-labelledby="context-heading">
+          <div class="section-heading context-heading-row">
+            <h2 id="context-heading">Reasoning tokens</h2>
+            <div class="context-heading-actions">
+              <button id="context-toggle" class="context-toggle" type="button" hidden>Show full prefix</button>
+              <span class="prediction-key"><span aria-hidden="true"></span>Prediction boundary</span>
+            </div>
+          </div>
+          <div id="token-context" class="token-context" aria-label="Token context"></div>
+        </section>
+
+        <section class="filter-toolbar" aria-label="Graph filters">
+          <div class="filter-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z" /></svg>
+          </div>
+
+          <label class="filter-field" for="layer-filter">
+            <span>Layer</span>
+            <select id="layer-filter"><option value="all">All</option></select>
+          </label>
+
+          <label class="filter-field" for="position-filter">
+            <span>Token position</span>
+            <select id="position-filter"><option value="all">All</option></select>
+          </label>
+
+          <label class="filter-field" for="input-token-filter">
+            <span>Input tokens</span>
+            <select id="input-token-filter">
+              <option value="hide" selected>Profiles only</option>
+              <option value="show">Show nodes</option>
+            </select>
+          </label>
+
+          <label class="filter-field" for="polarity-filter">
+            <span>Polarity</span>
+            <select id="polarity-filter">
+              <option value="all">All</option>
+              <option value="positive">Positive (+)</option>
+              <option value="negative">Negative (−)</option>
+            </select>
+          </label>
+
+          <label class="filter-field" for="magnitude-filter">
+            <span>Attribution |a|</span>
+            <select id="magnitude-filter">
+              <option value="0">All</option>
+              <option value="0.000001">≥ 1e−6</option>
+              <option value="0.00001">≥ 1e−5</option>
+              <option value="0.0001">≥ 1e−4</option>
+              <option value="0.001">≥ 1e−3</option>
+              <option value="0.01">≥ 1e−2</option>
+            </select>
+          </label>
+
+          <label class="filter-field" for="mass-filter">
+            <span>Retained mass</span>
+            <select id="mass-filter">
+              <option value="0.8">≥ 80%</option>
+              <option value="0.9" selected>≥ 90%</option>
+              <option value="0.95">≥ 95%</option>
+              <option value="0.99">≥ 99%</option>
+              <option value="1">100%</option>
+            </select>
+          </label>
+
+          <label class="filter-field" for="edge-budget-filter">
+            <span>Max edges</span>
+            <select id="edge-budget-filter">
+              <option value="100" selected>100</option>
+              <option value="250">250</option>
+              <option value="750">750</option>
+              <option value="2000">2,000</option>
+              <option value="all">Show full graph</option>
+            </select>
+          </label>
+
+          <label class="search-field" for="neuron-search">
+            <span class="visually-hidden">Search exact neuron</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+            <input id="neuron-search" type="search" spellcheck="false" autocomplete="off" placeholder="Exact neuron (e.g., L12:1234)" />
+          </label>
+          <button id="clear-filters" class="text-button" type="button">Clear</button>
+        </section>
+
+        <section id="graph-panel" class="graph-panel" tabindex="-1" aria-labelledby="graph-heading">
+          <h2 id="graph-heading" class="visually-hidden">Attribution graph</h2>
+          <div id="graph-status" class="graph-status" role="status" aria-live="polite">
+            <div class="spinner" aria-hidden="true"></div>
+            <p>Loading trace graph…</p>
+          </div>
+          <svg id="graph-svg" class="graph-svg" role="img" aria-labelledby="graph-svg-title graph-svg-description">
+            <title id="graph-svg-title">Selected trace attribution graph</title>
+            <desc id="graph-svg-description">A filtered, target-local attribution graph arranged by model layer.</desc>
+          </svg>
+
+          <div class="graph-tools" aria-label="Graph view controls">
+            <button id="fit-graph" class="icon-button" type="button" aria-label="Fit graph to view" title="Fit graph to view">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
+            </button>
+            <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in" title="Zoom in">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+            </button>
+            <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out" title="Zoom out">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h14" /></svg>
+            </button>
+            <button id="reset-graph" class="icon-button" type="button" aria-label="Reset graph selection and view" title="Reset graph">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 8V3m0 0h5M5 3l3 3a8 8 0 1 1-2 9" /></svg>
+            </button>
+          </div>
+
+          <div class="graph-legend" aria-label="Graph legend">
+            <h3>Edge attribution (signed)</h3>
+            <div><span class="legend-edge positive"></span><span><b>+</b> positive · solid</span></div>
+            <div><span class="legend-edge negative"></span><span><b>−</b> negative · dashed</span></div>
+            <p>Line width encodes |attribution|.</p>
+          </div>
+        </section>
+      </main>
+
+      <aside id="evidence-rail" class="evidence-rail" aria-label="Neuron evidence">
+        <div class="rail-heading">
+          <h2>Neuron evidence</h2>
+          <button id="evidence-close" class="icon-button drawer-close" type="button" aria-label="Close neuron evidence">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+        <div id="evidence-empty" class="rail-empty">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 8v4M12 16h.01" /></svg>
+          <p>Select a neuron to inspect its raw evidence and connected paths.</p>
+        </div>
+        <div id="evidence-content" class="evidence-content" hidden>
+          <div class="identity-summary">
+            <span>Occurrence</span>
+            <strong id="occurrence-id" class="mono"></strong>
+            <span>Basis</span>
+            <strong id="basis-id" class="mono"></strong>
+          </div>
+
+          <dl id="identity-fields" class="identity-fields"></dl>
+
+          <section class="evidence-section" aria-labelledby="activation-heading">
+            <h3 id="activation-heading">Activation</h3>
+            <div id="activation-value" class="signed-value"></div>
+            <div id="activation-bar" class="signed-bar" aria-hidden="true"></div>
+          </section>
+          <section class="evidence-section" aria-labelledby="attribution-heading">
+            <h3 id="attribution-heading">Attribution (signed)</h3>
+            <div id="attribution-value" class="signed-value"></div>
+            <div id="attribution-bar" class="signed-bar" aria-hidden="true"></div>
+          </section>
+
+          <section class="evidence-section profile-section" aria-labelledby="attr-profile-heading">
+            <h3 id="attr-profile-heading">Input-attribution profile</h3>
+            <div id="attr-profile" class="profile-bars"></div>
+          </section>
+          <section class="evidence-section profile-section" aria-labelledby="contrib-profile-heading">
+            <h3 id="contrib-profile-heading">Output-contribution profile</h3>
+            <div id="contrib-profile" class="profile-bars"></div>
+          </section>
+
+          <section class="evidence-section connection-section" aria-labelledby="incoming-heading">
+            <h3 id="incoming-heading">Incoming connections <span>(top 8)</span></h3>
+            <div id="incoming-connections"></div>
+          </section>
+          <section class="evidence-section connection-section" aria-labelledby="outgoing-heading">
+            <h3 id="outgoing-heading">Outgoing connections <span>(top 8)</span></h3>
+            <div id="outgoing-connections"></div>
+          </section>
+
+          <section class="evidence-section labels-section" aria-labelledby="labels-heading">
+            <div class="section-heading-row">
+              <h3 id="labels-heading">Label comparison</h3>
+              <span id="synthetic-label-warning" class="synthetic-warning" hidden>Synthetic fixture</span>
+            </div>
+            <div class="label-selectors">
+              <label for="label-a-select">A<select id="label-a-select"><option value="raw">Raw identity</option></select></label>
+              <label for="label-b-select">B<select id="label-b-select"><option value="none">None</option></select></label>
+            </div>
+            <div class="label-columns">
+              <article><h4 id="label-a-name">Raw identity</h4><div id="label-a-value"></div></article>
+              <article><h4 id="label-b-name">—</h4><div id="label-b-value">—</div></article>
+            </div>
+          </section>
+          <section class="evidence-section note-section" aria-labelledby="note-heading">
+            <div class="section-heading-row">
+              <h3 id="note-heading">Workspace note</h3>
+              <label class="pin-control"><input id="pin-node" type="checkbox" /> Pin neuron</label>
+            </div>
+            <textarea id="neuron-comment" rows="3" placeholder="Optional note bound to this occurrence"></textarea>
+          </section>
+        </div>
+      </aside>
+
+      <section id="provenance-drawer" class="provenance-drawer" aria-labelledby="provenance-heading">
+        <button id="provenance-toggle" class="provenance-toggle" type="button" aria-expanded="true" aria-controls="provenance-content">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6" /></svg>
+          <span id="provenance-heading">Provenance</span>
+        </button>
+        <div id="provenance-content" class="provenance-content">
+          <div class="provenance-cell source-cell"><span>Source artifact</span><strong id="prov-artifact" class="mono">—</strong><small id="prov-hash" class="mono"></small></div>
+          <div class="provenance-cell"><span>Graph (raw)</span><strong><span id="raw-node-count">—</span> nodes · <span id="raw-edge-count">—</span> edges</strong></div>
+          <div class="provenance-cell"><span>Display (filtered)</span><strong><span id="display-node-count">—</span> nodes · <span id="display-edge-count">—</span> edges</strong></div>
+          <div class="provenance-cell"><span>Retained edge-attribution mass</span><strong id="retained-mass">—</strong><small id="projection-note"></small></div>
+          <div class="claim-warning">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 2 21h20zM12 9v5M12 18h.01" /></svg>
+            <strong>Pruned local attribution graph —<br />not a computation transcript.</strong>
+          </div>
+        </div>
+      </section>
+
+      <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+      <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+    </div>
+
+    <noscript>This viewer requires JavaScript to render trace graphs.</noscript>
+    <script src="/vendor/d3.js"></script>
+    <script src="/vendor/dagre.min.js"></script>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

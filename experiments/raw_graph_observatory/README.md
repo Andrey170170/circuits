@@ -99,3 +99,15 @@ The execution summary SHA-256 is
 Per-target trace times were 48.3--74.4 seconds and peak reserved GPU memory was
 11.85--13.70 GiB. These measurements establish successful trace production,
 not graph adequacy or semantic interpretation.
+
+## Persistent Trace Observatory viewer
+
+`circuits.observatory` projects the seven compact artifacts into a lossless, safe-JSON viewer
+bundle and serves a Neuronpedia-inspired local interface. It preserves each target as an
+independent graph, starts from a target-connected upstream focus view, exposes signed raw evidence,
+and keeps label A/B overlays plus saved workspace notes separate from the source traces.
+
+The checked implementation and exact CHPC launch/tunnel commands are documented in
+[`docs/TRACE_OBSERVATORY_RUNBOOK.md`](../../docs/TRACE_OBSERVATORY_RUNBOOK.md). The current bundle
+is under `raw-graph-observatory-viewer-v1` beside the source result root; persistent workspace state
+is under `/uufs/chpc.utah.edu/common/home/u1653998/projects/circuits-observatory-state`.
