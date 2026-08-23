@@ -9,6 +9,11 @@ from typing import Literal
 import torch
 from tqdm import tqdm
 
+from circuits.tracing.contribution_execution import (
+    DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION,
+    StopGradientContributionExecution,
+    run_stop_gradient_contribution_forward,
+)
 from circuits.tracing.grad import (
     DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND,
     StopGradientAttentionBackend,
@@ -500,6 +505,9 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
     attention_backend: StopGradientAttentionBackend = (
         DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
     ),
+    contribution_execution: StopGradientContributionExecution = (
+        DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION
+    ),
 ) -> tuple[torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions from source tokens and contributions to target tokens
@@ -772,30 +780,14 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             attention_backend=attention_backend,
         )
 
-        cache = {}
-
-        def _hook(lid, layer_cache):
-            def fn(_, input, output):
-                layer_cache[lid] = input[0]
-
-            return fn
-
-        if hasattr(model.model.layers[lid].mlp, "mlp"):
-            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(
-                _hook(lid, cache)
-            )
-        else:
-            model.model.layers[lid].mlp.down_proj.register_forward_hook(
-                _hook(lid, cache)
-            )
-
-        # differentiable embeds
-        # shape: (batch, seq, d)
-        embeds = model.model.embed_tokens(input_ids).detach().requires_grad_()
-
-        # forward pass
-        out = model(inputs_embeds=embeds, attention_mask=attention_masks)
-        logits = out.logits
+        contribution_forward = run_stop_gradient_contribution_forward(
+            model,
+            input_ids,
+            attention_masks,
+            layer=lid,
+            execution=contribution_execution,
+        )
+        logits = contribution_forward.logits
         if center_logits:
             logits -= logits.mean(dim=-1)
 
@@ -806,7 +798,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
         grad_outputs = torch.eye(t * batch, device=device)  # (t * batch, t * batch)
 
-        layer_acts = cache[lid]  # (batch, seq, d)
+        layer_acts = contribution_forward.source_activation  # (batch, seq, d)
         layer_acts.grad = None
         with cuda_memory_instrumentation_stage(
             instrumentation,
@@ -826,7 +818,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                 layer_acts,
                 grad_outputs=grad_outputs,
                 is_grads_batched=True,
-                retain_graph=True,
+                retain_graph=contribution_forward.retain_graph_for_vjp,
             )[0]
             if vjp_measurement is not None:
                 vjp_measurement.metadata["vjp_result_shape"] = list(
@@ -853,9 +845,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             lid,
             len(model.model.layers),
         )
-        remove_forward_hooks(model.model.layers[lid].mlp.down_proj)
-
-        del layer_acts, embeds, tgt_vec, grad_outputs
+        del contribution_forward, layer_acts, tgt_vec, grad_outputs
         torch.cuda.empty_cache()
 
     # multiple by acts to get contributions

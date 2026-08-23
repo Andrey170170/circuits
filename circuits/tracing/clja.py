@@ -24,6 +24,11 @@ from circuits.tracing.candidates import (
     CandidateLogitAxis,
     reduce_candidate_contributions,
 )
+from circuits.tracing.contribution_execution import (
+    DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION,
+    StopGradientContributionExecution,
+    resolve_stop_gradient_contribution_execution,
+)
 from circuits.tracing.grad import (
     DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND,
     StopGradientAttentionBackend,
@@ -109,19 +114,33 @@ class ADAGConfig:
 
     # Tracing settings
     focus_last_residual: bool = False
+    # Appended to preserve the positional order of historical fields.
+    stop_gradient_contribution_execution: StopGradientContributionExecution = (
+        DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION
+    )
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
+        resolve_stop_gradient_contribution_execution(
+            self.stop_gradient_contribution_execution
+        )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        """Load artifacts pickled before the attention backend became explicit."""
+        """Load artifacts pickled before stop-gradient strategies were explicit."""
 
         self.__dict__.update(state)
         if "stop_gradient_attention_backend" not in state:
             self.stop_gradient_attention_backend = (
                 DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND
             )
+        if "stop_gradient_contribution_execution" not in state:
+            self.stop_gradient_contribution_execution = (
+                DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION
+            )
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
+        resolve_stop_gradient_contribution_execution(
+            self.stop_gradient_contribution_execution
+        )
 
 
 @dataclass(frozen=True)
@@ -241,10 +260,15 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     disable_stop_grad = config.disable_stop_grad
     use_stop_grad_on_mlps = config.use_stop_grad_on_mlps
     stop_gradient_attention_backend = config.stop_gradient_attention_backend
+    stop_gradient_contribution_execution = config.stop_gradient_contribution_execution
     if instrumentation is not None:
         instrumentation.set_counter(
             "stop_gradient_attention_backend",
             stop_gradient_attention_backend,
+        )
+        instrumentation.set_counter(
+            "stop_gradient_contribution_execution",
+            stop_gradient_contribution_execution,
         )
     ablation_mode = config.ablation_mode
     center_logits = config.center_logits
@@ -608,6 +632,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 verbose=verbose,
                 instrumentation=instrumentation,
                 attention_backend=stop_gradient_attention_backend,
+                contribution_execution=stop_gradient_contribution_execution,
             )
         # store neuron attributions and contributions (keep on CPU to save GPU memory)
         neuron_attr_map_with_stop_grad_on_mlps: dict[NeuronIdx, torch.Tensor] = {}

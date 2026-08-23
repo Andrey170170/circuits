@@ -1,10 +1,12 @@
-"""Numerical qualification for two saved top-k attention-backend traces.
+"""Numerical qualification for two saved top-k execution traces.
 
 This module compares trusted compact artifacts from the same frozen work item.
 It deliberately reports bounded implementation drift rather than asserting
-scientific parity.  Scientific identity fields are never configurable; only
-backend/configuration, runtime, and code-revision identity differences may be
-explicitly allow-listed by callers.
+scientific parity. Scientific identity fields are never configurable; only
+named execution strategies, runtime, and code-revision identity differences
+may be explicitly allow-listed by callers. Historical attention-backend
+reports keep their original schema; contribution-execution comparisons use a
+broader execution-qualification schema.
 """
 
 from __future__ import annotations
@@ -26,10 +28,12 @@ from circuits.tracing.artifact import (
 )
 
 REPORT_SCHEMA = "bonafide-attention-backend-qualification/v1"
+EXECUTION_REPORT_SCHEMA = "bonafide-execution-qualification/v1"
 TOLERANCE_GROUPS = ("target", "node", "edge", "candidate_profile")
 
 _ALLOWABLE_IDENTITY_RULES = (
     "artifact_identity.adag_config.stop_gradient_attention_backend",
+    "artifact_identity.adag_config.stop_gradient_contribution_execution",
     "artifact_identity.code_revision.",
     "artifact_identity.runtime_environment.",
 )
@@ -162,17 +166,23 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
                 "allowed identity difference paths must be non-empty strings"
             )
         prefix = path[:-2] if path.endswith(".*") else path
+        if path.endswith(".*") and prefix in _ALLOWABLE_IDENTITY_RULES[:2]:
+            raise ValueError(
+                "scalar execution-strategy identity differences must be "
+                f"allow-listed by exact path: {path!r}"
+            )
         if not (
-            prefix == _ALLOWABLE_IDENTITY_RULES[0]
+            prefix in _ALLOWABLE_IDENTITY_RULES[:2]
             or any(
                 prefix == allowed_prefix.removesuffix(".")
                 or prefix.startswith(allowed_prefix)
-                for allowed_prefix in _ALLOWABLE_IDENTITY_RULES[1:]
+                for allowed_prefix in _ALLOWABLE_IDENTITY_RULES[2:]
             )
         ):
             raise ValueError(
                 "identity difference may only allow the stop-gradient attention "
-                "backend or fields under code_revision/runtime_environment: "
+                "backend, stop-gradient contribution execution, or fields under "
+                "code_revision/runtime_environment: "
                 f"{path!r}"
             )
         normalized.append(path)
@@ -652,7 +662,7 @@ def _group_within_tolerance(value: Any) -> bool:
     return True
 
 
-def compare_attention_backend_artifacts(
+def compare_execution_artifacts(
     reference_path: str | Path,
     candidate_path: str | Path,
     *,
@@ -663,7 +673,12 @@ def compare_attention_backend_artifacts(
     require_exact_node_topology: bool = False,
     require_exact_edge_topology: bool = False,
 ) -> dict[str, Any]:
-    """Compare two saved traces under explicit qualification requirements."""
+    """Compare two saved execution traces under explicit qualification gates.
+
+    The historical public name is retained for compatibility. Callers may
+    explicitly qualify either the attention backend or contribution-execution
+    strategy, but no other scientific configuration field.
+    """
 
     allowed_paths = _validate_allowed_identity_paths(allowed_identity_difference_paths)
     tolerance_map = dict(tolerances or {})
@@ -839,8 +854,15 @@ def compare_attention_backend_artifacts(
     result_gate_count = sum(gate["gate"] in result_gate_names for gate in gates)
     validation_passed = all(gate["passed"] for gate in gates)
 
+    report_schema = (
+        EXECUTION_REPORT_SCHEMA
+        if "artifact_identity.adag_config.stop_gradient_contribution_execution"
+        in allowed_paths
+        else REPORT_SCHEMA
+    )
+
     return {
-        "schema_version": REPORT_SCHEMA,
+        "schema_version": report_schema,
         "validation_passed": validation_passed,
         "qualification_passed": validation_passed if result_gate_count else None,
         "diagnostic_only": result_gate_count == 0,
@@ -914,3 +936,8 @@ def compare_attention_backend_artifacts(
         },
         "gates": gates,
     }
+
+
+# Historical compatibility name. New callers should use the execution-generic
+# name so reports are not described as attention-only qualifications.
+compare_attention_backend_artifacts = compare_execution_artifacts

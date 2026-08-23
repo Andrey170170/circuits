@@ -1,4 +1,4 @@
-"""CLI for qualifying numerical drift between top-k attention backends."""
+"""CLI for qualifying numerical drift between top-k execution strategies."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 from circuits.tracing.backend_qualification import (
     TOLERANCE_GROUPS,
     NumericTolerance,
-    compare_attention_backend_artifacts,
+    compare_execution_artifacts,
 )
 
 
@@ -54,7 +54,7 @@ def _tolerance_arguments(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare two compact top-k traces from different attention backends. "
+            "Compare two compact top-k traces from different execution strategies. "
             "No numerical threshold is assumed: provide tolerances to create "
             "numerical pass/fail gates."
         )
@@ -101,7 +101,7 @@ def main() -> None:
             for group in TOLERANCE_GROUPS
         }
     )
-    report = compare_attention_backend_artifacts(
+    report = compare_execution_artifacts(
         args.reference,
         args.candidate,
         allowed_identity_difference_paths=args.allow_identity_difference,

@@ -9,12 +9,18 @@ from circuits.tracing.artifact import save_topk_compact_trace
 from circuits.tracing.backend_qualification import (
     NumericTolerance,
     compare_attention_backend_artifacts,
+    compare_execution_artifacts,
 )
 from scripts.bonafide.topk_backend_qualification import save_qualification_report
 from tests.test_teacher_forced_trace import _topk_trace
 
 
-def _manifest(backend: str, *, source_id: str = "source-width1") -> dict:
+def _manifest(
+    backend: str,
+    *,
+    source_id: str = "source-width1",
+    contribution_execution: str | None = "full_graph_v1",
+) -> dict:
     manifest = {
         "source_width1_artifact_id": source_id,
         "source_width1_manifest_sha256": "a" * 64,
@@ -62,6 +68,10 @@ def _manifest(backend: str, *, source_id: str = "source-width1") -> dict:
             },
         },
     }
+    if contribution_execution is not None:
+        manifest["artifact_identity"]["adag_config"][
+            "stop_gradient_contribution_execution"
+        ] = contribution_execution
     identity = manifest["artifact_identity"]
     identity_sha256 = hashlib.sha256(
         json.dumps(
@@ -96,7 +106,12 @@ def _complete_trace_metadata(trace) -> None:
     )
 
 
-def _save_pair(tmp_path):
+def _save_pair(
+    tmp_path,
+    *,
+    reference_execution: str | None = "full_graph_v1",
+    candidate_execution: str | None = "full_graph_v1",
+):
     reference = _topk_trace()
     candidate = deepcopy(reference)
     _complete_trace_metadata(reference)
@@ -112,7 +127,7 @@ def _save_pair(tmp_path):
             "cuda_peak_reserved_bytes": 120,
             "rss_peak_after_bytes": 200,
         },
-        manifest=_manifest("eager"),
+        manifest=_manifest("eager", contribution_execution=reference_execution),
     )
     save_topk_compact_trace(
         candidate_path,
@@ -123,7 +138,7 @@ def _save_pair(tmp_path):
             "cuda_peak_reserved_bytes": 80,
             "rss_peak_after_bytes": 190,
         },
-        manifest=_manifest("sdpa_ov_only"),
+        manifest=_manifest("sdpa_ov_only", contribution_execution=candidate_execution),
     )
     return reference_path, candidate_path
 
@@ -140,7 +155,7 @@ def test_backend_qualification_passes_explicit_gates_and_reports_resources(
 ) -> None:
     reference, candidate = _save_pair(tmp_path)
 
-    report = compare_attention_backend_artifacts(
+    report = compare_execution_artifacts(
         reference,
         candidate,
         allowed_identity_difference_paths=_allowed_paths(),
@@ -165,6 +180,50 @@ def test_backend_qualification_passes_explicit_gates_and_reports_resources(
         report["resources"]["cuda_peak_reserved_bytes"]["candidate_minus_reference"]
         == -40
     )
+
+
+def test_backend_qualification_can_allow_contribution_execution_difference(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_execution=None,
+        candidate_execution="source_leaf_v1",
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=[
+            *_allowed_paths(),
+            "artifact_identity.adag_config.stop_gradient_contribution_execution",
+        ],
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+    )
+
+    assert report["validation_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    allowed = report["identity"]["artifact_identity"]["allowed_differences"]
+    assert {difference["path"] for difference in allowed} >= {
+        "artifact_identity.adag_config.stop_gradient_attention_backend",
+        "artifact_identity.adag_config.stop_gradient_contribution_execution",
+    }
+
+
+def test_backend_qualification_rejects_wildcard_for_scalar_strategy(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_pair(tmp_path)
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config.stop_gradient_contribution_execution.*"
+            ],
+        )
 
 
 def test_backend_qualification_fails_hard_source_identity_mismatch(tmp_path) -> None:

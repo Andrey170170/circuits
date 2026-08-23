@@ -27,3 +27,18 @@ Circuit tracing via Cross-Layer Jacobian Attribution (CLJA). Identifies importan
 Qualify corrected eager against Flash SDPA on one GPU model before promotion.
 Do not compare `legacy_eager_unmasked_v1` and either causal backend as if they
 differed only by floating-point implementation drift.
+
+## Stop-gradient contribution execution
+
+`ADAGConfig.stop_gradient_contribution_execution` selects the autograd lifetime
+for each selected-neuron contribution VJP and is included in artifact identity:
+
+- `full_graph_v1` is the compatibility default. It begins the graph at the
+  embeddings and retains it after the VJP, matching historical execution.
+- `source_leaf_v1` computes the prefix without a graph, reinjects the selected
+  MLP `down_proj` input as an equal-valued autograd leaf, and releases the
+  downstream graph after its sole batched VJP.
+
+Treat `source_leaf_v1` as unqualified until an exact same-target, same-GPU
+comparison confirms target values, topology, node values, edge values, and
+candidate profiles against a trusted `full_graph_v1` trace.
