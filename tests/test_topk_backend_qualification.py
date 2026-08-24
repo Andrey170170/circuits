@@ -7,11 +7,17 @@ from copy import deepcopy
 import pytest
 from circuits.tracing.artifact import save_topk_compact_trace
 from circuits.tracing.backend_qualification import (
+    CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
+    TOLERANCE_GROUPS,
     NumericTolerance,
     compare_attention_backend_artifacts,
     compare_execution_artifacts,
 )
-from scripts.bonafide.topk_backend_qualification import save_qualification_report
+from scripts.bonafide.topk_backend_qualification import (
+    build_parser,
+    comparison_options,
+    save_qualification_report,
+)
 from tests.test_teacher_forced_trace import _topk_trace
 
 
@@ -20,6 +26,8 @@ def _manifest(
     *,
     source_id: str = "source-width1",
     contribution_execution: str | None = "full_graph_v1",
+    allocator_policy: str | None = None,
+    code_revision: str | None = None,
 ) -> dict:
     manifest = {
         "source_width1_artifact_id": source_id,
@@ -59,7 +67,8 @@ def _manifest(
             "batch_size": 1,
             "wave_id": "wave-1",
             "code_revision": {
-                "git_commit": "commit-eager" if backend == "eager" else "commit-sdpa",
+                "git_commit": code_revision
+                or ("commit-eager" if backend == "eager" else "commit-sdpa"),
                 "source_tree_sha256": "b" * 64 if backend == "eager" else "c" * 64,
             },
             "runtime_environment": {
@@ -72,6 +81,24 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "stop_gradient_contribution_execution"
         ] = contribution_execution
+    if allocator_policy is not None:
+        allocator_value = (
+            None if allocator_policy == "default_v1" else "expandable_segments:True"
+        )
+        allocator_receipt = {
+            "intended_policy_id": allocator_policy,
+            "observed_environment": {
+                "name": "PYTORCH_CUDA_ALLOC_CONF",
+                "value": allocator_value,
+                "is_set": allocator_value is not None,
+            },
+            "observed_allocator_backend": "native",
+        }
+        manifest["artifact_identity"]["cuda_allocator_policy"] = allocator_policy
+        manifest["artifact_identity"]["runtime_environment"][
+            "cuda_allocator_policy"
+        ] = allocator_receipt
+        manifest["runtime_environment"]["cuda_allocator_policy"] = allocator_receipt
     identity = manifest["artifact_identity"]
     identity_sha256 = hashlib.sha256(
         json.dumps(
@@ -104,6 +131,24 @@ def _complete_trace_metadata(trace) -> None:
             "chat_template_sha256": "5" * 64,
         }
     )
+
+
+def _rehash_manifest(manifest: dict) -> dict:
+    identity = manifest["artifact_identity"]
+    identity_without_hash = {
+        key: value for key, value in identity.items() if key != "sha256"
+    }
+    identity_sha256 = hashlib.sha256(
+        json.dumps(
+            identity_without_hash,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    identity["sha256"] = identity_sha256
+    manifest["artifact_id"] = f"topk-trace-{identity_sha256[:24]}"
+    return manifest
 
 
 def _save_pair(
@@ -224,6 +269,219 @@ def test_backend_qualification_rejects_wildcard_for_scalar_strategy(
                 "artifact_identity.adag_config.stop_gradient_contribution_execution.*"
             ],
         )
+
+
+def test_execution_qualification_allows_exact_allocator_policy_only(
+    tmp_path,
+) -> None:
+    reference = _topk_trace()
+    candidate = deepcopy(reference)
+    _complete_trace_metadata(reference)
+    _complete_trace_metadata(candidate)
+    reference_path = tmp_path / "allocator-default"
+    candidate_path = tmp_path / "allocator-expandable"
+    save_topk_compact_trace(
+        reference_path,
+        reference,
+        manifest=_manifest("eager", allocator_policy="default_v1"),
+    )
+    save_topk_compact_trace(
+        candidate_path,
+        candidate,
+        manifest=_manifest("eager", allocator_policy="expandable_segments_v1"),
+    )
+
+    report = compare_execution_artifacts(
+        reference_path,
+        candidate_path,
+        allowed_identity_difference_paths=CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        require_canonical_cuda_allocator_ab=True,
+    )
+    assert report["validation_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    assert {gate["gate"] for gate in report["gates"]} >= {
+        "same_gpu_model",
+        "canonical_cuda_allocator_ab_pair",
+        "exact_node_topology",
+        "exact_edge_topology",
+        *(f"{group}_numeric_tolerance" for group in TOLERANCE_GROUPS),
+    }
+    allowed = report["identity"]["artifact_identity"]["allowed_differences"]
+    assert {difference["path"] for difference in allowed} == set(
+        CUDA_ALLOCATOR_AB_IDENTITY_PATHS
+    )
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference_path,
+            candidate_path,
+            allowed_identity_difference_paths=[
+                "artifact_identity.cuda_allocator_policy.*"
+            ],
+        )
+
+
+def test_cuda_allocator_ab_cli_resolves_strict_non_overridable_profile() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--reference",
+            "reference",
+            "--candidate",
+            "candidate",
+            "--output",
+            "report.json",
+            "--cuda-allocator-ab",
+        ]
+    )
+
+    options = comparison_options(args)
+
+    assert options["allowed_identity_difference_paths"] == (
+        CUDA_ALLOCATOR_AB_IDENTITY_PATHS
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_same_gpu_family"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+    assert options["require_canonical_cuda_allocator_ab"] is True
+    assert options["tolerances"] == {
+        group: NumericTolerance(absolute=0.0, relative=0.0)
+        for group in TOLERANCE_GROUPS
+    }
+
+    args.allow_identity_difference = ["artifact_identity.code_revision.*"]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        comparison_options(args)
+
+
+def test_cuda_allocator_ab_rejects_same_target_code_revision_drift(tmp_path) -> None:
+    reference = _topk_trace()
+    candidate = deepcopy(reference)
+    _complete_trace_metadata(reference)
+    _complete_trace_metadata(candidate)
+    reference_path = tmp_path / "allocator-default"
+    candidate_path = tmp_path / "allocator-expandable-code-drift"
+    save_topk_compact_trace(
+        reference_path,
+        reference,
+        manifest=_manifest(
+            "eager", allocator_policy="default_v1", code_revision="same-commit"
+        ),
+    )
+    save_topk_compact_trace(
+        candidate_path,
+        candidate,
+        manifest=_manifest(
+            "eager",
+            allocator_policy="expandable_segments_v1",
+            code_revision="different-commit",
+        ),
+    )
+
+    report = compare_execution_artifacts(
+        reference_path,
+        candidate_path,
+        **comparison_options(
+            build_parser().parse_args(
+                [
+                    "--reference",
+                    str(reference_path),
+                    "--candidate",
+                    str(candidate_path),
+                    "--output",
+                    str(tmp_path / "unused.json"),
+                    "--cuda-allocator-ab",
+                ]
+            )
+        ),
+    )
+
+    assert report["validation_passed"] is False
+    disallowed = report["identity"]["artifact_identity"]["unallowed_differences"]
+    assert {difference["path"] for difference in disallowed} == {
+        "artifact_identity.code_revision.git_commit"
+    }
+
+
+@pytest.mark.parametrize(
+    ("reference_policy", "candidate_policy"),
+    [
+        ("default_v1", "default_v1"),
+        ("expandable_segments_v1", "default_v1"),
+    ],
+)
+def test_cuda_allocator_ab_rejects_equal_or_reversed_lanes(
+    tmp_path, reference_policy, candidate_policy
+) -> None:
+    reference = _topk_trace()
+    candidate = deepcopy(reference)
+    _complete_trace_metadata(reference)
+    _complete_trace_metadata(candidate)
+    reference_path = tmp_path / "allocator-reference"
+    candidate_path = tmp_path / "allocator-candidate"
+    save_topk_compact_trace(
+        reference_path,
+        reference,
+        manifest=_manifest("eager", allocator_policy=reference_policy),
+    )
+    save_topk_compact_trace(
+        candidate_path,
+        candidate,
+        manifest=_manifest("eager", allocator_policy=candidate_policy),
+    )
+
+    report = compare_execution_artifacts(
+        reference_path,
+        candidate_path,
+        allowed_identity_difference_paths=CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
+        require_canonical_cuda_allocator_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    assert report["cuda_allocator_ab_contract"]["passed"] is False
+
+
+def test_cuda_allocator_ab_rejects_equally_malformed_receipts(tmp_path) -> None:
+    reference = _topk_trace()
+    candidate = deepcopy(reference)
+    _complete_trace_metadata(reference)
+    _complete_trace_metadata(candidate)
+    reference_path = tmp_path / "allocator-default-malformed"
+    candidate_path = tmp_path / "allocator-expandable-malformed"
+    manifests = [
+        _manifest("eager", allocator_policy="default_v1"),
+        _manifest("eager", allocator_policy="expandable_segments_v1"),
+    ]
+    for manifest in manifests:
+        for runtime in (
+            manifest["runtime_environment"],
+            manifest["artifact_identity"]["runtime_environment"],
+        ):
+            receipt = runtime["cuda_allocator_policy"]
+            receipt["observed_environment"]["name"] = "WRONG_ALLOCATOR_VARIABLE"
+            receipt["observed_allocator_backend"] = "wrong-backend"
+        _rehash_manifest(manifest)
+    save_topk_compact_trace(reference_path, reference, manifest=manifests[0])
+    save_topk_compact_trace(candidate_path, candidate, manifest=manifests[1])
+
+    report = compare_execution_artifacts(
+        reference_path,
+        candidate_path,
+        allowed_identity_difference_paths=CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
+        require_canonical_cuda_allocator_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    assert report["identity"]["artifact_identity"]["passed"] is True
+    assert report["cuda_allocator_ab_contract"]["passed"] is False
 
 
 def test_backend_qualification_fails_hard_source_identity_mismatch(tmp_path) -> None:

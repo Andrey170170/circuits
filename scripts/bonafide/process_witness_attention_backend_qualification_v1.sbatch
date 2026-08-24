@@ -38,6 +38,7 @@ cd "$REPO_ROOT"
 : "${WAVE:?Set WAVE to exactly one qualification-v4 wave ID}"
 : "${ONLY_ARTIFACT_ID:?Set ONLY_ARTIFACT_ID to exactly one item in WAVE}"
 : "${UV_PROJECT_ENVIRONMENT:?Set a lane-specific absolute uv environment}"
+EXPECTED_CUDA_ALLOCATOR_POLICY="${EXPECTED_CUDA_ALLOCATOR_POLICY:-}"
 
 for path_name in CONFIG MANIFEST ARTIFACT_ROOT UV_PROJECT_ENVIRONMENT; do
     path_value="${!path_name}"
@@ -62,6 +63,23 @@ case "$EXPECTED_ATTENTION_BACKEND" in
         exit 2
         ;;
 esac
+
+apply_cuda_allocator_policy() {
+    case "$EXPECTED_CUDA_ALLOCATOR_POLICY" in
+        "") ;;
+        default_v1) unset PYTORCH_CUDA_ALLOC_CONF ;;
+        expandable_segments_v1)
+            export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+            ;;
+        *)
+            echo "Unsupported EXPECTED_CUDA_ALLOCATOR_POLICY=${EXPECTED_CUDA_ALLOCATOR_POLICY}." >&2
+            exit 2
+            ;;
+    esac
+}
+# Apply before this launcher starts Python. Reapply after environment setup so
+# the Python runtime cannot inherit a value that disagrees with the policy ID.
+apply_cuda_allocator_policy
 
 verify_file_sha256() {
     local path="$1"
@@ -88,6 +106,7 @@ module load python/3.12.12 uv/0.11.14
 # shellcheck disable=SC1091
 source scripts/chpc_env.sh
 export UV_PROJECT_ENVIRONMENT="$QUALIFICATION_UV_PROJECT_ENVIRONMENT"
+apply_cuda_allocator_policy
 PYTHON_BIN="${UV_PROJECT_ENVIRONMENT}/bin/python"
 if [[ ! -x "$PYTHON_BIN" ]]; then
     echo "Frozen lane Python environment is missing at ${PYTHON_BIN}." >&2
@@ -118,6 +137,7 @@ EXPECTED_OUTPUT_DIR="$(
     "$PYTHON_BIN" -c \
         'import hashlib,json,os,pathlib,sys
 from scripts.bonafide.runner import collect_code_revision, collect_runtime_environment
+from scripts.bonafide.cuda_allocator_policy import bind_cuda_allocator_runtime_receipt, declared_cuda_allocator_policy, validate_cuda_allocator_environment
 from scripts.bonafide.topk_runner import topk_runtime_artifact_identity
 
 config_path=pathlib.Path(sys.argv[1])
@@ -128,6 +148,7 @@ source_id=sys.argv[5]
 expected_backend=sys.argv[6]
 expected_source_sha=sys.argv[7]
 repo_root=pathlib.Path(sys.argv[8])
+expected_allocator_policy=sys.argv[9] or None
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -135,6 +156,9 @@ if not isinstance(adag, dict) or "stop_gradient_attention_backend" not in adag:
     raise SystemExit("run config must explicitly declare adag_config.stop_gradient_attention_backend")
 if adag["stop_gradient_attention_backend"] != expected_backend:
     raise SystemExit("run config backend disagrees with EXPECTED_ATTENTION_BACKEND")
+declared_allocator_policy=declared_cuda_allocator_policy(config)
+if declared_allocator_policy != expected_allocator_policy:
+    raise SystemExit("run config allocator policy disagrees with EXPECTED_CUDA_ALLOCATOR_POLICY")
 if config.get("trace_warmup", {}).get("enabled") is not False:
     raise SystemExit("backend qualification requires trace_warmup.enabled=false")
 limits=config.get("wave_limits")
@@ -156,7 +180,8 @@ actual_source_sha=hashlib.sha256(source_path.read_bytes()).hexdigest()
 if not (len(expected_source_sha)==64 and actual_source_sha==expected_source_sha==source.get("width1_manifest_sha256")):
     raise SystemExit("width-one source manifest file SHA-256 drift")
 canonical=lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-runtime=collect_runtime_environment()
+validate_cuda_allocator_environment(config)
+runtime=bind_cuda_allocator_runtime_receipt(config, collect_runtime_environment())
 artifact_id,_identity=topk_runtime_artifact_identity(
     items[0], config=config, trace_family=manifest["trace_family"],
     code_revision=collect_code_revision(repo_root), runtime_environment=runtime,
@@ -168,7 +193,8 @@ print(json.dumps({"qualification_runtime_environment": runtime}, sort_keys=True)
 print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact_id)' \
         "$CONFIG" "$MANIFEST" "$ARTIFACT_ROOT" "$WAVE" \
         "$ONLY_ARTIFACT_ID" "$EXPECTED_ATTENTION_BACKEND" \
-        "$WIDTH1_SOURCE_MANIFEST_FILE_SHA256" "$REPO_ROOT"
+        "$WIDTH1_SOURCE_MANIFEST_FILE_SHA256" "$REPO_ROOT" \
+        "$EXPECTED_CUDA_ALLOCATOR_POLICY"
 )"
 
 for target in "$EXPECTED_OUTPUT_DIR" "$SUMMARY_JSONL"; do
@@ -183,6 +209,7 @@ export TRANSFORMERS_OFFLINE=1
 
 echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} wave=${WAVE} source=${ONLY_ARTIFACT_ID}"
 echo "backend=${EXPECTED_ATTENTION_BACKEND} config=${CONFIG} manifest=${MANIFEST}"
+echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "artifact_root=${ARTIFACT_ROOT} expected_output=${EXPECTED_OUTPUT_DIR}"
 echo "summary_jsonl=${SUMMARY_JSONL} uv_environment=${UV_PROJECT_ENVIRONMENT}"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
@@ -230,11 +257,13 @@ fi
 
 "$PYTHON_BIN" -c \
     'import json,pathlib,sys
+from scripts.bonafide.cuda_allocator_policy import ALLOCATOR_ENVIRONMENT_VARIABLE, pytorch_cuda_alloc_conf_for_policy
 summary=pathlib.Path(sys.argv[1])
 expected_source=sys.argv[2]
 expected_output=str(pathlib.Path(sys.argv[3]))
 expected_backend=sys.argv[4]
 expected_gpu=sys.argv[5]
+expected_allocator_policy=sys.argv[6] or None
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -250,6 +279,28 @@ if len(devices) != 1 or devices[0].get("name") != expected_gpu or not runtime.ge
 artifact_manifest=json.loads((pathlib.Path(expected_output)/"manifest.json").read_text(encoding="utf-8"))
 backend=artifact_manifest.get("artifact_identity", {}).get("adag_config", {}).get("stop_gradient_attention_backend")
 if backend != expected_backend:
-    raise SystemExit("saved artifact backend identity disagrees with requested backend")' \
+    raise SystemExit("saved artifact backend identity disagrees with requested backend")
+identity=artifact_manifest.get("artifact_identity", {})
+if identity.get("cuda_allocator_policy") != expected_allocator_policy:
+    if expected_allocator_policy is not None or "cuda_allocator_policy" in identity:
+        raise SystemExit("saved artifact allocator identity disagrees with requested policy")
+artifact_runtime=artifact_manifest.get("runtime_environment", {})
+if artifact_runtime != identity.get("runtime_environment") or artifact_runtime != row.get("runtime_environment"):
+    raise SystemExit("saved allocator runtime receipt disagrees across identity, manifest, and summary")
+receipt=artifact_runtime.get("cuda_allocator_policy")
+if expected_allocator_policy is not None:
+    expected_value=pytorch_cuda_alloc_conf_for_policy(expected_allocator_policy)
+    expected_receipt={
+        "intended_policy_id": expected_allocator_policy,
+        "observed_environment": {
+            "name": ALLOCATOR_ENVIRONMENT_VARIABLE,
+            "value": expected_value,
+            "is_set": expected_value is not None,
+        },
+        "observed_allocator_backend": "native",
+    }
+    if receipt != expected_receipt:
+        raise SystemExit("saved artifact lacks the exact requested allocator runtime receipt")' \
     "$SUMMARY_JSONL" "$ONLY_ARTIFACT_ID" "$EXPECTED_OUTPUT_DIR" \
-    "$EXPECTED_ATTENTION_BACKEND" "$EXPECTED_GPU_NAME"
+    "$EXPECTED_ATTENTION_BACKEND" "$EXPECTED_GPU_NAME" \
+    "$EXPECTED_CUDA_ALLOCATOR_POLICY"

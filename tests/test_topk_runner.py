@@ -113,6 +113,31 @@ def test_topk_runtime_identity_binds_explicit_instrumentation_policy() -> None:
     assert profiling_identity["instrumentation"] == {"cuda_memory_telemetry": True}
 
 
+def test_topk_runtime_identity_binds_explicit_cuda_allocator_policy() -> None:
+    manifest = _runner_manifest()
+    item = manifest["waves"][0]["items"][0]
+    config = _cpu_config()
+    config["cuda_allocator_policy"] = "expandable_segments_v1"
+    _, identity = topk_runtime_artifact_identity(
+        item,
+        config=config,
+        trace_family=manifest["trace_family"],
+        code_revision=_code_revision(),
+        runtime_environment={
+            **_runtime_environment(),
+            "cuda_allocator_policy": {"intended_policy_id": "expandable_segments_v1"},
+        },
+        source_manifest_sha256="d" * 64,
+        topk_manifest_sha256="e" * 64,
+        wave_id="parity-01",
+    )
+
+    assert identity["cuda_allocator_policy"] == "expandable_segments_v1"
+    assert identity["runtime_environment"]["cuda_allocator_policy"] == {
+        "intended_policy_id": "expandable_segments_v1"
+    }
+
+
 def test_topk_metrics_use_reset_safe_instrumentation_peaks(monkeypatch) -> None:
     monkeypatch.setattr(
         "torch.cuda.max_memory_allocated",

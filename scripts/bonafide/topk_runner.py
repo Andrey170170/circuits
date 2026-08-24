@@ -23,6 +23,11 @@ from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.trace import trace_teacher_forced_candidates
 
+from scripts.bonafide.cuda_allocator_policy import (
+    bind_cuda_allocator_runtime_receipt,
+    declared_cuda_allocator_policy,
+    validate_cuda_allocator_environment,
+)
 from scripts.bonafide.execution_plan import sha256_file
 from scripts.bonafide.runner import (
     _append_jsonl,
@@ -91,6 +96,9 @@ def topk_runtime_artifact_identity(
     }
     if "instrumentation" in config:
         identity["instrumentation"] = normalized_instrumentation(config)
+    allocator_policy = declared_cuda_allocator_policy(config)
+    if allocator_policy is not None:
+        identity["cuda_allocator_policy"] = allocator_policy
     if teacher_forced_serialization_mode is not None:
         identity["teacher_forced_serialization_mode"] = (
             teacher_forced_serialization_mode
@@ -351,7 +359,11 @@ def run_topk_wave(
         else manifest["source"]["width1_manifest_sha256"]
     )
     code_revision = dict(_code_revision or collect_code_revision(repo_root))
-    runtime_environment = dict(_runtime_environment or collect_runtime_environment())
+    validate_cuda_allocator_environment(config)
+    base_runtime_environment = _runtime_environment or collect_runtime_environment()
+    runtime_environment = bind_cuda_allocator_runtime_receipt(
+        config, base_runtime_environment
+    )
     trace_family = dict(manifest["trace_family"])
     instrumentation_policy = normalized_instrumentation(config)
     if manifest["source"]["model_id"] != config["model"]["model_id"]:

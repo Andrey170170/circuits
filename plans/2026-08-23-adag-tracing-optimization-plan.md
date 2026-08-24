@@ -1,7 +1,7 @@
 # ADAG exact-trace memory and runtime optimization plan
 
 Status: active optimization plan; source-leaf contribution execution is implemented, qualified,
-and accepted. Allocator-policy qualification is the next checkpoint.
+and accepted. Allocator-policy qualification is implemented and awaiting the sequential A100 A/B.
 
 ## Objective and claim boundary
 
@@ -85,6 +85,21 @@ same code, target, GPU model, and tracing config. Treat allocator settings as ru
 Accept a policy only if it reduces reserved-memory pressure or fragmentation without numerical or
 material runtime regressions. This does not reduce live tensor storage and is therefore secondary
 to P1.
+
+Implementation status: ready for qualification. The two immutable run configurations clone the
+accepted source-leaf profiling configuration and differ only in the scalar policy declaration:
+
+- `qwen3_4b_thinking_allocator_qualification_default_v1.json` explicitly unsets
+  `PYTORCH_CUDA_ALLOC_CONF`;
+- `qwen3_4b_thinking_allocator_qualification_expandable_segments_v1.json` sets it exactly to
+  `expandable_segments:True`.
+
+The launcher applies the policy before Python imports PyTorch and records both the intended policy
+and an observed runtime receipt. Preflight, runner binding, and postflight reject policy,
+environment, backend, or receipt disagreement. The dedicated `--cuda-allocator-ab` comparison
+profile requires a canonical default-to-expandable lane pair, the same code and A100 model, exact
+node and edge topology, and zero tolerance for target, node, edge, and candidate-profile values.
+Only the scalar policy and the exact receipt leaves that necessarily change are allow-listed.
 
 ### P3. Vectorized embedding-edge materialization
 

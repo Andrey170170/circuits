@@ -30,10 +30,20 @@ from circuits.tracing.artifact import (
 REPORT_SCHEMA = "bonafide-attention-backend-qualification/v1"
 EXECUTION_REPORT_SCHEMA = "bonafide-execution-qualification/v1"
 TOLERANCE_GROUPS = ("target", "node", "edge", "candidate_profile")
+CUDA_ALLOCATOR_AB_IDENTITY_PATHS = (
+    "artifact_identity.cuda_allocator_policy",
+    "artifact_identity.runtime_environment.cuda_allocator_policy.intended_policy_id",
+    "artifact_identity.runtime_environment.cuda_allocator_policy."
+    "observed_environment.value",
+    "artifact_identity.runtime_environment.cuda_allocator_policy."
+    "observed_environment.is_set",
+)
+CUDA_ALLOCATOR_AB_POLICIES = ("default_v1", "expandable_segments_v1")
 
 _ALLOWABLE_IDENTITY_RULES = (
     "artifact_identity.adag_config.stop_gradient_attention_backend",
     "artifact_identity.adag_config.stop_gradient_contribution_execution",
+    "artifact_identity.cuda_allocator_policy",
     "artifact_identity.code_revision.",
     "artifact_identity.runtime_environment.",
 )
@@ -166,22 +176,23 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
                 "allowed identity difference paths must be non-empty strings"
             )
         prefix = path[:-2] if path.endswith(".*") else path
-        if path.endswith(".*") and prefix in _ALLOWABLE_IDENTITY_RULES[:2]:
+        if path.endswith(".*") and prefix in _ALLOWABLE_IDENTITY_RULES[:3]:
             raise ValueError(
                 "scalar execution-strategy identity differences must be "
                 f"allow-listed by exact path: {path!r}"
             )
         if not (
-            prefix in _ALLOWABLE_IDENTITY_RULES[:2]
+            prefix in _ALLOWABLE_IDENTITY_RULES[:3]
             or any(
                 prefix == allowed_prefix.removesuffix(".")
                 or prefix.startswith(allowed_prefix)
-                for allowed_prefix in _ALLOWABLE_IDENTITY_RULES[2:]
+                for allowed_prefix in _ALLOWABLE_IDENTITY_RULES[3:]
             )
         ):
             raise ValueError(
                 "identity difference may only allow the stop-gradient attention "
-                "backend, stop-gradient contribution execution, or fields under "
+                "backend, stop-gradient contribution execution, CUDA allocator "
+                "policy, or fields under "
                 "code_revision/runtime_environment: "
                 f"{path!r}"
             )
@@ -662,6 +673,54 @@ def _group_within_tolerance(value: Any) -> bool:
     return True
 
 
+def _cuda_allocator_contract(
+    artifact: TopKCompactTraceArtifact,
+    *,
+    expected_policy: str,
+) -> dict[str, Any]:
+    expected_value = (
+        None if expected_policy == "default_v1" else "expandable_segments:True"
+    )
+    expected_receipt = {
+        "intended_policy_id": expected_policy,
+        "observed_environment": {
+            "name": "PYTORCH_CUDA_ALLOC_CONF",
+            "value": expected_value,
+            "is_set": expected_value is not None,
+        },
+        "observed_allocator_backend": "native",
+    }
+    identity = artifact.manifest.get("artifact_identity")
+    identity_policy = (
+        identity.get("cuda_allocator_policy") if isinstance(identity, Mapping) else None
+    )
+    identity_runtime = (
+        identity.get("runtime_environment") if isinstance(identity, Mapping) else None
+    )
+    identity_receipt = (
+        identity_runtime.get("cuda_allocator_policy")
+        if isinstance(identity_runtime, Mapping)
+        else None
+    )
+    manifest_runtime = artifact.manifest.get("runtime_environment")
+    manifest_receipt = (
+        manifest_runtime.get("cuda_allocator_policy")
+        if isinstance(manifest_runtime, Mapping)
+        else None
+    )
+    checks = {
+        "identity_policy": identity_policy == expected_policy,
+        "identity_runtime_receipt": identity_receipt == expected_receipt,
+        "manifest_runtime_receipt": manifest_receipt == expected_receipt,
+    }
+    return {
+        "expected_policy": expected_policy,
+        "expected_receipt": expected_receipt,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def compare_execution_artifacts(
     reference_path: str | Path,
     candidate_path: str | Path,
@@ -672,6 +731,7 @@ def compare_execution_artifacts(
     require_same_gpu_family: bool = False,
     require_exact_node_topology: bool = False,
     require_exact_edge_topology: bool = False,
+    require_canonical_cuda_allocator_ab: bool = False,
 ) -> dict[str, Any]:
     """Compare two saved execution traces under explicit qualification gates.
 
@@ -798,6 +858,29 @@ def compare_execution_artifacts(
             "passed": artifact_identity["passed"],
         },
     ]
+    allocator_contract = None
+    if require_canonical_cuda_allocator_ab:
+        reference_allocator_contract = _cuda_allocator_contract(
+            reference, expected_policy=CUDA_ALLOCATOR_AB_POLICIES[0]
+        )
+        candidate_allocator_contract = _cuda_allocator_contract(
+            candidate, expected_policy=CUDA_ALLOCATOR_AB_POLICIES[1]
+        )
+        allocator_contract = {
+            "reference": reference_allocator_contract,
+            "candidate": candidate_allocator_contract,
+            "passed": (
+                reference_allocator_contract["passed"]
+                and candidate_allocator_contract["passed"]
+            ),
+        }
+        gates.append(
+            {
+                "gate": "canonical_cuda_allocator_ab_pair",
+                "required": True,
+                "passed": allocator_contract["passed"],
+            }
+        )
     if require_same_gpu_family:
         gates.append(
             {
@@ -856,8 +939,11 @@ def compare_execution_artifacts(
 
     report_schema = (
         EXECUTION_REPORT_SCHEMA
-        if "artifact_identity.adag_config.stop_gradient_contribution_execution"
-        in allowed_paths
+        if {
+            "artifact_identity.adag_config.stop_gradient_contribution_execution",
+            "artifact_identity.cuda_allocator_policy",
+        }
+        & set(allowed_paths)
         else REPORT_SCHEMA
     )
 
@@ -900,6 +986,7 @@ def compare_execution_artifacts(
             "require_same_family": require_same_gpu_family,
             "require_same_model": require_same_gpu_model,
         },
+        "cuda_allocator_ab_contract": allocator_contract,
         "counts": {
             "reference": {
                 "nodes": len(reference_nodes),
