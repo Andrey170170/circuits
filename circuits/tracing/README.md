@@ -38,7 +38,18 @@ for each selected-neuron contribution VJP and is included in artifact identity:
 - `source_leaf_v1` computes the prefix without a graph, reinjects the selected
   MLP `down_proj` input as an equal-valued autograd leaf, and releases the
   downstream graph after its sole batched VJP.
+- `sparse_source_leaf_v1` is the bounded-memory Level 1a adapter. It computes
+  the same graph-free prefix but differentiates only the ordered selected
+  `(token, neuron)` coordinates through an equal-valued zero correction at
+  `down_proj`; it never materializes the dense source VJP result. Its current
+  scope is only the stop-gradient per-layer contribution loop. Ordinary
+  combined contribution and cross-layer Jacobian execution remain unchanged.
 
 Treat `source_leaf_v1` as unqualified until an exact same-target, same-GPU
 comparison confirms target values, topology, node values, edge values, and
 candidate profiles against a trusted `full_graph_v1` trace.
+
+Treat `sparse_source_leaf_v1` as unqualified until both focused CPU algebra and
+lifecycle tests and an accepted same-target, same-GPU comparison against
+`source_leaf_v1` pass the declared forward, Jacobian, topology, value, memory,
+and runtime gates. CPU tests alone do not qualify scientific use.

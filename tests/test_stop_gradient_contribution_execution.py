@@ -13,15 +13,18 @@ from circuits.tracing.contribution_execution import (
     StopGradientContributionExecution,
     resolve_stop_gradient_contribution_execution,
     run_stop_gradient_contribution_forward,
+    run_stop_gradient_contribution_vjp,
 )
+from circuits.tracing.instrumentation import TraceInstrumentation
+from circuits.tracing.sparse_source_injection import sparse_source_injection
 from torch import nn
 
 
 class _FakeMLP(nn.Module):
-    def __init__(self, hidden: int) -> None:
+    def __init__(self, hidden: int, *, down_bias: bool) -> None:
         super().__init__()
         self.up_proj = nn.Linear(hidden, hidden * 2, bias=False)
-        self.down_proj = nn.Linear(hidden * 2, hidden, bias=False)
+        self.down_proj = nn.Linear(hidden * 2, hidden, bias=down_bias)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.down_proj(torch.tanh(self.up_proj(inputs)))
@@ -40,9 +43,9 @@ class _NestedMLP(nn.Module):
 
 
 class _FakeLayer(nn.Module):
-    def __init__(self, hidden: int, *, nested: bool) -> None:
+    def __init__(self, hidden: int, *, nested: bool, down_bias: bool) -> None:
         super().__init__()
-        mlp = _FakeMLP(hidden)
+        mlp = _FakeMLP(hidden, down_bias=down_bias)
         self.mlp = _NestedMLP(mlp) if nested else mlp
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
@@ -50,18 +53,21 @@ class _FakeLayer(nn.Module):
 
 
 class _FakeBackbone(nn.Module):
-    def __init__(self, *, nested: bool) -> None:
+    def __init__(self, *, nested: bool, down_bias: bool) -> None:
         super().__init__()
         self.embed_tokens = nn.Embedding(13, 4)
         self.layers = nn.ModuleList(
-            [_FakeLayer(4, nested=nested), _FakeLayer(4, nested=nested)]
+            [
+                _FakeLayer(4, nested=nested, down_bias=down_bias),
+                _FakeLayer(4, nested=nested, down_bias=down_bias),
+            ]
         )
 
 
 class _FakeModel(nn.Module):
-    def __init__(self, *, nested: bool = False) -> None:
+    def __init__(self, *, nested: bool = False, down_bias: bool = True) -> None:
         super().__init__()
-        self.model = _FakeBackbone(nested=nested)
+        self.model = _FakeBackbone(nested=nested, down_bias=down_bias)
         self.lm_head = nn.Linear(4, 7, bias=False)
         self.fail_after_layers = False
 
@@ -135,7 +141,9 @@ def test_source_leaf_matches_full_graph_values_and_source_gradients(
     assert source_leaf.retain_graph_for_vjp is False
 
 
-@pytest.mark.parametrize("execution", ["full_graph_v1", "source_leaf_v1"])
+@pytest.mark.parametrize(
+    "execution", ["full_graph_v1", "source_leaf_v1", "sparse_source_leaf_v1"]
+)
 def test_execution_hook_is_removed_after_success(execution: str) -> None:
     model = _FakeModel(nested=True)
     down_projection = _down_projection(model)
@@ -150,6 +158,7 @@ def test_execution_hook_is_removed_after_success(execution: str) -> None:
         None,
         layer=0,
         execution=cast(StopGradientContributionExecution, execution),
+        selected_coordinates=[[0, 0]],
     )
 
     assert (
@@ -175,7 +184,9 @@ def test_source_leaf_restores_mixed_parameter_gradient_flags() -> None:
     assert [parameter.requires_grad for parameter in parameters] == flags_before
 
 
-@pytest.mark.parametrize("execution", ["full_graph_v1", "source_leaf_v1"])
+@pytest.mark.parametrize(
+    "execution", ["full_graph_v1", "source_leaf_v1", "sparse_source_leaf_v1"]
+)
 def test_execution_hook_is_removed_when_forward_fails(execution: str) -> None:
     model = _FakeModel(nested=True)
     model.fail_after_layers = True
@@ -192,6 +203,7 @@ def test_execution_hook_is_removed_when_forward_fails(execution: str) -> None:
             None,
             layer=0,
             execution=cast(StopGradientContributionExecution, execution),
+            selected_coordinates=[[0, 0]],
         )
 
     assert (
@@ -201,7 +213,9 @@ def test_execution_hook_is_removed_when_forward_fails(execution: str) -> None:
     assert all(parameter.requires_grad for parameter in model.parameters())
 
 
-@pytest.mark.parametrize("execution", ["full_graph_v1", "source_leaf_v1"])
+@pytest.mark.parametrize(
+    "execution", ["full_graph_v1", "source_leaf_v1", "sparse_source_leaf_v1"]
+)
 def test_execution_hook_is_removed_when_embedding_fails(execution: str) -> None:
     model = _FakeModel(nested=True)
     model.model.embed_tokens = _FailingEmbedding()
@@ -218,6 +232,7 @@ def test_execution_hook_is_removed_when_embedding_fails(execution: str) -> None:
             None,
             layer=0,
             execution=cast(StopGradientContributionExecution, execution),
+            selected_coordinates=[[0, 0]],
         )
 
     assert (
@@ -236,6 +251,14 @@ def test_execution_is_validated_and_restored_in_adag_config() -> None:
     assert (
         resolve_stop_gradient_contribution_execution("full_graph_v1") == "full_graph_v1"
     )
+    sparse_config = ADAGConfig(
+        device="cpu",
+        stop_gradient_contribution_execution="sparse_source_leaf_v1",
+    )
+    assert (
+        asdict(sparse_config)["stop_gradient_contribution_execution"]
+        == "sparse_source_leaf_v1"
+    )
 
     with pytest.raises(
         ValueError, match="invalid stop-gradient contribution execution"
@@ -253,3 +276,273 @@ def test_execution_is_validated_and_restored_in_adag_config() -> None:
     restored = ADAGConfig.__new__(ADAGConfig)
     restored.__setstate__({"device": "cpu"})
     assert restored.stop_gradient_contribution_execution == "full_graph_v1"
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("down_bias", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_sparse_source_leaf_matches_dense_selected_vjp_with_duplicates_and_batches(
+    nested: bool,
+    down_bias: bool,
+    dtype: torch.dtype,
+) -> None:
+    torch.manual_seed(41)
+    model = _FakeModel(nested=nested, down_bias=down_bias).to(dtype=dtype)
+    input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+    coordinates = [[0, 1], [2, 6], [0, 1], [1, 4]]
+
+    dense = run_stop_gradient_contribution_forward(
+        model,
+        input_ids,
+        None,
+        layer=0,
+        execution="source_leaf_v1",
+        selected_coordinates=coordinates,
+    )
+    dense_targets = torch.stack([dense.logits[:, -1, 2], dense.logits[:, -2, 5]])
+    dense_selected_vjp = run_stop_gradient_contribution_vjp(
+        dense, dense_targets, layer=0
+    )
+
+    sparse = run_stop_gradient_contribution_forward(
+        model,
+        input_ids,
+        None,
+        layer=0,
+        execution="sparse_source_leaf_v1",
+        selected_coordinates=coordinates,
+    )
+    sparse_targets = torch.stack([sparse.logits[:, -1, 2], sparse.logits[:, -2, 5]])
+    sparse_selected_vjp = run_stop_gradient_contribution_vjp(
+        sparse, sparse_targets, layer=0
+    )
+
+    absolute_tolerance = 2e-8 if dtype == torch.float32 else 2e-2
+    relative_tolerance = 1e-5 if dtype == torch.float32 else 2e-2
+    torch.testing.assert_close(sparse.logits, dense.logits, atol=0, rtol=0)
+    torch.testing.assert_close(
+        sparse_selected_vjp,
+        dense_selected_vjp,
+        atol=absolute_tolerance,
+        rtol=relative_tolerance,
+    )
+    positions = torch.tensor([position for position, _neuron in coordinates])
+    neurons = torch.tensor([neuron for _position, neuron in coordinates])
+    torch.testing.assert_close(
+        sparse.source_activation,
+        dense.source_activation[:, positions, neurons],
+        atol=0,
+        rtol=0,
+    )
+    assert sparse.source_activation.shape == (2, len(coordinates))
+    assert sparse.source_activation.is_leaf
+    assert sparse.source_activation.untyped_storage().nbytes() == (
+        sparse.source_activation.numel() * sparse.source_activation.element_size()
+    )
+    assert sparse_selected_vjp.shape == (len(coordinates), 2, 2)
+    assert sparse_selected_vjp.untyped_storage().nbytes() == (
+        sparse_selected_vjp.numel() * sparse_selected_vjp.element_size()
+    )
+    torch.testing.assert_close(
+        sparse_selected_vjp[0], sparse_selected_vjp[2], atol=0, rtol=0
+    )
+    assert sparse.selected_coordinates == tuple(map(tuple, coordinates))
+    assert all(parameter.requires_grad for parameter in model.parameters())
+
+
+def test_sparse_source_leaf_records_compact_vjp_evidence() -> None:
+    model = _FakeModel(nested=True)
+    instrumentation = TraceInstrumentation(device="cpu")
+    coordinates = [[0, 1], [2, 6], [0, 1]]
+    forward = run_stop_gradient_contribution_forward(
+        model,
+        torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        None,
+        layer=0,
+        execution="sparse_source_leaf_v1",
+        selected_coordinates=coordinates,
+        instrumentation=instrumentation,
+    )
+    targets = torch.stack([forward.logits[:, -1, 0], forward.logits[:, -2, 1]])
+    result = run_stop_gradient_contribution_vjp(
+        forward, targets, layer=0, instrumentation=instrumentation
+    )
+
+    snapshot = instrumentation.snapshot()
+    layer = snapshot["layers"][0]
+    counters = snapshot["counters"]
+    assert layer["stop_gradient_contribution_source_representation"] == (
+        "selected_coordinates"
+    )
+    assert layer["stop_gradient_contribution_dense_source_shape"] == [2, 3, 8]
+    assert layer["stop_gradient_contribution_differentiated_source_shape"] == [2, 3]
+    assert layer["stop_gradient_contribution_raw_vjp_shape"] == [4, 2, 3]
+    assert layer["stop_gradient_contribution_projected_vjp_shape"] == [3, 2, 2]
+    assert layer["stop_gradient_contribution_dense_vjp_result_materialized"] is False
+    assert counters["stop_gradient_sparse_source_coordinate_count"] == 3
+    assert counters["stop_gradient_sparse_vjp_result_numel"] == result.numel() * 2
+    assert counters["stop_gradient_sparse_dense_vjp_result_numel_avoided"] == (
+        (4 * 2 * 3 * 8) - (result.numel() * 2)
+    )
+
+
+def test_sparse_source_leaf_preserves_unrelated_hooks() -> None:
+    model = _FakeModel(nested=True)
+    projection = _down_projection(model)
+    calls: list[torch.Size] = []
+
+    def observe(_module, _inputs, output):
+        calls.append(output.shape)
+
+    unrelated = projection.register_forward_hook(observe)
+    hooks_before = tuple(projection._forward_hooks)
+    try:
+        run_stop_gradient_contribution_forward(
+            model,
+            torch.tensor([[1, 2]]),
+            None,
+            layer=0,
+            execution="sparse_source_leaf_v1",
+            selected_coordinates=[[0, 1]],
+        )
+        assert tuple(projection._forward_hooks) == hooks_before
+        assert calls == [torch.Size([1, 2, 4])]
+    finally:
+        unrelated.remove()
+
+
+def test_sparse_source_leaf_keeps_output_transforming_hook_downstream() -> None:
+    torch.manual_seed(73)
+    model = _FakeModel(nested=True)
+    projection = _down_projection(model)
+    calls = 0
+
+    def transform(_module, _inputs, output):
+        nonlocal calls
+        calls += 1
+        return output * 1.75 + 0.25
+
+    unrelated = projection.register_forward_hook(transform)
+    coordinates = [[0, 1], [2, 6], [0, 1]]
+    input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+    try:
+        dense = run_stop_gradient_contribution_forward(
+            model,
+            input_ids,
+            None,
+            layer=0,
+            execution="source_leaf_v1",
+            selected_coordinates=coordinates,
+        )
+        dense_targets = torch.stack([dense.logits[:, -1, 2]])
+        dense_vjp = run_stop_gradient_contribution_vjp(dense, dense_targets, layer=0)
+
+        sparse = run_stop_gradient_contribution_forward(
+            model,
+            input_ids,
+            None,
+            layer=0,
+            execution="sparse_source_leaf_v1",
+            selected_coordinates=coordinates,
+        )
+        sparse_targets = torch.stack([sparse.logits[:, -1, 2]])
+        sparse_vjp = run_stop_gradient_contribution_vjp(sparse, sparse_targets, layer=0)
+
+        torch.testing.assert_close(sparse.logits, dense.logits, atol=0, rtol=0)
+        torch.testing.assert_close(sparse_vjp, dense_vjp, atol=2e-8, rtol=1e-5)
+        assert calls == 2
+        assert unrelated.id in projection._forward_hooks
+    finally:
+        unrelated.remove()
+
+
+def test_sparse_source_leaf_restores_flags_and_hook_after_injection_failure() -> None:
+    model = _FakeModel(nested=True)
+    parameters = list(model.parameters())
+    parameters[0].requires_grad_(False)
+    flags_before = [parameter.requires_grad for parameter in parameters]
+    projection = _down_projection(model)
+    hooks_before = tuple(projection._forward_hooks)
+
+    with pytest.raises(IndexError, match="out of bounds"):
+        run_stop_gradient_contribution_forward(
+            model,
+            torch.tensor([[1, 2]]),
+            None,
+            layer=0,
+            execution="sparse_source_leaf_v1",
+            selected_coordinates=[[99, 1]],
+        )
+
+    assert tuple(projection._forward_hooks) == hooks_before
+    assert [parameter.requires_grad for parameter in parameters] == flags_before
+
+
+def test_sparse_source_leaf_rejects_empty_and_nonfinite_selected_algebra() -> None:
+    model = _FakeModel()
+    with pytest.raises(ValueError, match="requires selected coordinates"):
+        run_stop_gradient_contribution_forward(
+            model,
+            torch.tensor([[1, 2]]),
+            None,
+            layer=0,
+            execution="sparse_source_leaf_v1",
+        )
+
+    projection = _down_projection(model)
+    with torch.no_grad():
+        projection.weight[:, 1] = torch.inf
+    with pytest.raises(ValueError, match="selected weight columns"):
+        run_stop_gradient_contribution_forward(
+            model,
+            torch.tensor([[1, 2]]),
+            None,
+            layer=0,
+            execution="sparse_source_leaf_v1",
+            selected_coordinates=[[0, 1]],
+        )
+
+    finite_projection = nn.Linear(3, 2)
+    nonfinite_source = torch.ones(1, 2, 3)
+    nonfinite_source[:, 0, 1] = torch.nan
+    with (
+        pytest.raises(ValueError, match="selected values"),
+        sparse_source_injection(finite_projection, [[0, 1]]),
+    ):
+        finite_projection(nonfinite_source)
+
+
+def test_sparse_injection_rejects_a_second_projection_execution_and_cleans_up() -> None:
+    projection = nn.Linear(3, 2)
+    hooks_before = tuple(projection._forward_hooks)
+
+    def execute_twice() -> None:
+        with sparse_source_injection(projection, [[0, 1]]):
+            projection(torch.ones(1, 2, 3))
+            projection(torch.ones(1, 2, 3))
+
+    with pytest.raises(RuntimeError, match="more than once"):
+        execute_twice()
+    assert tuple(projection._forward_hooks) == hooks_before
+
+
+def test_sparse_vjp_failure_leaves_no_execution_hook_or_parameter_mutation() -> None:
+    model = _FakeModel(nested=True)
+    projection = _down_projection(model)
+    hooks_before = tuple(projection._forward_hooks)
+    flags_before = [parameter.requires_grad for parameter in model.parameters()]
+    forward = run_stop_gradient_contribution_forward(
+        model,
+        torch.tensor([[1, 2]]),
+        None,
+        layer=0,
+        execution="sparse_source_leaf_v1",
+        selected_coordinates=[[0, 1]],
+    )
+    unrelated_targets = torch.ones(1, 1, requires_grad=True)
+
+    with pytest.raises(RuntimeError, match="not have been used"):
+        run_stop_gradient_contribution_vjp(forward, unrelated_targets, layer=0)
+
+    assert tuple(projection._forward_hooks) == hooks_before
+    assert [parameter.requires_grad for parameter in model.parameters()] == flags_before

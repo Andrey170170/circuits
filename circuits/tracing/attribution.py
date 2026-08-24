@@ -13,6 +13,7 @@ from circuits.tracing.contribution_execution import (
     DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION,
     StopGradientContributionExecution,
     run_stop_gradient_contribution_forward,
+    run_stop_gradient_contribution_vjp,
 )
 from circuits.tracing.grad import (
     DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND,
@@ -786,6 +787,8 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             attention_masks,
             layer=lid,
             execution=contribution_execution,
+            selected_coordinates=pairs,
+            instrumentation=instrumentation,
         )
         logits = contribution_forward.logits
         if center_logits:
@@ -796,48 +799,14 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             tid = [focus_logit[id] for focus_logit in focus_logits]
             tgt_nodes.append(logits[torch.arange(logits.shape[0]), p, tid])
         tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
-        grad_outputs = torch.eye(t * batch, device=device)  # (t * batch, t * batch)
-
-        layer_acts = contribution_forward.source_activation  # (batch, seq, d)
-        layer_acts.grad = None
-        with cuda_memory_instrumentation_stage(
-            instrumentation,
-            "stop_grad_neuron_contribution_vjp",
-            metadata={
-                "operation_kind": "batched_vjp",
-                "layer": lid,
-                "selected_neuron_count": len(pairs),
-                "lane_count": t * batch,
-                "differentiated_output_shape": list(tgt_vec.shape),
-                "differentiated_input_shape": list(layer_acts.shape),
-                "grad_outputs_shape": list(grad_outputs.shape),
-            },
-        ) as vjp_measurement:
-            layer_grad_contrib = torch.autograd.grad(
-                tgt_vec.flatten(),
-                layer_acts,
-                grad_outputs=grad_outputs,
-                is_grads_batched=True,
-                retain_graph=contribution_forward.retain_graph_for_vjp,
-            )[0]
-            if vjp_measurement is not None:
-                vjp_measurement.metadata["vjp_result_shape"] = list(
-                    layer_grad_contrib.shape
-                )
-        # shape: (t * batch, batch, seq, d)
-        # convert back to (t, batch, batch, seq, d)
-        layer_grad_contrib = layer_grad_contrib.reshape(
-            t, batch, batch, layer_grad_contrib.shape[-2], layer_grad_contrib.shape[-1]
-        )
-        # get only identity along batch, batch
-        layer_grad_contrib = layer_grad_contrib.diagonal(dim1=1, dim2=2).permute(
-            0, 3, 1, 2
-        )
-        # Copy only the selected values so the dense VJP can be released now.
         grad_contrib.append(
-            _copy_selected_neuron_contributions(layer_grad_contrib, pairs)
+            run_stop_gradient_contribution_vjp(
+                contribution_forward,
+                tgt_vec,
+                layer=lid,
+                instrumentation=instrumentation,
+            )
         )
-        del layer_grad_contrib
 
         # revert stop grad for the next attribution
         model = layerwise_revert_stop_nonlinear_grad(
@@ -845,7 +814,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             lid,
             len(model.model.layers),
         )
-        del contribution_forward, layer_acts, tgt_vec, grad_outputs
+        del contribution_forward, tgt_vec
         torch.cuda.empty_cache()
 
     # multiple by acts to get contributions
