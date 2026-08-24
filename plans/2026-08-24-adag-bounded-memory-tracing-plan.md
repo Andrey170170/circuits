@@ -1,7 +1,8 @@
 # ADAG bounded-memory tracing execution plan
 
-Status: proposed and recorded; no implementation or experiment launch is authorized by this
-document.
+Status: active under explicit user authorization. The Level 1a stop-gradient contribution slice
+is implemented and measured; it does not complete Level 1 or authorize broader tracing runs by
+itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -145,6 +146,62 @@ sparse source injection is used.
   live after projection.
 - Accept the adapter only if the affected stage peak falls without an unexplained runtime or
   allocator regression. Record the new global owner rather than inferring it.
+
+### Level 1a measured checkpoint: stop-gradient contribution only
+
+Commit `9c696f161b037042a526d3103e9e79f0bf9bb5cb` contains the reviewed
+`sparse_source_leaf_v1` implementation and its fail-closed qualification harness. The immutable
+execution worktree is
+`/scratch/general/vast/u1653998/circuits/run-worktrees/sparse-source-qual-9c696f1`.
+The implementation is deliberately narrower than Level 1: it applies only to the per-layer
+stop-gradient selected-neuron contribution VJP. Ordinary combined attribution/contribution and
+cached-range cross-layer Jacobians still use their existing dense source representations.
+
+The CPU matrix covered FP32 and BF16, bias and no bias, nested and direct MLP layouts, duplicate
+and unsorted coordinates, multiple batch elements and target lanes, output-modifying hooks,
+compact storage, failure cleanup, configuration restoration, and telemetry. The bounded regression
+set passed 78 tests before the qualification harness was added and 79 after it was added. Forward
+logits and selected source values were exact; selected CPU VJPs were tolerance-bounded rather than
+bit-exact.
+
+Jobs `15065186` and `15065517` ran sequentially on the same A100 80GB node, pinned commit, target,
+driver, package environment, allocator, attention backend, embedding materialization, and
+cached-range replay adapter. They differed only in `source_leaf_v1` versus
+`sparse_source_leaf_v1`:
+
+| Measurement | Dense source leaf | Sparse source leaf | Difference |
+| --- | ---: | ---: | ---: |
+| Trace wall seconds | 137.662 | 137.456 | -0.206 (-0.15 percent) |
+| Global peak allocated bytes | 46,990,911,488 | 46,990,911,488 | 0 |
+| Global peak reserved bytes | 51,661,242,368 | 51,661,242,368 | 0 |
+| Contribution-VJP stage peak allocated bytes | 44,293,482,496 | 44,237,182,976 | -56,299,520 |
+| Contribution-VJP incremental allocated workspace | 13,451,132,416 | 13,451,132,416 | 0 |
+| Contribution-VJP wall seconds | 5.117 | 5.060 | -0.057 |
+
+Sparse telemetry records 139 differentiated coordinates across 20 forwards and VJPs, 695 raw
+VJP elements, 574,146,421 logical dense source elements avoided, and 2,870,732,105 logical dense
+raw-VJP result elements avoided. Each active layer records
+`source_representation=selected_coordinates` and
+`dense_vjp_result_materialized=false`. This proves that the dense endpoint was removed, but the
+unchanged 13.45 GB incremental workspace shows that downstream backward state owns the working
+set. The run-wide owner remains the enclosing stop-gradient attribution/contribution stage at
+46.99 GB; sparse endpoint projection alone is not a capacity optimization at 2,951 tokens.
+
+The zero-tolerance report at
+`/scratch/general/vast/u1653998/circuits/results/process_witness/sparse-source-qualification-v1/9c696f1/qualification-reports/source-leaf-vs-sparse-source-leaf-zero-v1.json`
+passed exact target values, node values and topology, edge topology, and candidate profiles, but
+failed edge-value equality. Only 10 of 2,366 edges changed, none changed sign, the maximum absolute
+weight and attribution differences were `4.9801e-4` and `6.6103e-5`, and the maximum symmetric
+relative difference was 0.7634 percent. Rounding the final edge metrics to BF16 produced at most a
+two-representable-value distance; this is a final-metric diagnostic, not a raw-Jacobian ULP receipt.
+
+A second report using exact gates everywhere except edge `rtol=0.008` passed:
+`/scratch/general/vast/u1653998/circuits/results/process_witness/sparse-source-qualification-v1/9c696f1/qualification-reports/source-leaf-vs-sparse-source-leaf-edge-rtol-008-v1.json`.
+Because that bound was calibrated after inspecting this target's zero-tolerance result, treat it as
+a bounded diagnostic and candidate policy, not a predeclared holdout qualification or scientific
+parity claim. `sparse_source_leaf_v1` remains opt-in and unpromoted. Before extending or promoting
+it, freeze the numerical policy and validate it on a separate target, then choose the next memory
+owner rather than assuming wider sparse-source integration will lower the global peak.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 
