@@ -1,8 +1,8 @@
 # ADAG exact-trace memory and runtime optimization plan
 
 Status: active optimization plan; source-leaf contribution execution, allocator-policy
-qualification, and vectorized embedding-edge materialization are complete. Source-to-target
-partial forwards are next.
+qualification, vectorized embedding-edge materialization, and pairwise source-to-target partial
+forwards are complete. A separately named source-group reuse strategy is the next runtime target.
 
 ## Objective and claim boundary
 
@@ -58,6 +58,8 @@ Fine telemetry identifies two independent resource problems:
    code revision, with exact topology and zero numerical error.
 6. Vectorized embedding-edge materialization, qualified on the same A100 target with exact
    topology and zero numerical error.
+7. Pairwise cached-range cross-layer execution, qualified on the same A100 target with exact
+   topology, zero numerical error, and exact internal receipts for all 190 layer pairs.
 
 ## Ordered optimization work
 
@@ -145,8 +147,8 @@ numerically valid, and stream projected results so pair-local graphs die promptl
 largest architectural optimization and requires separate parity gates for source activation,
 target activation, pair Jacobian, retained edges, and whole artifact.
 
-Implementation status: implemented and CPU-qualified; A100 qualification pending. The accepted P3
-artifact makes the performance loop explicit:
+Implementation status: accepted at commit `763982dcc4d6045ef08d8750556333b34e5ff660`.
+The accepted P3 artifact made the performance loop explicit:
 cross-layer expansion takes 103.95 seconds and fails the provisional under-50-second P4 target.
 Pair Jacobians account for 101.76 seconds across 190 pairs, while pair materialization takes only
 1.43 seconds. The legacy implementation executes all 36 decoder layers for every pair, retains a
@@ -319,3 +321,66 @@ Decision: use `vectorized_v1` in future optimized trace configurations, while re
 embedding Python/synchronization bottleneck without changing the global CUDA peak. Cross-layer
 graph expansion now takes 103.95 seconds, about 65 percent of vectorized trace time, confirming P4
 as the next runtime target.
+
+## P4 qualification decision
+
+P4's pairwise cached-range strategy is accepted as an exact execution-equivalent incremental
+runtime and stage-memory optimization. Both successful jobs used the same detached commit, default
+allocator, `flash_sdpa_causal_v1`, vectorized embedding-edge materialization, and NVIDIA A100 80 GB
+PCIe model:
+
+- lifted full-model control: Slurm job `14990763`, completed in 3:27;
+- cached-range candidate: Slurm job `14991104`, completed in 3:29.
+
+The scheduler elapsed times include unequal model-loading time and are not used as the performance
+comparison. The instrumented trace timings inside the artifacts are the qualification evidence.
+An earlier control attempt, job `14990224`, failed before producing a scientific artifact because
+the receipt serializer assumed a BF16 singleton target axis had unit stride. Commit
+`763982dcc4d6045ef08d8750556333b34e5ff660` fixed the serializer by flattening before byte view and
+added a focused regression test. The failed root and logs remain preserved as failure evidence.
+
+The full-model control artifact is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/cross-layer-jacobian-v1/a100/763982dcc4d6045ef08d8750556333b34e5ff660/full_model_v1/bonafide.t5-upstream-summed-top5.v1/context-2501-4000/topk-trace-342ad9256763bb93fb10e9f0`
+
+The cached-range candidate artifact is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/cross-layer-jacobian-v1/a100/763982dcc4d6045ef08d8750556333b34e5ff660/cached_range_v1/bonafide.t5-upstream-summed-top5.v1/context-2501-4000/topk-trace-47dd3e39db8fb8b74872bced`
+
+The lifted-control comparison against the trusted P3 artifact is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/cross-layer-jacobian-v1/a100/763982dcc4d6045ef08d8750556333b34e5ff660/parity-reports/p3-vs-full-model-2951-exact.json`
+
+Its SHA-256 is `dddff04631cc428308a470fb850633d1cf84fa905578f17bdb175c1209a8dafb`.
+All 12 gates passed. The strict full-to-cached report is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/cross-layer-jacobian-v1/a100/763982dcc4d6045ef08d8750556333b34e5ff660/parity-reports/full-vs-cached-range-2951-exact.json`
+
+Its SHA-256 is `2acd8150f6c0140a7a7cb38f3130277fd914106c537a40a547beab22ad950c18`.
+All 13 gates passed. Both artifacts contain exactly 3,094 nodes and 2,366 edges; target values,
+node values, edge values, and all candidate-profile values match at zero absolute and relative
+tolerance. All 190 canonical pairs also have exactly equal raw-dtype receipts for selected source
+activations, selected target activations, and selected raw Jacobians. This establishes equality
+before contribution multiplication, normalization, and graph pruning, rather than only equality of
+the saved retained graph.
+
+Resource result, cached range relative to full model:
+
+- cross-layer expansion: 104.09 seconds -> 81.58 seconds, down 22.52 seconds or 21.6 percent;
+- pair-Jacobian work: 101.98 seconds -> 79.09 seconds, down 22.89 seconds or 22.4 percent;
+- total trace time: 159.23 seconds -> 138.20 seconds, down 21.03 seconds or 13.2 percent;
+- decoder executions or layer entries: 6,840 -> 2,951, down 3,889 or 56.9 percent;
+- cross-layer peak allocated: 38.64 GB -> 26.90 GB, down 11.73 GB or 30.4 percent;
+- cross-layer peak reserved: 38.88 GB -> 31.08 GB, down 7.79 GB or 20.0 percent;
+- cached preparation state: one forward and 288,631,408 bytes;
+- global peak allocated: unchanged at 46.991 GB;
+- global peak reserved: unchanged at 51.661 GB;
+- physical CUDA headroom: unchanged at 33.433 GB;
+- allocator retries and OOMs: zero in both runs.
+
+Decision: use `cached_range_v1` in future optimized trace configurations while retaining
+`full_model_v1` as the library default and exact reference strategy. P4 reduces the intended
+cross-layer bottleneck and its local live allocation, but it does not move the run-wide memory peak
+and does not meet the provisional under-50-second cross-layer target. The next runtime experiment
+should be a separately named source-group strategy that reuses one source graph across multiple
+targets; it must preserve the same target-boundary and internal-receipt contract before acceptance.
