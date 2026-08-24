@@ -1,7 +1,7 @@
 # ADAG exact-trace memory and runtime optimization plan
 
-Status: active optimization plan; source-leaf contribution execution is implemented, qualified,
-and accepted. Allocator-policy qualification is implemented and awaiting the sequential A100 A/B.
+Status: active optimization plan; source-leaf contribution execution is accepted, and allocator
+policy qualification is complete. Vectorized embedding-edge materialization is next.
 
 ## Objective and claim boundary
 
@@ -53,6 +53,8 @@ Fine telemetry identifies two independent resource problems:
    immediately. The compact artifact has exact parity with its trusted reference.
 4. Source-leaf stop-gradient contribution execution, qualified on the 2,951-token A100 reference
    with exact topology and zero numerical error.
+5. Default-versus-expandable CUDA allocator qualification on the same 2,951-token A100 target and
+   code revision, with exact topology and zero numerical error.
 
 ## Ordered optimization work
 
@@ -86,8 +88,9 @@ Accept a policy only if it reduces reserved-memory pressure or fragmentation wit
 material runtime regressions. This does not reduce live tensor storage and is therefore secondary
 to P1.
 
-Implementation status: ready for qualification. The two immutable run configurations clone the
-accepted source-leaf profiling configuration and differ only in the scalar policy declaration:
+Qualification status: complete at commit `9350b738973f70b168b29c1c34706afe439cf79f`.
+The two immutable run configurations clone the accepted source-leaf profiling configuration and
+differ only in the scalar policy declaration:
 
 - `qwen3_4b_thinking_allocator_qualification_default_v1.json` explicitly unsets
   `PYTORCH_CUDA_ALLOC_CONF`;
@@ -100,6 +103,12 @@ environment, backend, or receipt disagreement. The dedicated `--cuda-allocator-a
 profile requires a canonical default-to-expandable lane pair, the same code and A100 model, exact
 node and edge topology, and zero tolerance for target, node, edge, and candidate-profile values.
 Only the scalar policy and the exact receipt leaves that necessarily change are allow-listed.
+
+Decision: keep `expandable_segments_v1` as an opt-in capacity policy, not the unconditional
+throughput default. It removes measured inactive-split fragmentation and gains 4.41 GB of physical
+headroom, while this single paired run was 6.2 percent slower overall. That trade is useful when a
+target is near the A100 memory boundary; ordinary targets should retain `default_v1` unless repeat
+timing or longer-context evidence changes the throughput decision.
 
 ### P3. Vectorized embedding-edge materialization
 
@@ -175,3 +184,43 @@ rose from 27.49 GB at layer 0 to 38.70 GB at layer 35, while the accepted run ra
 to 30.84 GB and ended at 28.18 GB. The remaining global 46.99 GB peak is therefore not the old
 deep differentiable-prefix failure mode. P2 should proceed as an allocator-pressure experiment,
 not as a substitute for missing live-tensor reduction.
+
+## P2 qualification decision
+
+P2 is qualified as an exact execution-equivalent capacity option. The sequential A100 jobs used
+the same detached commit and the same physical GPU model:
+
+- default allocator: Slurm job `14979993`, completed in 5:13;
+- expandable segments: Slurm job `14980626`, completed in 5:06.
+
+The default artifact is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/allocator-policy-ab-v1/a100/9350b738973f70b168b29c1c34706afe439cf79f/default_v1/bonafide.t5-upstream-summed-top5.v1/context-2501-4000/topk-trace-aa592a715c951c45230960bc`
+
+The expandable artifact is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/allocator-policy-ab-v1/a100/9350b738973f70b168b29c1c34706afe439cf79f/expandable_segments_v1/bonafide.t5-upstream-summed-top5.v1/context-2501-4000/topk-trace-7e273ecd101d3c359cd06dae`
+
+The strict comparison report is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/allocator-policy-ab-v1/a100/9350b738973f70b168b29c1c34706afe439cf79f/parity-reports/default-vs-expandable-2951-exact.json`
+
+Its SHA-256 is `089783db43953aa55b2e714a045b0dd48747d143f4ef5fbe352d6fd0e37d0834`.
+All identity and requested result gates passed. Both artifacts contain 3,094 nodes and 2,366 edges,
+and target values, node values, edge values, and all 15,470 candidate-profile values match at zero
+absolute and relative tolerance. Both runs reported zero allocator retries and zero OOMs.
+
+Resource result, expandable relative to default:
+
+- peak allocated: 46.991 GB -> 46.956 GB, down 0.035 GB or 0.07 percent;
+- peak reserved: 51.661 GB -> 47.249 GB, down 4.412 GB or 8.54 percent;
+- physical CUDA headroom: 33.433 GB -> 37.845 GB, up 4.412 GB;
+- peak inactive-split bytes: 18.968 GB -> 0 according to PyTorch allocator telemetry;
+- trace time: 252.95 seconds -> 268.73 seconds, up 15.78 seconds or 6.24 percent.
+
+The runtime increase is concentrated in allocation-heavy VJP stages rather than graph expansion:
+selected-neuron contribution VJPs increased by 6.41 seconds and stop-gradient neuron-contribution
+VJPs by 3.75 seconds, while total graph expansion changed by -0.04 seconds. This supports treating
+the slowdown as part of the allocator trade rather than a graph-construction fluctuation. P3 now
+targets the 95-second embedding-edge materialization path and does not depend on enabling the
+expandable allocator policy.
