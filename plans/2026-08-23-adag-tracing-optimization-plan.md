@@ -1,8 +1,8 @@
 # ADAG exact-trace memory and runtime optimization plan
 
-Status: active optimization plan; source-leaf contribution execution is accepted, allocator
-policy qualification is complete, and selectable vectorized embedding-edge materialization is
-implemented for A100 qualification.
+Status: active optimization plan; source-leaf contribution execution, allocator-policy
+qualification, and vectorized embedding-edge materialization are complete. Source-to-target
+partial forwards are next.
 
 ## Objective and claim boundary
 
@@ -56,6 +56,8 @@ Fine telemetry identifies two independent resource problems:
    with exact topology and zero numerical error.
 5. Default-versus-expandable CUDA allocator qualification on the same 2,951-token A100 target and
    code revision, with exact topology and zero numerical error.
+6. Vectorized embedding-edge materialization, qualified on the same A100 target with exact
+   topology and zero numerical error.
 
 ## Ordered optimization work
 
@@ -118,8 +120,9 @@ row construction while preserving edge ordering, thresholds, values, and provena
 target is the 94.90-second embedding materialization stage in the accepted P2 default-allocator
 control; CUDA peak reduction is not the primary claim.
 
-Implementation status: ready for pre-GPU review and qualification. `ADAGConfig` now exposes the
-named `scalar_v1` and `vectorized_v1` strategies, with `scalar_v1` retaining the historical default.
+Implementation status: accepted at commit `cd5e17b3e35d7470407e53ad159fd365694b0be5`.
+`ADAGConfig` exposes the named `scalar_v1` and `vectorized_v1` strategies, with `scalar_v1`
+retaining the historical default.
 The strategy seam receives ordered embedding sources and MLP targets after node creation. The
 vectorized adapter prepares each target once, evaluates every ordered source together, and buckets
 retained rows back into exact source-major and target-major graph order. Threshold comparisons stay
@@ -238,6 +241,51 @@ Resource result, expandable relative to default:
 The runtime increase is concentrated in allocation-heavy VJP stages rather than graph expansion:
 selected-neuron contribution VJPs increased by 6.41 seconds and stop-gradient neuron-contribution
 VJPs by 3.75 seconds, while total graph expansion changed by -0.04 seconds. This supports treating
-the slowdown as part of the allocator trade rather than a graph-construction fluctuation. P3 now
-targets the 95-second embedding-edge materialization path and does not depend on enabling the
-expandable allocator policy.
+the slowdown as part of the allocator trade rather than a graph-construction fluctuation. That
+result motivated P3's independent 95-second embedding-edge target; P3 did not depend on enabling
+the expandable allocator policy.
+
+## P3 qualification decision
+
+P3 is accepted as an exact execution-equivalent runtime optimization. The sequential A100 jobs
+used the same detached commit, default allocator, and physical GPU model:
+
+- scalar control: Slurm job `14984742`, completed in 4:50;
+- vectorized candidate: Slurm job `14985350`, completed in 3:17.
+
+The scalar artifact is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/embedding-edge-materialization-v1/a100/cd5e17b3e35d7470407e53ad159fd365694b0be5/scalar_v1/bonafide.t5-upstream-summed-top5.v1/context-2501-4000/topk-trace-b33ec3f7d99af60e7c7397cd`
+
+The vectorized artifact is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/embedding-edge-materialization-v1/a100/cd5e17b3e35d7470407e53ad159fd365694b0be5/vectorized_v1/bonafide.t5-upstream-summed-top5.v1/context-2501-4000/topk-trace-1bf345a2d2612b692a81e070`
+
+The strict scalar-versus-vectorized report is:
+
+`/scratch/general/vast/u1653998/circuits/results/process_witness/embedding-edge-materialization-v1/a100/cd5e17b3e35d7470407e53ad159fd365694b0be5/parity-reports/scalar-vs-vectorized-2951-exact.json`
+
+Its SHA-256 is `7ab68872bdbff2abf6d5120daff4ec62300ecf8182979ef0bdaf5ed2df035034`.
+The scalar refactor also passed an exact comparison against the trusted P2 default artifact; that
+report has SHA-256 `3a20cd571eef705b5fcb3d0fb05910ccd1f83a16f7cc4ecda8ae972f9328eeca`.
+Both reports passed every identity and requested result gate. Scalar and vectorized artifacts each
+contain 3,094 nodes and 2,366 edges, and target values, node values, edge values, and all 15,470
+candidate-profile values match at zero absolute and relative tolerance.
+
+Resource result, vectorized relative to scalar:
+
+- embedding-edge materialization: 88.10 seconds -> 1.38 seconds, down 86.72 seconds or 98.4
+  percent, a 64.0x stage speedup;
+- total graph expansion: 194.91 seconds -> 109.43 seconds, down 85.48 seconds or 43.9 percent;
+- trace time: 244.65 seconds -> 159.23 seconds, down 85.42 seconds or 34.9 percent;
+- peak allocated: unchanged at 46.991 GB;
+- peak reserved: unchanged at 51.661 GB;
+- physical CUDA headroom: unchanged at 33.433 GB;
+- candidate embedding edges: 410,050 in both runs, with 38 retained;
+- allocator retries and OOMs: zero in both runs.
+
+Decision: use `vectorized_v1` in future optimized trace configurations, while retaining
+`scalar_v1` as the library default and exact reference strategy. The optimization removes the
+embedding Python/synchronization bottleneck without changing the global CUDA peak. Cross-layer
+graph expansion now takes 103.95 seconds, about 65 percent of vectorized trace time, confirming P4
+as the next runtime target.
