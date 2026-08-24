@@ -124,6 +124,29 @@ def test_cached_range_matches_full_model_exactly_with_streamed_chunks(
     assert _mutable_state(model) == state_before
 
 
+def test_exact_receipts_support_bfloat16_singleton_target_axis() -> None:
+    model = _model(torch.bfloat16)
+    preparation = _preparation(model)
+    pair = replace(_pair(), tgt_neurons=((3, 4),), tgt_chunk_size=1)
+
+    reference = prepare_cross_layer_jacobian_execution(
+        preparation, execution="full_model_v1"
+    ).compute_pair(pair)
+    candidate = prepare_cross_layer_jacobian_execution(
+        preparation, execution="cached_range_v1"
+    ).compute_pair(pair)
+
+    assert isinstance(reference, CrossLayerJacobianPairResult)
+    assert isinstance(candidate, CrossLayerJacobianPairResult)
+    assert candidate.receipts.ordered() == reference.receipts.ordered()
+    torch.testing.assert_close(
+        candidate.relative_attribution,
+        reference.relative_attribution,
+        atol=0,
+        rtol=0,
+    )
+
+
 def test_preparation_uses_resolved_stop_gradient_backend_and_restores_ordinary_one() -> (
     None
 ):

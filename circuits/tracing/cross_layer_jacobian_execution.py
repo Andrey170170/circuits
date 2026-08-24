@@ -159,7 +159,10 @@ def _raw_tensor_sha256(tensor: torch.Tensor) -> str:
     digest = hashlib.sha256()
     digest.update(header)
     digest.update(b"\0")
-    digest.update(value.view(torch.uint8).cpu().numpy().tobytes())
+    # A size-one trailing dimension may remain "contiguous" with a non-unit
+    # stride. Flatten first so dtype reinterpretation always has byte-viewable
+    # storage without changing element order or values.
+    digest.update(value.reshape(-1).view(torch.uint8).cpu().numpy().tobytes())
     return digest.hexdigest()
 
 
