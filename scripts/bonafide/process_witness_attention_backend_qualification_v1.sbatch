@@ -14,9 +14,9 @@
 #SBATCH --signal=B:USR1@300
 #SBATCH --no-requeue
 
-# Execute exactly one existing qualification-v4 strict-T5 source item with one
-# explicit stop-gradient attention backend. Each backend/item attempt is a
-# fresh, provenance-bound artifact; this launcher never resumes or overwrites.
+# Execute exactly one existing qualification-v4 strict-T5 source item with
+# explicit tracing strategies. Each strategy/item attempt is a fresh,
+# provenance-bound artifact; this launcher never resumes or overwrites.
 
 set -euo pipefail
 
@@ -27,7 +27,7 @@ if [[ ! -f "${REPO_ROOT}/scripts/chpc_env.sh" ]]; then
 fi
 cd "$REPO_ROOT"
 
-: "${CONFIG:?Set CONFIG to an absolute backend qualification run config}"
+: "${CONFIG:?Set CONFIG to an absolute tracing qualification run config}"
 : "${CONFIG_FILE_SHA256:?Set CONFIG_FILE_SHA256 to the frozen config file SHA-256}"
 : "${MANIFEST:?Set MANIFEST to the absolute qualification-v4 trace manifest}"
 : "${MANIFEST_FILE_SHA256:?Set MANIFEST_FILE_SHA256 to its frozen file SHA-256}"
@@ -35,6 +35,7 @@ cd "$REPO_ROOT"
 : "${ARTIFACT_ROOT:?Set ARTIFACT_ROOT to an absolute fresh qualification output root}"
 : "${EXPECTED_GIT_COMMIT:?Set EXPECTED_GIT_COMMIT to the exact launch commit}"
 : "${EXPECTED_ATTENTION_BACKEND:?Set EXPECTED_ATTENTION_BACKEND to the explicit public backend name}"
+: "${EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION:?Set EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION to the explicit contribution strategy}"
 : "${WAVE:?Set WAVE to exactly one qualification-v4 wave ID}"
 : "${ONLY_ARTIFACT_ID:?Set ONLY_ARTIFACT_ID to exactly one item in WAVE}"
 : "${UV_PROJECT_ENVIRONMENT:?Set a lane-specific absolute uv environment}"
@@ -62,6 +63,13 @@ case "$EXPECTED_ATTENTION_BACKEND" in
     legacy_eager_unmasked_v1|eager_causal_v1|flash_sdpa_causal_v1) ;;
     *)
         echo "Unsupported EXPECTED_ATTENTION_BACKEND=${EXPECTED_ATTENTION_BACKEND}." >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION" in
+    full_graph_v1|source_leaf_v1|sparse_source_leaf_v1) ;;
+    *)
+        echo "Unsupported EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION=${EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION}." >&2
         exit 2
         ;;
 esac
@@ -113,7 +121,7 @@ verify_file_sha256 "$MANIFEST" "$MANIFEST_FILE_SHA256" "Trace manifest"
 if [[ ! "$EXPECTED_GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
    [[ "$(git rev-parse HEAD)" != "$EXPECTED_GIT_COMMIT" ]] ||
    [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
-    echo "Attention-backend qualification requires the exact clean Git commit." >&2
+    echo "Tracing qualification requires the exact clean Git commit." >&2
     exit 2
 fi
 
@@ -162,11 +170,12 @@ artifact_root=pathlib.Path(sys.argv[3])
 wave_id=sys.argv[4]
 source_id=sys.argv[5]
 expected_backend=sys.argv[6]
-expected_source_sha=sys.argv[7]
-repo_root=pathlib.Path(sys.argv[8])
-expected_allocator_policy=sys.argv[9] or None
-expected_embedding_edge_materialization=sys.argv[10] or None
-expected_cross_layer_jacobian_execution=sys.argv[11] or None
+expected_contribution_execution=sys.argv[7]
+expected_source_sha=sys.argv[8]
+repo_root=pathlib.Path(sys.argv[9])
+expected_allocator_policy=sys.argv[10] or None
+expected_embedding_edge_materialization=sys.argv[11] or None
+expected_cross_layer_jacobian_execution=sys.argv[12] or None
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -174,6 +183,8 @@ if not isinstance(adag, dict) or "stop_gradient_attention_backend" not in adag:
     raise SystemExit("run config must explicitly declare adag_config.stop_gradient_attention_backend")
 if adag["stop_gradient_attention_backend"] != expected_backend:
     raise SystemExit("run config backend disagrees with EXPECTED_ATTENTION_BACKEND")
+if adag.get("stop_gradient_contribution_execution") != expected_contribution_execution:
+    raise SystemExit("run config contribution execution disagrees with EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION")
 declared_embedding_edge_materialization=adag.get("embedding_edge_materialization")
 if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
@@ -186,10 +197,10 @@ declared_allocator_policy=declared_cuda_allocator_policy(config)
 if declared_allocator_policy != expected_allocator_policy:
     raise SystemExit("run config allocator policy disagrees with EXPECTED_CUDA_ALLOCATOR_POLICY")
 if config.get("trace_warmup", {}).get("enabled") is not False:
-    raise SystemExit("backend qualification requires trace_warmup.enabled=false")
+    raise SystemExit("tracing qualification requires trace_warmup.enabled=false")
 limits=config.get("wave_limits")
 if limits != {"max_trace_seconds": 1800, "min_cuda_headroom_bytes": 8589934592, "stop_on_oom": True}:
-    raise SystemExit("backend qualification resource gates drifted")
+    raise SystemExit("tracing qualification resource gates drifted")
 if manifest.get("phase") != "process_witness_resource_calibration_v1":
     raise SystemExit("launcher only accepts the qualification-v4 resource-calibration phase")
 waves=[wave for wave in manifest.get("waves", []) if wave.get("wave_id")==wave_id]
@@ -219,6 +230,7 @@ print(json.dumps({"qualification_runtime_environment": runtime}, sort_keys=True)
 print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact_id)' \
         "$CONFIG" "$MANIFEST" "$ARTIFACT_ROOT" "$WAVE" \
         "$ONLY_ARTIFACT_ID" "$EXPECTED_ATTENTION_BACKEND" \
+        "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION" \
         "$WIDTH1_SOURCE_MANIFEST_FILE_SHA256" "$REPO_ROOT" \
         "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
         "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
@@ -237,6 +249,7 @@ export TRANSFORMERS_OFFLINE=1
 
 echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} wave=${WAVE} source=${ONLY_ARTIFACT_ID}"
 echo "backend=${EXPECTED_ATTENTION_BACKEND} config=${CONFIG} manifest=${MANIFEST}"
+echo "stop_gradient_contribution_execution=${EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
 echo "cross_layer_jacobian_execution=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-legacy_unbound}"
@@ -292,10 +305,11 @@ summary=pathlib.Path(sys.argv[1])
 expected_source=sys.argv[2]
 expected_output=str(pathlib.Path(sys.argv[3]))
 expected_backend=sys.argv[4]
-expected_gpu=sys.argv[5]
-expected_allocator_policy=sys.argv[6] or None
-expected_embedding_edge_materialization=sys.argv[7] or None
-expected_cross_layer_jacobian_execution=sys.argv[8] or None
+expected_contribution_execution=sys.argv[5]
+expected_gpu=sys.argv[6]
+expected_allocator_policy=sys.argv[7] or None
+expected_embedding_edge_materialization=sys.argv[8] or None
+expected_cross_layer_jacobian_execution=sys.argv[9] or None
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -314,6 +328,9 @@ if backend != expected_backend:
     raise SystemExit("saved artifact backend identity disagrees with requested backend")
 identity=artifact_manifest.get("artifact_identity", {})
 artifact_adag=identity.get("adag_config", {})
+observed_contribution_execution=artifact_adag.get("stop_gradient_contribution_execution")
+if observed_contribution_execution != expected_contribution_execution:
+    raise SystemExit("saved artifact contribution execution identity disagrees with requested strategy")
 observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materialization")
 if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
@@ -343,7 +360,8 @@ if expected_allocator_policy is not None:
     if receipt != expected_receipt:
         raise SystemExit("saved artifact lacks the exact requested allocator runtime receipt")' \
     "$SUMMARY_JSONL" "$ONLY_ARTIFACT_ID" "$EXPECTED_OUTPUT_DIR" \
-    "$EXPECTED_ATTENTION_BACKEND" "$EXPECTED_GPU_NAME" \
+    "$EXPECTED_ATTENTION_BACKEND" \
+    "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION" "$EXPECTED_GPU_NAME" \
     "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
     "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
     "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION"

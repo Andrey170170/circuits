@@ -16,6 +16,11 @@ BACKENDS = (
 )
 EMBEDDING_EDGE_MATERIALIZATIONS = ("scalar_v1", "vectorized_v1")
 CROSS_LAYER_JACOBIAN_EXECUTIONS = ("full_model_v1", "cached_range_v1")
+CONTRIBUTION_EXECUTIONS = (
+    "full_graph_v1",
+    "source_leaf_v1",
+    "sparse_source_leaf_v1",
+)
 
 
 def _config(backend: str) -> dict:
@@ -54,13 +59,16 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "MANIFEST_FILE_SHA256",
         "WIDTH1_SOURCE_MANIFEST_FILE_SHA256",
         "EXPECTED_ATTENTION_BACKEND",
+        "EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
         "EXPECTED_EMBEDDING_EDGE_MATERIALIZATION",
         "EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION",
         "unset PYTORCH_CUDA_ALLOC_CONF",
         'export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
         "run config allocator policy disagrees",
+        "run config contribution execution disagrees",
         "saved artifact allocator identity disagrees",
+        "saved artifact contribution execution identity disagrees",
         "saved artifact lacks the exact requested allocator runtime receipt",
         "run config embedding-edge materialization disagrees",
         "saved artifact embedding-edge materialization identity disagrees",
@@ -81,6 +89,8 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
     ):
         assert required in launcher
     assert "skipped_complete" not in launcher
+    for execution in CONTRIBUTION_EXECUTIONS:
+        assert execution in launcher
 
 
 def test_embedding_edge_materialization_configs_clone_allocator_default() -> None:
@@ -150,6 +160,35 @@ def test_cross_layer_jacobian_configs_clone_accepted_vectorized_config() -> None
     del full_model["adag_config"]["cross_layer_jacobian_execution"]
     del cached_range["adag_config"]["cross_layer_jacobian_execution"]
     assert full_model == cached_range
+
+
+def test_sparse_contribution_config_clones_cached_range_control_exactly() -> None:
+    control = json.loads(
+        (
+            CONFIG_ROOT / "qwen3_4b_thinking_cross_layer_jacobian_qualification_"
+            "cached_range_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    candidate = json.loads(
+        (
+            CONFIG_ROOT / "qwen3_4b_thinking_stop_gradient_contribution_qualification_"
+            "sparse_source_leaf_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert (
+        control["adag_config"]["stop_gradient_contribution_execution"]
+        == "source_leaf_v1"
+    )
+    assert (
+        candidate["adag_config"]["stop_gradient_contribution_execution"]
+        == "sparse_source_leaf_v1"
+    )
+    normalized_control = json.loads(json.dumps(control))
+    normalized_candidate = json.loads(json.dumps(candidate))
+    del normalized_control["adag_config"]["stop_gradient_contribution_execution"]
+    del normalized_candidate["adag_config"]["stop_gradient_contribution_execution"]
+    assert normalized_candidate == normalized_control
 
 
 def test_backend_configs_clone_frozen_v4_except_for_explicit_backend() -> None:
