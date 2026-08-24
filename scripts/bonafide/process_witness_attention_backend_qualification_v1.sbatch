@@ -39,6 +39,7 @@ cd "$REPO_ROOT"
 : "${ONLY_ARTIFACT_ID:?Set ONLY_ARTIFACT_ID to exactly one item in WAVE}"
 : "${UV_PROJECT_ENVIRONMENT:?Set a lane-specific absolute uv environment}"
 EXPECTED_CUDA_ALLOCATOR_POLICY="${EXPECTED_CUDA_ALLOCATOR_POLICY:-}"
+EXPECTED_EMBEDDING_EDGE_MATERIALIZATION="${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-}"
 
 for path_name in CONFIG MANIFEST ARTIFACT_ROOT UV_PROJECT_ENVIRONMENT; do
     path_value="${!path_name}"
@@ -60,6 +61,13 @@ case "$EXPECTED_ATTENTION_BACKEND" in
     legacy_eager_unmasked_v1|eager_causal_v1|flash_sdpa_causal_v1) ;;
     *)
         echo "Unsupported EXPECTED_ATTENTION_BACKEND=${EXPECTED_ATTENTION_BACKEND}." >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" in
+    ""|scalar_v1|vectorized_v1) ;;
+    *)
+        echo "Unsupported EXPECTED_EMBEDDING_EDGE_MATERIALIZATION=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION}." >&2
         exit 2
         ;;
 esac
@@ -149,6 +157,7 @@ expected_backend=sys.argv[6]
 expected_source_sha=sys.argv[7]
 repo_root=pathlib.Path(sys.argv[8])
 expected_allocator_policy=sys.argv[9] or None
+expected_embedding_edge_materialization=sys.argv[10] or None
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -156,6 +165,10 @@ if not isinstance(adag, dict) or "stop_gradient_attention_backend" not in adag:
     raise SystemExit("run config must explicitly declare adag_config.stop_gradient_attention_backend")
 if adag["stop_gradient_attention_backend"] != expected_backend:
     raise SystemExit("run config backend disagrees with EXPECTED_ATTENTION_BACKEND")
+declared_embedding_edge_materialization=adag.get("embedding_edge_materialization")
+if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
+    if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
+        raise SystemExit("run config embedding-edge materialization disagrees with EXPECTED_EMBEDDING_EDGE_MATERIALIZATION")
 declared_allocator_policy=declared_cuda_allocator_policy(config)
 if declared_allocator_policy != expected_allocator_policy:
     raise SystemExit("run config allocator policy disagrees with EXPECTED_CUDA_ALLOCATOR_POLICY")
@@ -194,7 +207,8 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$CONFIG" "$MANIFEST" "$ARTIFACT_ROOT" "$WAVE" \
         "$ONLY_ARTIFACT_ID" "$EXPECTED_ATTENTION_BACKEND" \
         "$WIDTH1_SOURCE_MANIFEST_FILE_SHA256" "$REPO_ROOT" \
-        "$EXPECTED_CUDA_ALLOCATOR_POLICY"
+        "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
+        "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION"
 )"
 
 for target in "$EXPECTED_OUTPUT_DIR" "$SUMMARY_JSONL"; do
@@ -210,6 +224,7 @@ export TRANSFORMERS_OFFLINE=1
 echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} wave=${WAVE} source=${ONLY_ARTIFACT_ID}"
 echo "backend=${EXPECTED_ATTENTION_BACKEND} config=${CONFIG} manifest=${MANIFEST}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
+echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
 echo "artifact_root=${ARTIFACT_ROOT} expected_output=${EXPECTED_OUTPUT_DIR}"
 echo "summary_jsonl=${SUMMARY_JSONL} uv_environment=${UV_PROJECT_ENVIRONMENT}"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
@@ -264,6 +279,7 @@ expected_output=str(pathlib.Path(sys.argv[3]))
 expected_backend=sys.argv[4]
 expected_gpu=sys.argv[5]
 expected_allocator_policy=sys.argv[6] or None
+expected_embedding_edge_materialization=sys.argv[7] or None
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -281,6 +297,11 @@ backend=artifact_manifest.get("artifact_identity", {}).get("adag_config", {}).ge
 if backend != expected_backend:
     raise SystemExit("saved artifact backend identity disagrees with requested backend")
 identity=artifact_manifest.get("artifact_identity", {})
+artifact_adag=identity.get("adag_config", {})
+observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materialization")
+if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
+    if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
+        raise SystemExit("saved artifact embedding-edge materialization identity disagrees with requested strategy")
 if identity.get("cuda_allocator_policy") != expected_allocator_policy:
     if expected_allocator_policy is not None or "cuda_allocator_policy" in identity:
         raise SystemExit("saved artifact allocator identity disagrees with requested policy")
@@ -303,4 +324,5 @@ if expected_allocator_policy is not None:
         raise SystemExit("saved artifact lacks the exact requested allocator runtime receipt")' \
     "$SUMMARY_JSONL" "$ONLY_ARTIFACT_ID" "$EXPECTED_OUTPUT_DIR" \
     "$EXPECTED_ATTENTION_BACKEND" "$EXPECTED_GPU_NAME" \
-    "$EXPECTED_CUDA_ALLOCATOR_POLICY"
+    "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
+    "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION"

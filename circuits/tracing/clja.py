@@ -29,6 +29,15 @@ from circuits.tracing.contribution_execution import (
     StopGradientContributionExecution,
     resolve_stop_gradient_contribution_execution,
 )
+from circuits.tracing.embedding_edge_materialization import (
+    DEFAULT_EMBEDDING_EDGE_MATERIALIZATION,
+    EmbeddingEdgeMaterialization,
+    EmbeddingEdgeMaterializationRequest,
+    EmbeddingSource,
+    EmbeddingTarget,
+    materialize_embedding_edges,
+    resolve_embedding_edge_materialization,
+)
 from circuits.tracing.grad import (
     DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND,
     StopGradientAttentionBackend,
@@ -118,12 +127,16 @@ class ADAGConfig:
     stop_gradient_contribution_execution: StopGradientContributionExecution = (
         DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION
     )
+    embedding_edge_materialization: EmbeddingEdgeMaterialization = (
+        DEFAULT_EMBEDDING_EDGE_MATERIALIZATION
+    )
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
         )
+        resolve_embedding_edge_materialization(self.embedding_edge_materialization)
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Load artifacts pickled before stop-gradient strategies were explicit."""
@@ -137,10 +150,13 @@ class ADAGConfig:
             self.stop_gradient_contribution_execution = (
                 DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION
             )
+        if "embedding_edge_materialization" not in state:
+            self.embedding_edge_materialization = DEFAULT_EMBEDDING_EDGE_MATERIALIZATION
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
         )
+        resolve_embedding_edge_materialization(self.embedding_edge_materialization)
 
 
 @dataclass(frozen=True)
@@ -261,6 +277,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     use_stop_grad_on_mlps = config.use_stop_grad_on_mlps
     stop_gradient_attention_backend = config.stop_gradient_attention_backend
     stop_gradient_contribution_execution = config.stop_gradient_contribution_execution
+    embedding_edge_materialization = config.embedding_edge_materialization
     if instrumentation is not None:
         instrumentation.set_counter(
             "stop_gradient_attention_backend",
@@ -269,6 +286,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "stop_gradient_contribution_execution",
             stop_gradient_contribution_execution,
+        )
+        instrumentation.set_counter(
+            "embedding_edge_materialization",
+            embedding_edge_materialization,
         )
     ablation_mode = config.ablation_mode
     center_logits = config.center_logits
@@ -704,6 +725,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             frozen_edges=(
                 frozen_topology.edges if frozen_topology is not None else None
             ),
+            embedding_edge_materialization=embedding_edge_materialization,
             instrumentation=instrumentation,
         )
 
@@ -819,6 +841,9 @@ def _get_cl_ja_based_edges(
     neuron_contrib_map_with_stop_grad_on_mlps=None,
     candidate_objective_weights: tuple[float, ...] | None = None,
     frozen_edges: frozenset[tuple[NeuronIdx, NeuronIdx]] | None = None,
+    embedding_edge_materialization: EmbeddingEdgeMaterialization = (
+        DEFAULT_EMBEDDING_EDGE_MATERIALIZATION
+    ),
     # IG params
     ig_steps: int | None = None,
     ig_mode: Literal["ig-inputs", "conductance"] = "ig-inputs",
@@ -1070,7 +1095,7 @@ def _get_cl_ja_based_edges(
     del mlp_final_attributions
     torch.cuda.empty_cache()
 
-    # creating embedding nodes
+    # creating embedding nodes and ordered edge sources
     embedding_nodes_before = len(nodes)
     embedding_edges_before = len(edges)
     embedding_graph_measurement = (
@@ -1080,6 +1105,7 @@ def _get_cl_ja_based_edges(
     )
     if verbose:
         print("Creating embedding nodes and all outgoing edges...")
+    embedding_sources: list[EmbeddingSource] = []
     for src_token in src_tokens:
         final_attributions = embed_final_attributions[
             :, src_token, :
@@ -1120,66 +1146,41 @@ def _get_cl_ja_based_edges(
                     contrib_map=contrib_map_final,
                 )
             )
-
-            if return_nodes_only:
-                continue
-            # creating edges pointing from the embedding node to the neurons
-            for (
-                target_key,
-                target_attr,
-            ) in neuron_attr_map_with_stop_grad_on_mlps.items():
-                if return_nodes_only or target_key[0] == -1 or target_key[0] == L:
-                    continue
-                source_key = NeuronIdx(layer=-1, token=src_token, neuron=token_type)
-
-                target_key = NeuronIdx(
-                    layer=target_key[0], token=target_key[1], neuron=target_key[2]
+            embedding_sources.append(
+                EmbeddingSource(
+                    key=NeuronIdx(layer=-1, token=src_token, neuron=token_type),
+                    batch_mask=mask,
                 )
-                target_activation = neurons_LBTI[target_key.layer][
-                    :, target_key.token, target_key.neuron
-                ]  # shape: (B, )
-                target_attribution = neuron_contrib_map.get(target_key, None)
+            )
 
-                # Move target_attr to device for computation
-                target_attr_device = (
-                    target_attr.to(device)
-                    if target_attr.device.type == "cpu"
-                    else target_attr
-                )
-
-                # Move target_attribution to device if needed
-                if (
-                    target_attribution is not None
-                    and target_attribution.device.type == "cpu"
-                ):
-                    target_attribution = target_attribution.to(device)
-                if target_attribution is not None:
-                    target_attribution = joint_target_attribution(target_attribution)
-
-                # Use adaptive epsilon for numerical stability (matching CLSO approach)
-                eps = target_activation.abs().mean() * 1e-6
-                edge_weight = target_attr_device[:, src_token] / (
-                    target_activation + eps
-                )
-                edge_weight = torch.where(mask, edge_weight, 0)
-                if not retain_edge(source_key, target_key, edge_weight):
-                    continue
-
-                edges.append(
-                    Edge(
-                        src=source_key,
-                        tgt=target_key,
-                        weight=edge_weight.detach().float().cpu(),
-                        final_attribution=(
-                            (edge_weight[:, None] * target_attribution)
-                            .detach()
-                            .float()
-                            .cpu()
-                            if target_attribution is not None
-                            else None
-                        ),
-                    )
-                )
+    embedding_targets = (
+        []
+        if return_nodes_only
+        else [
+            EmbeddingTarget(
+                key=NeuronIdx(layer=key[0], token=key[1], neuron=key[2]),
+                attribution_by_source=target_attr,
+                activation=neurons_LBTI[key[0]][:, key[1], key[2]],
+                final_attribution=neuron_contrib_map.get(key, None),
+            )
+            for key, target_attr in neuron_attr_map_with_stop_grad_on_mlps.items()
+            if key[0] != -1 and key[0] != L
+        ]
+    )
+    embedding_edges = materialize_embedding_edges(
+        embedding_edge_materialization,
+        EmbeddingEdgeMaterializationRequest(
+            sources=embedding_sources,
+            targets=embedding_targets,
+            device=device,
+            edge_threshold=edge_threshold,
+            parent_threshold=parent_threshold,
+            objective_weights=objective_weight_tensor,
+            frozen_edges=frozen_edges,
+            return_nodes_only=return_nodes_only,
+        ),
+    )
+    edges.extend(embedding_edges)
 
     if instrumentation is not None and embedding_graph_measurement is not None:
         instrumentation.measurement_finish(embedding_graph_measurement)
@@ -1188,6 +1189,13 @@ def _get_cl_ja_based_edges(
         )
         instrumentation.set_counter(
             "embedding_edge_delta", len(edges) - embedding_edges_before
+        )
+        instrumentation.set_counter(
+            "embedding_candidate_edge_count",
+            len(embedding_sources) * len(embedding_targets),
+        )
+        instrumentation.set_counter(
+            "embedding_retained_edge_count", len(embedding_edges)
         )
 
     # Clean up activation tensors after creating all embedding edges

@@ -1,7 +1,8 @@
 # ADAG exact-trace memory and runtime optimization plan
 
-Status: active optimization plan; source-leaf contribution execution is accepted, and allocator
-policy qualification is complete. Vectorized embedding-edge materialization is next.
+Status: active optimization plan; source-leaf contribution execution is accepted, allocator
+policy qualification is complete, and selectable vectorized embedding-edge materialization is
+implemented for A100 qualification.
 
 ## Objective and claim boundary
 
@@ -114,8 +115,24 @@ timing or longer-context evidence changes the throughput decision.
 
 Replace the scalar Python/token-neuron materialization path with tensorized filtering and batched
 row construction while preserving edge ordering, thresholds, values, and provenance. The measured
-target is the 100.49-second embedding materialization stage; CUDA peak reduction is not the primary
-claim.
+target is the 94.90-second embedding materialization stage in the accepted P2 default-allocator
+control; CUDA peak reduction is not the primary claim.
+
+Implementation status: ready for pre-GPU review and qualification. `ADAGConfig` now exposes the
+named `scalar_v1` and `vectorized_v1` strategies, with `scalar_v1` retaining the historical default.
+The strategy seam receives ordered embedding sources and MLP targets after node creation. The
+vectorized adapter prepares each target once, evaluates every ordered source together, and buckets
+retained rows back into exact source-major and target-major graph order. Threshold comparisons stay
+in the original tensor dtype, frozen topology overrides thresholds, duplicate sources remain
+distinct, and objective reduction and missing final attributions retain the scalar contract.
+
+The paired immutable qualification configs use the accepted source-leaf contribution path,
+`flash_sdpa_causal_v1`, and `default_v1`; they differ only in
+`adag_config.embedding_edge_materialization`. The strict `--embedding-edge-ab` comparator requires
+the canonical scalar-to-vectorized pair, identical code and GPU model, exact node and edge topology,
+and zero tolerance for target, node, edge, and candidate-profile values. The scalar artifact must
+also match the trusted P2 default-allocator artifact exactly before the vectorized result is
+accepted.
 
 ### P4. Source-to-target partial forwards for cross-layer tracing
 

@@ -39,11 +39,16 @@ CUDA_ALLOCATOR_AB_IDENTITY_PATHS = (
     "observed_environment.is_set",
 )
 CUDA_ALLOCATOR_AB_POLICIES = ("default_v1", "expandable_segments_v1")
+EMBEDDING_EDGE_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.embedding_edge_materialization",
+)
+EMBEDDING_EDGE_AB_STRATEGIES = ("scalar_v1", "vectorized_v1")
 
 _ALLOWABLE_IDENTITY_RULES = (
     "artifact_identity.adag_config.stop_gradient_attention_backend",
     "artifact_identity.adag_config.stop_gradient_contribution_execution",
     "artifact_identity.cuda_allocator_policy",
+    "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.code_revision.",
     "artifact_identity.runtime_environment.",
 )
@@ -176,17 +181,17 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
                 "allowed identity difference paths must be non-empty strings"
             )
         prefix = path[:-2] if path.endswith(".*") else path
-        if path.endswith(".*") and prefix in _ALLOWABLE_IDENTITY_RULES[:3]:
+        if path.endswith(".*") and prefix in _ALLOWABLE_IDENTITY_RULES[:4]:
             raise ValueError(
                 "scalar execution-strategy identity differences must be "
                 f"allow-listed by exact path: {path!r}"
             )
         if not (
-            prefix in _ALLOWABLE_IDENTITY_RULES[:3]
+            prefix in _ALLOWABLE_IDENTITY_RULES[:4]
             or any(
                 prefix == allowed_prefix.removesuffix(".")
                 or prefix.startswith(allowed_prefix)
-                for allowed_prefix in _ALLOWABLE_IDENTITY_RULES[3:]
+                for allowed_prefix in _ALLOWABLE_IDENTITY_RULES[4:]
             )
         ):
             raise ValueError(
@@ -721,6 +726,25 @@ def _cuda_allocator_contract(
     }
 
 
+def _embedding_edge_materialization_contract(
+    artifact: TopKCompactTraceArtifact,
+    *,
+    expected_strategy: str,
+) -> dict[str, Any]:
+    identity = artifact.manifest.get("artifact_identity")
+    adag_config = identity.get("adag_config") if isinstance(identity, Mapping) else None
+    observed_strategy = (
+        adag_config.get("embedding_edge_materialization")
+        if isinstance(adag_config, Mapping)
+        else None
+    )
+    return {
+        "expected_strategy": expected_strategy,
+        "observed_strategy": observed_strategy,
+        "passed": observed_strategy == expected_strategy,
+    }
+
+
 def compare_execution_artifacts(
     reference_path: str | Path,
     candidate_path: str | Path,
@@ -732,12 +756,14 @@ def compare_execution_artifacts(
     require_exact_node_topology: bool = False,
     require_exact_edge_topology: bool = False,
     require_canonical_cuda_allocator_ab: bool = False,
+    require_canonical_embedding_edge_ab: bool = False,
 ) -> dict[str, Any]:
     """Compare two saved execution traces under explicit qualification gates.
 
     The historical public name is retained for compatibility. Callers may
-    explicitly qualify either the attention backend or contribution-execution
-    strategy, but no other scientific configuration field.
+    explicitly qualify a named attention, contribution, allocator, or
+    embedding-edge execution strategy, but no other scientific configuration
+    field.
     """
 
     allowed_paths = _validate_allowed_identity_paths(allowed_identity_difference_paths)
@@ -881,6 +907,29 @@ def compare_execution_artifacts(
                 "passed": allocator_contract["passed"],
             }
         )
+    embedding_edge_contract = None
+    if require_canonical_embedding_edge_ab:
+        reference_embedding_edge_contract = _embedding_edge_materialization_contract(
+            reference, expected_strategy=EMBEDDING_EDGE_AB_STRATEGIES[0]
+        )
+        candidate_embedding_edge_contract = _embedding_edge_materialization_contract(
+            candidate, expected_strategy=EMBEDDING_EDGE_AB_STRATEGIES[1]
+        )
+        embedding_edge_contract = {
+            "reference": reference_embedding_edge_contract,
+            "candidate": candidate_embedding_edge_contract,
+            "passed": (
+                reference_embedding_edge_contract["passed"]
+                and candidate_embedding_edge_contract["passed"]
+            ),
+        }
+        gates.append(
+            {
+                "gate": "canonical_embedding_edge_ab_pair",
+                "required": True,
+                "passed": embedding_edge_contract["passed"],
+            }
+        )
     if require_same_gpu_family:
         gates.append(
             {
@@ -942,6 +991,7 @@ def compare_execution_artifacts(
         if {
             "artifact_identity.adag_config.stop_gradient_contribution_execution",
             "artifact_identity.cuda_allocator_policy",
+            "artifact_identity.adag_config.embedding_edge_materialization",
         }
         & set(allowed_paths)
         else REPORT_SCHEMA
@@ -987,6 +1037,7 @@ def compare_execution_artifacts(
             "require_same_model": require_same_gpu_model,
         },
         "cuda_allocator_ab_contract": allocator_contract,
+        "embedding_edge_ab_contract": embedding_edge_contract,
         "counts": {
             "reference": {
                 "nodes": len(reference_nodes),

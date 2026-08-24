@@ -8,6 +8,7 @@ import pytest
 from circuits.tracing.artifact import save_topk_compact_trace
 from circuits.tracing.backend_qualification import (
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
+    EMBEDDING_EDGE_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_attention_backend_artifacts,
@@ -27,6 +28,7 @@ def _manifest(
     source_id: str = "source-width1",
     contribution_execution: str | None = "full_graph_v1",
     allocator_policy: str | None = None,
+    embedding_edge_materialization: str | None = None,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -81,6 +83,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "stop_gradient_contribution_execution"
         ] = contribution_execution
+    if embedding_edge_materialization is not None:
+        manifest["artifact_identity"]["adag_config"][
+            "embedding_edge_materialization"
+        ] = embedding_edge_materialization
     if allocator_policy is not None:
         allocator_value = (
             None if allocator_policy == "default_v1" else "expandable_segments:True"
@@ -482,6 +488,195 @@ def test_cuda_allocator_ab_rejects_equally_malformed_receipts(tmp_path) -> None:
     assert report["validation_passed"] is False
     assert report["identity"]["artifact_identity"]["passed"] is True
     assert report["cuda_allocator_ab_contract"]["passed"] is False
+
+
+def _save_embedding_edge_pair(
+    tmp_path,
+    *,
+    reference_strategy: str = "scalar_v1",
+    candidate_strategy: str = "vectorized_v1",
+    candidate_code_revision: str = "same-commit",
+):
+    reference_trace = _topk_trace()
+    candidate_trace = deepcopy(reference_trace)
+    _complete_trace_metadata(reference_trace)
+    _complete_trace_metadata(candidate_trace)
+    reference_path = tmp_path / "embedding-edge-scalar"
+    candidate_path = tmp_path / "embedding-edge-vectorized"
+    save_topk_compact_trace(
+        reference_path,
+        reference_trace,
+        manifest=_manifest(
+            "eager",
+            embedding_edge_materialization=reference_strategy,
+            code_revision="same-commit",
+        ),
+    )
+    save_topk_compact_trace(
+        candidate_path,
+        candidate_trace,
+        manifest=_manifest(
+            "eager",
+            embedding_edge_materialization=candidate_strategy,
+            code_revision=candidate_code_revision,
+        ),
+    )
+    return reference_path, candidate_path
+
+
+def test_embedding_edge_ab_passes_strict_canonical_profile(tmp_path) -> None:
+    reference, candidate = _save_embedding_edge_pair(tmp_path)
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        **comparison_options(
+            build_parser().parse_args(
+                [
+                    "--reference",
+                    str(reference),
+                    "--candidate",
+                    str(candidate),
+                    "--output",
+                    str(tmp_path / "unused.json"),
+                    "--embedding-edge-ab",
+                ]
+            )
+        ),
+    )
+
+    assert report["validation_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    assert report["embedding_edge_ab_contract"]["passed"] is True
+    assert {gate["gate"] for gate in report["gates"]} >= {
+        "same_gpu_family",
+        "same_gpu_model",
+        "canonical_embedding_edge_ab_pair",
+        "exact_node_topology",
+        "exact_edge_topology",
+        *(f"{group}_numeric_tolerance" for group in TOLERANCE_GROUPS),
+    }
+    allowed = report["identity"]["artifact_identity"]["allowed_differences"]
+    assert {difference["path"] for difference in allowed} == set(
+        EMBEDDING_EDGE_AB_IDENTITY_PATHS
+    )
+
+
+def test_embedding_edge_ab_cli_resolves_strict_non_overridable_profile() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--reference",
+            "reference",
+            "--candidate",
+            "candidate",
+            "--output",
+            "report.json",
+            "--embedding-edge-ab",
+        ]
+    )
+
+    options = comparison_options(args)
+
+    assert options["allowed_identity_difference_paths"] == (
+        EMBEDDING_EDGE_AB_IDENTITY_PATHS
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_same_gpu_family"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+    assert options["require_canonical_cuda_allocator_ab"] is False
+    assert options["require_canonical_embedding_edge_ab"] is True
+    assert options["tolerances"] == {
+        group: NumericTolerance(absolute=0.0, relative=0.0)
+        for group in TOLERANCE_GROUPS
+    }
+
+    args.allow_identity_difference = ["artifact_identity.code_revision.*"]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        comparison_options(args)
+
+    args.allow_identity_difference = []
+    args.target_atol = 1e-6
+    with pytest.raises(ValueError, match="fixes every numerical tolerance at zero"):
+        comparison_options(args)
+
+    args.target_atol = None
+    args.cuda_allocator_ab = True
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        comparison_options(args)
+
+
+def test_embedding_edge_ab_rejects_code_revision_drift(tmp_path) -> None:
+    reference, candidate = _save_embedding_edge_pair(
+        tmp_path, candidate_code_revision="different-commit"
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        **comparison_options(
+            build_parser().parse_args(
+                [
+                    "--reference",
+                    str(reference),
+                    "--candidate",
+                    str(candidate),
+                    "--output",
+                    str(tmp_path / "unused.json"),
+                    "--embedding-edge-ab",
+                ]
+            )
+        ),
+    )
+
+    assert report["validation_passed"] is False
+    disallowed = report["identity"]["artifact_identity"]["unallowed_differences"]
+    assert {difference["path"] for difference in disallowed} == {
+        "artifact_identity.code_revision.git_commit"
+    }
+
+
+@pytest.mark.parametrize(
+    ("reference_strategy", "candidate_strategy"),
+    [
+        ("scalar_v1", "scalar_v1"),
+        ("vectorized_v1", "scalar_v1"),
+    ],
+)
+def test_embedding_edge_ab_rejects_equal_or_reversed_lanes(
+    tmp_path, reference_strategy, candidate_strategy
+) -> None:
+    reference, candidate = _save_embedding_edge_pair(
+        tmp_path,
+        reference_strategy=reference_strategy,
+        candidate_strategy=candidate_strategy,
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+        require_canonical_embedding_edge_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    assert report["embedding_edge_ab_contract"]["passed"] is False
+
+
+def test_embedding_edge_materialization_requires_exact_allowlist_path(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_embedding_edge_pair(tmp_path)
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config.embedding_edge_materialization.*"
+            ],
+        )
 
 
 def test_backend_qualification_fails_hard_source_identity_mismatch(tmp_path) -> None:

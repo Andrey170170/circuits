@@ -12,6 +12,7 @@ from typing import Any
 
 from circuits.tracing.backend_qualification import (
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
+    EMBEDDING_EDGE_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_execution_artifacts,
@@ -73,6 +74,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--embedding-edge-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed embedding-edge materialization A/B profile: "
+            "canonical scalar reference and vectorized candidate, same GPU "
+            "model, exact topology, zero numerical tolerances, and only the "
+            "exact materialization strategy field may differ."
+        ),
+    )
+    parser.add_argument(
         "--allow-identity-difference",
         action="append",
         default=[],
@@ -101,27 +112,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
-    """Resolve generic or fail-closed allocator qualification arguments."""
+    """Resolve generic or fail-closed execution qualification arguments."""
 
     supplied_tolerances = {
         group: (getattr(args, f"{group}_atol"), getattr(args, f"{group}_rtol"))
         for group in TOLERANCE_GROUPS
     }
-    if args.cuda_allocator_ab:
+    if args.cuda_allocator_ab and args.embedding_edge_ab:
+        raise ValueError(
+            "--cuda-allocator-ab and --embedding-edge-ab are mutually exclusive"
+        )
+    strict_profile = "--cuda-allocator-ab" if args.cuda_allocator_ab else None
+    if args.embedding_edge_ab:
+        strict_profile = "--embedding-edge-ab"
+    if strict_profile is not None:
         if args.allow_identity_difference:
             raise ValueError(
-                "--cuda-allocator-ab cannot be combined with "
-                "--allow-identity-difference"
+                f"{strict_profile} cannot be combined with --allow-identity-difference"
             )
         if any(
             absolute is not None or relative is not None
             for absolute, relative in supplied_tolerances.values()
         ):
             raise ValueError(
-                "--cuda-allocator-ab fixes every numerical tolerance at zero"
+                f"{strict_profile} fixes every numerical tolerance at zero"
             )
+        identity_paths = (
+            CUDA_ALLOCATOR_AB_IDENTITY_PATHS
+            if args.cuda_allocator_ab
+            else EMBEDDING_EDGE_AB_IDENTITY_PATHS
+        )
         return {
-            "allowed_identity_difference_paths": CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
+            "allowed_identity_difference_paths": identity_paths,
             "tolerances": {
                 group: NumericTolerance(absolute=0.0, relative=0.0)
                 for group in TOLERANCE_GROUPS
@@ -130,7 +152,8 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             "require_same_gpu_family": True,
             "require_exact_node_topology": True,
             "require_exact_edge_topology": True,
-            "require_canonical_cuda_allocator_ab": True,
+            "require_canonical_cuda_allocator_ab": args.cuda_allocator_ab,
+            "require_canonical_embedding_edge_ab": args.embedding_edge_ab,
         }
 
     return {
@@ -145,6 +168,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             args.require_exact_topology or args.require_exact_edge_topology
         ),
         "require_canonical_cuda_allocator_ab": False,
+        "require_canonical_embedding_edge_ab": False,
     }
 
 

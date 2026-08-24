@@ -14,6 +14,7 @@ BACKENDS = (
     "eager_causal_v1",
     "flash_sdpa_causal_v1",
 )
+EMBEDDING_EDGE_MATERIALIZATIONS = ("scalar_v1", "vectorized_v1")
 
 
 def _config(backend: str) -> dict:
@@ -53,11 +54,14 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "WIDTH1_SOURCE_MANIFEST_FILE_SHA256",
         "EXPECTED_ATTENTION_BACKEND",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
+        "EXPECTED_EMBEDDING_EDGE_MATERIALIZATION",
         "unset PYTORCH_CUDA_ALLOC_CONF",
         'export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
         "run config allocator policy disagrees",
         "saved artifact allocator identity disagrees",
         "saved artifact lacks the exact requested allocator runtime receipt",
+        "run config embedding-edge materialization disagrees",
+        "saved artifact embedding-edge materialization identity disagrees",
         "validate_cuda_allocator_environment(config)",
         '"observed_allocator_backend": "native"',
         "EXPECTED_GPU_NAME",
@@ -73,6 +77,35 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
     ):
         assert required in launcher
     assert "skipped_complete" not in launcher
+
+
+def test_embedding_edge_materialization_configs_clone_allocator_default() -> None:
+    allocator_default = json.loads(
+        (
+            CONFIG_ROOT / "qwen3_4b_thinking_allocator_qualification_default_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    materialization_configs = []
+    for materialization in EMBEDDING_EDGE_MATERIALIZATIONS:
+        path = (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_embedding_edge_materialization_qualification_"
+            f"{materialization}.json"
+        )
+        config = json.loads(path.read_text(encoding="utf-8"))
+        assert (
+            config["adag_config"]["embedding_edge_materialization"] == materialization
+        )
+        normalized = json.loads(json.dumps(config))
+        del normalized["adag_config"]["embedding_edge_materialization"]
+        assert normalized == allocator_default
+        materialization_configs.append(config)
+
+    scalar = json.loads(json.dumps(materialization_configs[0]))
+    vectorized = json.loads(json.dumps(materialization_configs[1]))
+    del scalar["adag_config"]["embedding_edge_materialization"]
+    del vectorized["adag_config"]["embedding_edge_materialization"]
+    assert scalar == vectorized
 
 
 def test_backend_configs_clone_frozen_v4_except_for_explicit_backend() -> None:
