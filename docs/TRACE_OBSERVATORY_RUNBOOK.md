@@ -108,12 +108,19 @@ Then browse `http://127.0.0.1:8032`.
 
 - Each target row loads one independent trace; the browser never unions their topology.
 - The default 100-edge graph is a target-connected upstream display projection. `Input nodes`
-  defaults to `Hidden`; `Shown` restores them in ascending token-position order in a compact,
-  wrapped bottom ribbon without changing the graph width. Fit includes the ribbon header and first
-  two rows so a long input does not shrink the internal graph; pan or focus reaches later rows.
+  defaults to `Hidden`; `Shown` restores every displayed input occurrence in the bottom band.
 - Output is always the top band, displayed transformer layers are strictly ordered from highest to
-  lowest, and the optional input-node ribbon is last. Connectivity influences horizontal ordering
-  only; it never moves a neuron into another vertical layer.
+  lowest, and the optional input-node band is last. Horizontally, displayed occurrences are grouped
+  into ascending token-occurrence-position columns. Every layer shares those column boundaries; multiple
+  neurons in one layer-position cell are packed deterministically by neuron identity. Column width is
+  set by the widest cell or header at that position, so groups never overlap. Connectivity does not change node
+  placement.
+- A column header shows its absolute token occurrence position and, when the trace context provides it,
+  that context token's text. The output node remains labeled with the predicted token, while its column
+  comes directly from the serialized output occurrence position. The viewer does not reinterpret that
+  coordinate as causal evidence or force it to equal target prediction/observation metadata.
+  Only positions represented by displayed nodes receive columns. Showing all input nodes can therefore
+  produce a deliberately wide 200+ column graph; zoom and pan are the v1 navigation mechanism.
 - Input-attribution and output-contribution profiles in `Neuron evidence` retain every finite value
   stored for that neuron regardless of whether explicit input nodes are visible. They open on the
   strongest 18 values; `Show all` reveals the complete profile without changing the graph.

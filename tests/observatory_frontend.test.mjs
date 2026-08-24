@@ -6,7 +6,7 @@ import { buildLayeredLayout } from "../circuits/observatory/assets/graph-layout.
 import { profileDisplay, profileRows } from "../circuits/observatory/assets/profile-data.js";
 
 const output = { id: "out", kind: "target_logit", token_text: "45" };
-const mlp = (id, layer) => ({ id, kind: "raw_mlp_neuron", layer, neuron: id });
+const mlp = (id, layer, position, neuron = id) => ({ id, kind: "raw_mlp_neuron", layer, position, neuron });
 const input = (id, position) => ({ id, kind: "input_token", layer: -1, position });
 
 test("model layers are strict vertical bands independent of graph topology", () => {
@@ -27,29 +27,73 @@ test("model layers are strict vertical bands independent of graph topology", () 
   assert.ok(layout.nodeById.get("l1").y < layout.nodeById.get("in0").y);
 });
 
-test("input tokens wrap in a bounded bottom ribbon without changing graph width", () => {
-  const internal = [output, mlp("l2-a", 2), mlp("l2-b", 2), mlp("l0", 0)];
-  const fewInputs = Array.from({ length: 3 }, (_, index) => input(`few-${index}`, index));
-  const manyInputs = Array.from({ length: 205 }, (_, index) => input(`many-${index}`, index));
-  const moreInputs = Array.from({ length: 305 }, (_, index) => input(`more-${index}`, index));
-  const few = buildLayeredLayout([...internal, ...fewInputs], []);
-  const many = buildLayeredLayout([...internal, ...manyInputs], []);
-  const more = buildLayeredLayout([...internal, ...moreInputs], []);
+test("nodes align to ascending token-position columns across layers", () => {
+  const nodes = [
+    { ...output, position: 9 },
+    mlp("l3-p9", 3, 9, 30),
+    mlp("l1-p2", 1, 2, 10),
+    mlp("l1-p9", 1, 9, 20),
+    input("in2", 2),
+    input("in9", 9),
+  ];
+  const tokenTextByPosition = new Map([[2, " the"], [9, "answer"]]);
 
-  assert.equal(many.bounds.width, few.bounds.width);
-  assert.equal(many.fitBounds.width, few.fitBounds.width);
-  assert.ok(many.bounds.height > few.bounds.height);
-  assert.ok(more.bounds.height > many.bounds.height);
-  assert.ok(many.bounds.height > many.fitBounds.height);
-  assert.equal(more.fitBounds.height, many.fitBounds.height);
-  assert.equal(many.nodeRows.filter((node) => node.role === "input").length, 205);
-  assert.equal(many.bands.at(-1).role, "input");
+  const layout = buildLayeredLayout(nodes, [], { tokenTextByPosition });
 
-  const inputs = many.nodeRows.filter((node) => node.role === "input");
-  for (let leftIndex = 0; leftIndex < inputs.length; leftIndex += 1) {
-    const left = inputs[leftIndex];
-    for (let rightIndex = leftIndex + 1; rightIndex < inputs.length; rightIndex += 1) {
-      const right = inputs[rightIndex];
+  assert.deepEqual(layout.columns.map((column) => column.position), [2, 9]);
+  assert.ok(layout.columns[0].x < layout.columns[1].x);
+  assert.equal(layout.nodeById.get("l1-p2").x, layout.nodeById.get("in2").x);
+  assert.equal(layout.nodeById.get("out").x, layout.nodeById.get("l3-p9").x);
+  assert.equal(layout.nodeById.get("l3-p9").x, layout.nodeById.get("l1-p9").x);
+  assert.equal(layout.nodeById.get("l1-p9").x, layout.nodeById.get("in9").x);
+  assert.equal(layout.columns[0].displayTokenText, "␠the");
+  assert.equal(layout.columns[1].tokenText, "answer");
+});
+
+test("token text contributes to column width so headers cannot overlap", () => {
+  const tokenText = "abcdefghijklmnopqr";
+  const layout = buildLayeredLayout([input("in4", 4)], [], {
+    tokenTextByPosition: new Map([[4, tokenText]]),
+  });
+
+  assert.equal(layout.columns[0].displayTokenText, tokenText);
+  assert.ok(layout.columns[0].width >= tokenText.length * 7 + 16);
+});
+
+test("repeated nodes pack deterministically inside one layer-position cell without overlap", () => {
+  const repeated = [8, 3, 12, 1, 5, 11, 7, 4, 10, 6, 9, 2]
+    .map((neuron) => mlp(`n-${neuron}`, 13, 7, neuron));
+  const layout = buildLayeredLayout([{ ...output, position: 7 }, ...repeated], []);
+  const rows = layout.nodeRows.filter((node) => node.bandKey === "layer:13");
+
+  assert.deepEqual(rows.map((node) => node.neuron), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.ok(rows.every((node) => node.columnKey === "position:7"));
+  assert.ok(layout.columns[0].width > 12 * 72);
+  for (let index = 1; index < rows.length; index += 1) {
+    assert.ok(
+      rows[index - 1].x + rows[index - 1].width / 2 <= rows[index].x - rows[index].width / 2,
+      `${rows[index - 1].id} overlaps ${rows[index].id}`,
+    );
+  }
+});
+
+test("token-column layout has no node overlaps", () => {
+  const nodes = [
+    { ...output, position: 4 },
+    mlp("a", 3, 1, 1),
+    mlp("b", 3, 1, 2),
+    mlp("c", 3, 4, 3),
+    mlp("d", 1, 1, 4),
+    mlp("e", 1, 4, 5),
+    input("in1", 1),
+    input("in4", 4),
+  ];
+  const rows = buildLayeredLayout(nodes, []).nodeRows;
+
+  for (let leftIndex = 0; leftIndex < rows.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < rows.length; rightIndex += 1) {
+      const left = rows[leftIndex];
+      const right = rows[rightIndex];
       const separated =
         left.x + left.width / 2 <= right.x - right.width / 2 ||
         right.x + right.width / 2 <= left.x - left.width / 2 ||
@@ -60,23 +104,21 @@ test("input tokens wrap in a bounded bottom ribbon without changing graph width"
   }
 });
 
-test("input ribbon preserves ascending token position despite connectivity", () => {
-  const inputs = [input("in2", 2), input("in0", 0), input("in4", 4), input("in1", 1), input("in3", 3)];
-  const internal = Array.from({ length: 4 }, (_, index) => mlp(`mlp-${index}`, 0));
-  const nodes = [output, ...internal, ...inputs];
-  const edges = Array.from({ length: 5 }, (_, position) => ({
-    id: `edge-${position}`,
-    source: `in${position}`,
-    target: internal[(position * 3 + 1) % internal.length].id,
-    attribution: 1,
-  }));
+test("nodes without a usable token position use a deterministic final fallback column", () => {
+  const nodes = [
+    mlp("known", 2, 3, 9),
+    mlp("missing-b", 2, undefined, 8),
+    mlp("missing-a", 2, "not-a-position", 4),
+  ];
+  const layout = buildLayeredLayout(nodes, []);
 
-  const layout = buildLayeredLayout(nodes, edges);
-
+  assert.deepEqual(layout.columns.map((column) => column.position), [3, null]);
+  assert.equal(layout.columns.at(-1).key, "unknown");
   assert.deepEqual(
-    layout.nodeRows.filter((node) => node.role === "input").map((node) => node.position),
-    [0, 1, 2, 3, 4],
+    layout.nodeRows.filter((node) => node.columnKey === "unknown").map((node) => node.id),
+    ["missing-a", "missing-b"],
   );
+  assert.ok(Number.isFinite(layout.nodeById.get("missing-a").x));
 });
 
 test("simple routing retains every displayed edge including input to MLP edges", () => {

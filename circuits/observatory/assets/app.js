@@ -773,6 +773,11 @@ function renderGraph({ fit = true } = {}) {
   if (!state.graph) return;
   state.projection = createProjection();
   const { nodes, edges } = state.projection;
+  const tokenTextByPosition = new Map(
+    normalizeContext(state.traceDocument).tokens
+      .map((token) => [finiteNumber(token.absolutePosition), token.text])
+      .filter(([position]) => position !== null),
+  );
   updateProvenance();
   if (nodes.length === 0) {
     graphView.render([], []);
@@ -780,7 +785,7 @@ function renderGraph({ fit = true } = {}) {
     return;
   }
   setGraphStatus("ready");
-  graphView.render(nodes, edges, { selectedNodeId: state.selectedNodeId, fit });
+  graphView.render(nodes, edges, { selectedNodeId: state.selectedNodeId, fit, tokenTextByPosition });
 }
 
 function traceDiagnostics() {

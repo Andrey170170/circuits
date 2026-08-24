@@ -797,6 +797,35 @@ input:disabled {
   font-size: 11px;
 }
 
+.token-column-fill {
+  fill: transparent;
+}
+
+.token-column-fill:nth-child(even) {
+  fill: var(--primary-wash);
+  fill-opacity: 0.3;
+}
+
+.token-column-rule {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-opacity: 0.75;
+  vector-effect: non-scaling-stroke;
+}
+
+.token-column-label {
+  fill: var(--secondary);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.token-column-text {
+  fill: var(--primary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .graph-edge {
   fill: none;
   stroke-linecap: round;

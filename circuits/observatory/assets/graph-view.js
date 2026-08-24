@@ -57,14 +57,14 @@ export class GraphView {
 
     this.zoom = d3
       .zoom()
-      .scaleExtent([0.08, 6])
+      .scaleExtent([0.015, 6])
       .on("zoom", (event) => {
         this.viewport?.attr("transform", event.transform);
       });
     this.svg.call(this.zoom).on("dblclick.zoom", null);
   }
 
-  render(nodes, edges, { selectedNodeId = null, fit = true } = {}) {
+  render(nodes, edges, { selectedNodeId = null, fit = true, tokenTextByPosition = null } = {}) {
     this.nodes = nodes;
     this.edges = edges;
     this.nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -80,10 +80,11 @@ export class GraphView {
     this.#createMarkers();
     this.viewport = this.svg.append("g").attr("class", "graph-viewport");
 
-    const layout = buildLayeredLayout(nodes, edges);
+    const layout = buildLayeredLayout(nodes, edges, { tokenTextByPosition });
     this.contentBounds = layout.fitBounds;
 
     this.#renderLayerBands(layout.bands, layout.bounds.width);
+    this.#renderTokenColumns(layout.columns, layout.bands);
     this.#renderEdges(layout.edgeRows);
     this.#renderNodes(layout.nodeRows);
     this.updateHighlight();
@@ -142,6 +143,59 @@ export class GraphView {
       .attr("x", 4)
       .attr("y", (band) => band.labelY + 4)
       .text((band) => band.label);
+  }
+
+  #renderTokenColumns(columns, bands) {
+    if (columns.length === 0 || bands.length === 0) return;
+    const top = bands[0].top;
+    const bottom = bands.at(-1).bottom;
+    const group = this.viewport.append("g").attr("class", "token-columns");
+
+    group
+      .selectAll("rect")
+      .data(columns)
+      .join("rect")
+      .attr("class", "token-column-fill")
+      .attr("x", (column) => column.left)
+      .attr("y", top)
+      .attr("width", (column) => column.width)
+      .attr("height", Math.max(1, bottom - top));
+
+    group
+      .selectAll("line")
+      .data(columns)
+      .join("line")
+      .attr("class", "token-column-rule")
+      .attr("x1", (column) => column.left)
+      .attr("x2", (column) => column.left)
+      .attr("y1", 12)
+      .attr("y2", bottom);
+
+    const labels = group
+      .selectAll("text")
+      .data(columns)
+      .join("text")
+      .attr("class", "token-column-label")
+      .attr("x", (column) => column.x)
+      .attr("y", 23)
+      .attr("text-anchor", "middle");
+
+    labels
+      .append("tspan")
+      .attr("x", (column) => column.x)
+      .text((column) => column.label);
+    labels
+      .filter((column) => column.displayTokenText !== null)
+      .append("tspan")
+      .attr("class", "token-column-text")
+      .attr("x", (column) => column.x)
+      .attr("dy", 17)
+      .text((column) => column.displayTokenText);
+    labels
+      .append("title")
+      .text((column) => column.tokenText === null
+        ? `${column.label}; context token text unavailable`
+        : `${column.label}; context token ${JSON.stringify(String(column.tokenText))}`);
   }
 
   #renderEdges(edgeRows) {
@@ -323,7 +377,7 @@ export class GraphView {
     if (!bounds.width || !bounds.height) return;
     const padding = 34;
     const scale = Math.max(
-      0.08,
+      0.015,
       Math.min(
         1.2,
         (bounds.width - padding * 2) / this.contentBounds.width,

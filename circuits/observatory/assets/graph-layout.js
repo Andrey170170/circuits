@@ -4,19 +4,17 @@ const INPUT_KIND = /^(embedding|input|input_token)$/i;
 const DIMENSIONS = Object.freeze({
   marginLeft: 58,
   marginRight: 34,
-  marginTop: 22,
+  marginTop: 62,
   marginBottom: 22,
-  minimumCoreWidth: 880,
-  layerHeight: 48,
+  minimumColumnWidth: 88,
+  columnGap: 12,
+  cellPadding: 8,
+  tokenLabelCharacterWidth: 7,
   nodeHeight: 29,
-  nodeGap: 18,
+  nodeGap: 8,
   inputNodeWidth: 54,
   inputNodeHeight: 21,
-  inputColumnGap: 7,
-  inputRowGap: 7,
-  inputHeaderHeight: 34,
-  inputBottomPadding: 14,
-  inputFitPreviewRows: 2,
+  layerHeight: 48,
 });
 
 function safeText(value, fallback = "unknown") {
@@ -56,12 +54,25 @@ function compareBands(left, right) {
   return left.label.localeCompare(right.label);
 }
 
+function numericPosition(node) {
+  if (node.position === undefined || node.position === null || node.position === "") return null;
+  const position = Number(node.position);
+  return Number.isFinite(position) ? position : null;
+}
+
+function positionKey(node) {
+  const position = numericPosition(node);
+  return position === null ? "unknown" : `position:${position}`;
+}
+
 function stableNodeCompare(left, right) {
-  const leftPosition = Number(left.position);
-  const rightPosition = Number(right.position);
-  if (Number.isFinite(leftPosition) && Number.isFinite(rightPosition) && leftPosition !== rightPosition) {
+  const leftPosition = numericPosition(left);
+  const rightPosition = numericPosition(right);
+  if (leftPosition !== null && rightPosition !== null && leftPosition !== rightPosition) {
     return leftPosition - rightPosition;
   }
+  if (leftPosition === null && rightPosition !== null) return 1;
+  if (leftPosition !== null && rightPosition === null) return -1;
   const leftNeuron = Number(left.neuron ?? left.feature ?? left.basis?.neuron);
   const rightNeuron = Number(right.neuron ?? right.feature ?? right.basis?.neuron);
   if (Number.isFinite(leftNeuron) && Number.isFinite(rightNeuron) && leftNeuron !== rightNeuron) {
@@ -75,56 +86,72 @@ function nodeWidth(node, role) {
   return Math.max(72, Math.min(130, 18 + nodeLabel(node).length * 6.5));
 }
 
-function orderWithinBands(bands, edges) {
-  const bandByNode = new Map();
-  bands.forEach((band) => band.nodes.forEach((node) => bandByNode.set(node.id, band)));
-  const neighbors = new Map();
-  const addNeighbor = (nodeId, neighborId) => {
-    if (!bandByNode.has(nodeId) || !bandByNode.has(neighborId)) return;
-    if (!neighbors.has(nodeId)) neighbors.set(nodeId, []);
-    neighbors.get(nodeId).push(neighborId);
-  };
-  edges.forEach((edge) => {
-    addNeighbor(edge.source, edge.target);
-    addNeighbor(edge.target, edge.source);
+function tokenTextAt(tokenTextByPosition, position) {
+  if (position === null || tokenTextByPosition === null || tokenTextByPosition === undefined) return null;
+  if (tokenTextByPosition instanceof Map) {
+    return tokenTextByPosition.get(position) ?? tokenTextByPosition.get(String(position)) ?? null;
+  }
+  return tokenTextByPosition[position] ?? tokenTextByPosition[String(position)] ?? null;
+}
+
+function visibleTokenText(value) {
+  if (value === null || value === undefined) return null;
+  const visible = String(value)
+    .replaceAll(" ", "␠")
+    .replaceAll("\n", "↵")
+    .replaceAll("\t", "⇥");
+  if (visible.length === 0) return "∅";
+  return visible.length > 18 ? `${visible.slice(0, 17)}…` : visible;
+}
+
+function buildColumns(bands, tokenTextByPosition) {
+  const columnsByKey = new Map();
+  bands.forEach((band) => {
+    band.nodes.forEach((node) => {
+      const key = positionKey(node);
+      if (!columnsByKey.has(key)) {
+        const position = numericPosition(node);
+        columnsByKey.set(key, { key, position, cells: new Map() });
+      }
+      const column = columnsByKey.get(key);
+      if (!column.cells.has(band.key)) column.cells.set(band.key, []);
+      column.cells.get(band.key).push(node);
+    });
   });
 
-  const positions = new Map();
-  const refreshPositions = () => {
-    bands.forEach((band) => {
-      const denominator = Math.max(1, band.nodes.length - 1);
-      band.nodes.forEach((node, index) => positions.set(node.id, index / denominator));
+  const bandByKey = new Map(bands.map((band) => [band.key, band]));
+  const columns = [...columnsByKey.values()].sort((left, right) => {
+    if (left.position === null) return right.position === null ? 0 : 1;
+    if (right.position === null) return -1;
+    return left.position - right.position;
+  });
+  let cursorX = DIMENSIONS.marginLeft;
+  columns.forEach((column) => {
+    column.tokenText = tokenTextAt(tokenTextByPosition, column.position);
+    column.displayTokenText = visibleTokenText(column.tokenText);
+    column.label = column.position === null ? "position ?" : `position ${column.position}`;
+    let widestCell = 0;
+    column.cells.forEach((cellNodes, bandKey) => {
+      const band = bandByKey.get(bandKey);
+      cellNodes.sort(stableNodeCompare);
+      const width = cellNodes.reduce((sum, node) => sum + nodeWidth(node, band.role), 0)
+        + Math.max(0, cellNodes.length - 1) * DIMENSIONS.nodeGap;
+      widestCell = Math.max(widestCell, width);
     });
-  };
-  const sweep = (orderedBands) => {
-    orderedBands.forEach((band) => {
-      if (band.role === "input") return;
-      band.nodes = band.nodes
-        .map((node, originalIndex) => {
-          const connected = neighbors.get(node.id) ?? [];
-          const values = connected.map((id) => positions.get(id)).filter(Number.isFinite);
-          return {
-            node,
-            originalIndex,
-            barycenter: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
-          };
-        })
-        .sort((left, right) => {
-          if (left.barycenter === null && right.barycenter === null) return left.originalIndex - right.originalIndex;
-          if (left.barycenter === null) return 1;
-          if (right.barycenter === null) return -1;
-          return left.barycenter - right.barycenter || left.originalIndex - right.originalIndex;
-        })
-        .map((entry) => entry.node);
-      refreshPositions();
-    });
-  };
-
-  refreshPositions();
-  for (let iteration = 0; iteration < 3; iteration += 1) {
-    sweep(bands);
-    sweep([...bands].reverse());
-  }
+    const headerWidth = Math.max(column.label.length, column.displayTokenText?.length ?? 0)
+      * DIMENSIONS.tokenLabelCharacterWidth
+      + DIMENSIONS.cellPadding * 2;
+    column.width = Math.max(
+      DIMENSIONS.minimumColumnWidth,
+      widestCell + DIMENSIONS.cellPadding * 2,
+      headerWidth,
+    );
+    column.left = cursorX;
+    column.right = cursorX + column.width;
+    column.x = cursorX + column.width / 2;
+    cursorX = column.right + DIMENSIONS.columnGap;
+  });
+  return columns;
 }
 
 function rounded(value) {
@@ -139,7 +166,7 @@ function routeEdge(source, target) {
   return `M${rounded(source.x)},${rounded(sourceY)} C${rounded(source.x)},${rounded(middleY)},${rounded(target.x)},${rounded(middleY)},${rounded(target.x)},${rounded(targetY)}`;
 }
 
-export function buildLayeredLayout(nodes, edges) {
+export function buildLayeredLayout(nodes, edges, { tokenTextByPosition = null } = {}) {
   const grouped = new Map();
   nodes.forEach((node) => {
     const descriptor = classifyNode(node);
@@ -148,74 +175,41 @@ export function buildLayeredLayout(nodes, edges) {
   });
   const bands = [...grouped.values()].sort(compareBands);
   bands.forEach((band) => band.nodes.sort(stableNodeCompare));
-  orderWithinBands(bands, edges);
+  const columns = buildColumns(bands, tokenTextByPosition);
 
-  const nonInputBands = bands.filter((band) => band.role !== "input");
-  const widestInternalRow = Math.max(
-    DIMENSIONS.minimumCoreWidth,
-    ...nonInputBands.map((band) => (
-      band.nodes.reduce((sum, node) => sum + nodeWidth(node, band.role), 0)
-      + Math.max(0, band.nodes.length - 1) * DIMENSIONS.nodeGap
-    )),
-  );
-  const graphWidth = DIMENSIONS.marginLeft + widestInternalRow + DIMENSIONS.marginRight;
+  const graphWidth = columns.length === 0
+    ? DIMENSIONS.marginLeft + DIMENSIONS.marginRight
+    : columns.at(-1).right + DIMENSIONS.marginRight;
   const nodeRows = [];
   let cursorY = DIMENSIONS.marginTop;
-  let fitBottom = null;
 
   bands.forEach((band) => {
     band.top = cursorY;
-    if (band.role === "input") {
-      const pitchX = DIMENSIONS.inputNodeWidth + DIMENSIONS.inputColumnGap;
-      const columns = Math.max(1, Math.floor((widestInternalRow + DIMENSIONS.inputColumnGap) / pitchX));
-      const rowCount = Math.max(1, Math.ceil(band.nodes.length / columns));
-      const pitchY = DIMENSIONS.inputNodeHeight + DIMENSIONS.inputRowGap;
-      band.center = band.top + DIMENSIONS.inputHeaderHeight / 2;
-      band.labelY = band.center;
-      band.nodes.forEach((node, index) => {
-        const row = Math.floor(index / columns);
-        const column = index % columns;
-        const countInRow = Math.min(columns, band.nodes.length - row * columns);
-        const rowWidth = countInRow * DIMENSIONS.inputNodeWidth + Math.max(0, countInRow - 1) * DIMENSIONS.inputColumnGap;
-        const rowStart = DIMENSIONS.marginLeft + (widestInternalRow - rowWidth) / 2;
-        nodeRows.push({
-          ...node,
-          role: band.role,
-          bandKey: band.key,
-          label: nodeLabel(node),
-          width: DIMENSIONS.inputNodeWidth,
-          height: DIMENSIONS.inputNodeHeight,
-          x: rowStart + column * pitchX + DIMENSIONS.inputNodeWidth / 2,
-          y: band.top + DIMENSIONS.inputHeaderHeight + row * pitchY + DIMENSIONS.inputNodeHeight / 2,
-        });
-      });
-      band.bottom = band.top + DIMENSIONS.inputHeaderHeight + rowCount * pitchY + DIMENSIONS.inputBottomPadding;
-      fitBottom = band.top
-        + DIMENSIONS.inputHeaderHeight
-        + Math.min(rowCount, DIMENSIONS.inputFitPreviewRows) * pitchY
-        + DIMENSIONS.inputBottomPadding;
-    } else {
-      band.center = band.top + DIMENSIONS.layerHeight / 2;
-      band.labelY = band.center;
-      const widths = band.nodes.map((node) => nodeWidth(node, band.role));
-      const rowWidth = widths.reduce((sum, width) => sum + width, 0) + Math.max(0, widths.length - 1) * DIMENSIONS.nodeGap;
-      let cursorX = DIMENSIONS.marginLeft + (widestInternalRow - rowWidth) / 2;
-      band.nodes.forEach((node, index) => {
+    band.center = band.top + DIMENSIONS.layerHeight / 2;
+    band.labelY = band.center;
+    band.bottom = band.top + DIMENSIONS.layerHeight;
+    columns.forEach((column) => {
+      const cellNodes = column.cells.get(band.key) ?? [];
+      const widths = cellNodes.map((node) => nodeWidth(node, band.role));
+      const cellWidth = widths.reduce((sum, width) => sum + width, 0)
+        + Math.max(0, widths.length - 1) * DIMENSIONS.nodeGap;
+      let cursorX = column.x - cellWidth / 2;
+      cellNodes.forEach((node, index) => {
         const width = widths[index];
         nodeRows.push({
           ...node,
           role: band.role,
           bandKey: band.key,
+          columnKey: column.key,
           label: nodeLabel(node),
           width,
-          height: DIMENSIONS.nodeHeight,
+          height: band.role === "input" ? DIMENSIONS.inputNodeHeight : DIMENSIONS.nodeHeight,
           x: cursorX + width / 2,
           y: band.center,
         });
         cursorX += width + DIMENSIONS.nodeGap;
       });
-      band.bottom = band.top + DIMENSIONS.layerHeight;
-    }
+    });
     cursorY = band.bottom;
   });
 
@@ -227,16 +221,15 @@ export function buildLayeredLayout(nodes, edges) {
     return source && target ? [{ ...edge, path: routeEdge(source, target) }] : [];
   });
   const publicBands = bands.map(({ nodes: _nodes, ...band }) => band);
+  const publicColumns = columns.map(({ cells: _cells, ...column }) => column);
   const bounds = { x: 0, y: 0, width: graphWidth, height: graphHeight };
-  const fitHeight = fitBottom === null
-    ? graphHeight
-    : Math.min(graphHeight, fitBottom + DIMENSIONS.marginBottom);
   return {
     bands: publicBands,
+    columns: publicColumns,
     nodeRows,
     nodeById,
     edgeRows,
     bounds,
-    fitBounds: { ...bounds, height: fitHeight },
+    fitBounds: bounds,
   };
 }
