@@ -1,8 +1,8 @@
 # ADAG bounded-memory tracing execution plan
 
-Status: active under explicit user authorization. The Level 1a stop-gradient contribution slice
-is implemented and measured; it does not complete Level 1 or authorize broader tracing runs by
-itself.
+Status: active under explicit user authorization. The Level 1a sparse-source and Level 1b bounded
+target-lane stop-gradient contribution slices are implemented and measured; neither completes
+Level 1 or authorizes broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -203,7 +203,7 @@ parity claim. `sparse_source_leaf_v1` remains opt-in and unpromoted. Before exte
 it, freeze the numerical policy and validate it on a separate target, then choose the next memory
 owner rather than assuming wider sparse-source integration will lower the global peak.
 
-### Level 1b development slice: bounded target-lane VJP chunks
+### Level 1b measured checkpoint: bounded target-lane VJP chunks
 
 The next bounded slice addresses the measured 13.45 GB backward workspace without changing source
 selection. `stop_gradient_contribution_target_lane_chunk_size` limits contiguous target lanes per
@@ -214,9 +214,41 @@ non-final chunk, and apply the adapter's historical graph-lifetime contract to t
 
 This is an orthogonal, provenance-bearing stop-gradient contribution option. It does not chunk the
 ordinary combined contribution path, selected-neuron attribution lanes, embedding contributions,
-or cross-layer Jacobians. CPU qualification covers algebra, ordering, validation, telemetry, and
-failure cleanup only; no capacity or runtime benefit should be claimed until a same-commit A100
-comparison measures the contribution-stage and run-wide peaks.
+or cross-layer Jacobians.
+
+Commit `d022d5dc13b0d7e4f93e5bdc1afc507a1e98be75` contains the reviewed Level 1b
+implementation and fail-closed qualification harness. The immutable execution worktree is
+`/scratch/general/vast/u1653998/circuits/run-worktrees/target-lane-chunk-qual-d022d5d`.
+Jobs `15069125` (all targets) and `15069394` (width one) ran sequentially on the same `notch370`
+A100. Their control artifact was `topk-trace-b5b11b680bd7a29258737f00`; their candidate artifact
+was `topk-trace-bf669dbbd495e7242a93cdf9`. Both used accepted `source_leaf_v1` execution and differed
+only in `stop_gradient_contribution_target_lane_chunk_size=None` versus `1`.
+
+| Measurement | All targets | Width one | Result |
+| --- | ---: | ---: | ---: |
+| Trace wall seconds | 137.77288887114264 | 136.8338000040967 | -0.93908886704594 |
+| Global peak allocated bytes | 46,990,911,488 | 46,990,911,488 | unchanged |
+| Global peak reserved bytes | 51,661,242,368 | 51,661,242,368 | unchanged |
+| CUDA headroom bytes | 33,432,535,040 | 33,432,535,040 | unchanged |
+| Contribution-VJP peak allocated bytes | 44,293,483,008 | 33,535,095,808 | -10,758,387,200 |
+| Maximum incremental VJP workspace bytes | 13,451,133,440 | 2,692,746,240 | -80 percent |
+| Contribution-VJP wall seconds | 5.134982774732634 | 5.095142133766785 | -0.039840640965849 |
+| Contribution-VJP executions | 20 | 100 | 5x |
+
+Both runs recorded zero OOMs and allocator retries. The compact projected raw-dtype SHA-256 receipt
+matched exactly for every one of the 20 layers. The zero-tolerance report
+`.../qualification-reports/all-targets-vs-width1-zero-v1.json`, SHA-256
+`c3f3c7c4102d6bbd8bf8aa0c6ce4c02e8e7792856d6c2966840b84dad66d20da`, recorded
+`qualification_passed=true` with only
+`artifact_identity.adag_config.stop_gradient_contribution_target_lane_chunk_size` allowed to
+differ.
+
+This qualifies width-one chunking as an exact capacity primitive on this frozen target. It remains
+opt-in and the default remains `None`. It did not improve the run-wide allocated, reserved, or
+headroom peaks. The remaining owner is localized only to the enclosing
+`stop_grad_mlp_attribution_contribution` stage at 46,990,911,488 allocated bytes, not yet to a
+specific operation inside that stage. Add finer forward and post-VJP telemetry before choosing an
+offload or recomputation design.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 

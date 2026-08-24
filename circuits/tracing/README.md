@@ -61,6 +61,16 @@ all targets at once; a positive integer slices only the target axis and keeps
 every batch lane for each target together. Each chunk is projected into
 canonical `(coordinate, batch, target)` order before the next backward pass.
 This option currently applies only to the stop-gradient per-layer contribution
-loop, composes with every contribution execution adapter, and remains
-unqualified for scientific use until same-GPU memory, runtime, and value gates
-are recorded.
+loop and composes with every contribution execution adapter. Commit
+`d022d5dc13b0d7e4f93e5bdc1afc507a1e98be75` qualified width one as an exact
+capacity primitive against the all-target `source_leaf_v1` control on one
+frozen 2,951-token A100 target: all 20 projected raw-dtype receipts and the
+zero-tolerance execution report were exact, while the contribution-VJP
+incremental workspace fell 80 percent from 13,451,133,440 to 2,692,746,240
+bytes. It remains opt-in, and `None` remains the compatibility default.
+
+This qualification did not lower the 46,990,911,488-byte run-wide allocated
+peak. The remaining owner is localized only to the enclosing
+`stop_grad_mlp_attribution_contribution` stage, not yet to a specific operation.
+Add finer forward/post-VJP telemetry before choosing offload or recomputation
+work from this result.
