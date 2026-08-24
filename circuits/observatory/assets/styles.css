@@ -780,6 +780,11 @@ input:disabled {
   fill: white;
 }
 
+.layer-band.input-band {
+  fill: #f4f7fb;
+  fill-opacity: 1;
+}
+
 .layer-rule {
   stroke: var(--border);
   stroke-width: 1;
@@ -846,6 +851,10 @@ input:disabled {
 .graph-node .node-sign {
   font-size: 8px;
   font-weight: 700;
+}
+
+.graph-node.role-input .node-sign {
+  display: none;
 }
 
 .graph-node.negative rect {
@@ -1154,6 +1163,24 @@ input:disabled {
   margin: 8px 0 2px;
   color: var(--quiet);
   font-size: 10px;
+}
+
+.profile-toggle {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: white;
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.profile-toggle:hover,
+.profile-toggle:focus-visible {
+  border-color: var(--primary);
+  background: var(--primary-wash);
 }
 
 .section-heading-row {

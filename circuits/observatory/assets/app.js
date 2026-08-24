@@ -1,4 +1,5 @@
 import { GraphView } from "./graph-view.js";
+import { profileDisplay } from "./profile-data.js";
 
 const TRACE_SCHEMA = "adag.observatory.trace-graph.v1";
 const WORKSPACE_SCHEMA = "adag.observatory.workspace.v1";
@@ -103,6 +104,7 @@ const state = {
   dirty: false,
   contextExpanded: false,
   loadController: null,
+  expandedProfiles: new Set(),
 };
 
 let graphView;
@@ -407,7 +409,7 @@ function graphNodeLabel(node) {
   if (!node) return "unknown";
   const kind = node.kind.toLowerCase();
   if (kind.includes("logit") || kind.includes("output")) return `OUT:${safeTokenText(node.token_text, node.neuron)}`;
-  if (kind.includes("embed") || kind === "input") return `IN:${textOrNull(node.position) ?? "?"}`;
+  if (kind.includes("embed") || kind.includes("input")) return `IN:${textOrNull(node.position) ?? "?"}`;
   return `L${textOrNull(node.layer) ?? "?"}:N${textOrNull(node.neuron) ?? "?"}`;
 }
 
@@ -826,7 +828,7 @@ function updateProvenance() {
   elements.retainedMass.textContent = formatPercent(state.projection?.retainedMass);
   const notes = ["of eligible edge |attribution|"];
   if (state.projection?.targetAnchored) notes.push("target-connected upstream projection");
-  if (state.filters.inputTokens === "hide") notes.push("input-token nodes shown in profiles only");
+  if (state.filters.inputTokens === "hide") notes.push("input nodes hidden; full profiles remain in neuron evidence");
   if (state.projection?.truncatedByBudget) notes.push(`limited to ${formatCount(state.projection.edges.length)} strongest edges`);
   if (state.filters.edgeBudget === "all") notes.push("full eligible graph requested");
   elements.projectionNote.textContent = notes.join(" · ");
@@ -883,24 +885,6 @@ function renderIdentity(node) {
   });
 }
 
-function normalizeProfile(profile) {
-  if (Array.isArray(profile)) {
-    return profile.map((entry, index) => {
-      if (entry && typeof entry === "object") {
-        return {
-          key: firstDefined(entry.key, entry.label, entry.position, entry.token_position, index),
-          value: finiteNumber(firstDefined(entry.value, entry.attribution, entry.contribution, entry.score)),
-        };
-      }
-      return { key: index, value: finiteNumber(entry) };
-    });
-  }
-  if (profile && typeof profile === "object") {
-    return Object.entries(profile).map(([key, value]) => ({ key, value: finiteNumber(value) }));
-  }
-  return [];
-}
-
 function profileKeyLabel(key, axis) {
   if (axis === "output") {
     const target = state.traceDocument?.target ?? {};
@@ -916,7 +900,9 @@ function profileKeyLabel(key, axis) {
 }
 
 function renderProfile(container, profile, axis) {
-  const rows = normalizeProfile(profile).filter((row) => row.value !== null);
+  const expansionKey = `${state.selectedArtifactId}::${state.selectedNodeId}::${axis}`;
+  const expanded = state.expandedProfiles.has(expansionKey);
+  const { rows, total } = profileDisplay(profile, { expanded });
   container.replaceChildren();
   if (rows.length === 0) {
     const empty = document.createElement("p");
@@ -926,20 +912,35 @@ function renderProfile(container, profile, axis) {
     return;
   }
   const max = Math.max(...rows.map((row) => Math.abs(row.value)), 1e-30);
-  rows
-    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
-    .slice(0, 18)
-    .forEach((row) => {
-      const sign = row.value < 0 ? "negative" : "positive";
-      const element = document.createElement("div");
-      element.className = "profile-row";
-      element.title = `${profileKeyLabel(row.key, axis)}: ${formatSigned(row.value)}`;
-      element.innerHTML = `
+  const fragment = document.createDocumentFragment();
+  rows.forEach((row) => {
+    const sign = row.value < 0 ? "negative" : "positive";
+    const element = document.createElement("div");
+    element.className = "profile-row";
+    element.title = `${profileKeyLabel(row.key, axis)}: ${formatSigned(row.value)}`;
+    element.innerHTML = `
         <span class="profile-key">${escapeHtml(profileKeyLabel(row.key, axis))}</span>
         <span class="profile-track"><span class="${sign}" style="--width:${Math.abs(row.value) / max * 50}%;--color:${sign === "negative" ? "#f04f5f" : "#175cff"}"></span></span>
         <span class="profile-value">${formatSigned(row.value)}</span>`;
-      container.append(element);
+    fragment.append(element);
+  });
+  container.append(fragment);
+  if (total > 18) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "profile-toggle";
+    button.setAttribute("aria-expanded", String(expanded));
+    button.textContent = expanded ? "Show top 18" : `Show all ${formatCount(total)} values`;
+    button.title = expanded
+      ? "Collapse this profile to its 18 strongest values"
+      : `Reveal all ${formatCount(total)} finite values stored in this profile`;
+    button.addEventListener("click", () => {
+      if (expanded) state.expandedProfiles.delete(expansionKey);
+      else state.expandedProfiles.add(expansionKey);
+      renderProfile(container, profile, axis);
     });
+    container.append(button);
+  }
 }
 
 function connectedEdges(node, direction) {

@@ -1,3 +1,5 @@
+import { buildLayeredLayout } from "./graph-layout.js";
+
 const COLORS = {
   positive: "#175cff",
   negative: "#f04f5f",
@@ -35,8 +37,8 @@ function nodeAriaLabel(node) {
 
 export class GraphView {
   constructor(svgElement, { onSelect, onHover } = {}) {
-    if (!globalThis.d3 || !globalThis.dagre) {
-      throw new Error("Graph libraries did not load. Expected d3 and dagre globals.");
+    if (!globalThis.d3) {
+      throw new Error("Graph library did not load. Expected the d3 global.");
     }
 
     this.svgElement = svgElement;
@@ -78,43 +80,12 @@ export class GraphView {
     this.#createMarkers();
     this.viewport = this.svg.append("g").attr("class", "graph-viewport");
 
-    const layout = new dagre.graphlib.Graph({ multigraph: true, compound: false });
-    layout.setGraph({
-      rankdir: "BT",
-      marginx: 78,
-      marginy: 36,
-      nodesep: nodes.length > 400 ? 9 : 18,
-      edgesep: 5,
-      ranksep: nodes.length > 400 ? 45 : 66,
-      acyclicer: "greedy",
-      ranker: "tight-tree",
-    });
-    layout.setDefaultEdgeLabel(() => ({}));
+    const layout = buildLayeredLayout(nodes, edges);
+    this.contentBounds = layout.fitBounds;
 
-    nodes.forEach((node) => {
-      const label = nodeLabel(node);
-      layout.setNode(node.id, {
-        width: Math.max(72, Math.min(130, 18 + label.length * 6.5)),
-        height: 29,
-        node,
-        label,
-      });
-    });
-
-    edges.forEach((edge, index) => {
-      if (!this.nodeById.has(edge.source) || !this.nodeById.has(edge.target)) return;
-      layout.setEdge(edge.source, edge.target, { edge }, edge.id ?? `edge-${index}`);
-    });
-
-    dagre.layout(layout);
-    const graphInfo = layout.graph();
-    const graphWidth = Math.max(400, graphInfo.width || 400);
-    const graphHeight = Math.max(260, graphInfo.height || 260);
-    this.contentBounds = { x: 0, y: 0, width: graphWidth, height: graphHeight };
-
-    this.#renderLayerBands(layout, graphWidth, graphHeight);
-    this.#renderEdges(layout);
-    this.#renderNodes(layout);
+    this.#renderLayerBands(layout.bands, layout.bounds.width);
+    this.#renderEdges(layout.edgeRows);
+    this.#renderNodes(layout.nodeRows);
     this.updateHighlight();
 
     if (fit) {
@@ -141,33 +112,13 @@ export class GraphView {
     });
   }
 
-  #renderLayerBands(layout, graphWidth, graphHeight) {
-    const layerGroups = d3.group(
-      this.nodes.map((node) => ({ node, layout: layout.node(node.id) })),
-      ({ node }) => safeText(node.layer, node.kind ?? "other"),
-    );
-    const bands = [...layerGroups.entries()]
-      .map(([layer, entries]) => ({
-        layer,
-        center: d3.mean(entries, ({ layout: item }) => item?.y ?? 0),
-      }))
-      .sort((a, b) => a.center - b.center);
-
-    bands.forEach((band, index) => {
-      const previous = bands[index - 1];
-      const next = bands[index + 1];
-      const top = previous ? (previous.center + band.center) / 2 : 0;
-      const bottom = next ? (band.center + next.center) / 2 : graphHeight;
-      band.top = Math.max(0, top);
-      band.bottom = Math.min(graphHeight, bottom);
-    });
-
+  #renderLayerBands(bands, graphWidth) {
     const group = this.viewport.append("g").attr("class", "layer-bands");
     group
       .selectAll("rect")
       .data(bands)
       .join("rect")
-      .attr("class", "layer-band")
+      .attr("class", (band) => `layer-band ${band.role === "input" ? "input-band" : ""}`)
       .attr("x", 36)
       .attr("y", (band) => band.top)
       .attr("width", Math.max(0, graphWidth - 36))
@@ -180,8 +131,8 @@ export class GraphView {
       .attr("class", "layer-rule")
       .attr("x1", 36)
       .attr("x2", graphWidth)
-      .attr("y1", (band) => band.center)
-      .attr("y2", (band) => band.center);
+      .attr("y1", (band) => band.role === "input" ? band.top : band.center)
+      .attr("y2", (band) => band.role === "input" ? band.top : band.center);
 
     group
       .selectAll("text")
@@ -189,31 +140,13 @@ export class GraphView {
       .join("text")
       .attr("class", "layer-label")
       .attr("x", 4)
-      .attr("y", (band) => band.center + 4)
-      .text((band) => this.#formatLayer(band.layer));
+      .attr("y", (band) => band.labelY + 4)
+      .text((band) => band.label);
   }
 
-  #formatLayer(layer) {
-    const lowered = String(layer).toLowerCase();
-    if (lowered === "-1" || lowered === "e" || lowered.includes("embed") || lowered.includes("input")) return "in";
-    if (lowered.includes("logit") || lowered.includes("output") || lowered === "out") return "out";
-    return `L${layer}`;
-  }
-
-  #renderEdges(layout) {
+  #renderEdges(edgeRows) {
     const maxMagnitude = d3.max(this.edges, (edge) => numericMagnitude(edge.attribution)) || 1;
     const widthScale = d3.scaleSqrt().domain([0, maxMagnitude]).range([0.55, 4.8]);
-    const line = d3.line().x((point) => point.x).y((point) => point.y).curve(d3.curveBasis);
-    const edgeRows = [];
-    layout.edges().forEach((descriptor) => {
-      const layoutEdge = layout.edge(descriptor);
-      if (!layoutEdge?.edge) return;
-      edgeRows.push({
-        ...layoutEdge.edge,
-        descriptor,
-        points: layoutEdge.points ?? [],
-      });
-    });
 
     this.edgeSelection = this.viewport
       .append("g")
@@ -225,7 +158,7 @@ export class GraphView {
       .attr("data-edge-id", (edge) => edge.id)
       .attr("data-source", (edge) => edge.source)
       .attr("data-target", (edge) => edge.target)
-      .attr("d", (edge) => line(edge.points))
+      .attr("d", (edge) => edge.path)
       .attr("stroke-width", (edge) => widthScale(numericMagnitude(edge.attribution)))
       .attr("marker-end", (edge) => `url(#arrow-${signClass(edge.attribution)})`);
 
@@ -237,15 +170,15 @@ export class GraphView {
       );
   }
 
-  #renderNodes(layout) {
-    const rows = this.nodes.map((node) => ({ ...node, layout: layout.node(node.id) }));
+  #renderNodes(nodeRows) {
+    const rows = nodeRows.map((node) => ({ ...node, layout: node }));
     this.nodeSelection = this.viewport
       .append("g")
       .attr("class", "graph-nodes")
       .selectAll("g")
       .data(rows, (node) => node.id)
       .join("g")
-      .attr("class", (node) => `graph-node ${signClass(node.attribution)}`)
+      .attr("class", (node) => `graph-node role-${node.role} ${signClass(node.attribution)}`)
       .attr("data-node-id", (node) => node.id)
       .attr("tabindex", 0)
       .attr("role", "button")

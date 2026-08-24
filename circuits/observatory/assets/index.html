@@ -101,12 +101,17 @@
             <select id="position-filter"><option value="all">All</option></select>
           </label>
 
-          <label class="filter-field" for="input-token-filter">
-            <span>Input tokens</span>
-            <select id="input-token-filter">
-              <option value="hide" selected>Profiles only</option>
-              <option value="show">Show nodes</option>
+          <label
+            class="filter-field"
+            for="input-token-filter"
+            title="Input-node visibility changes only the graph. Complete input-attribution and output-contribution profiles remain in Neuron evidence."
+          >
+            <span>Input nodes</span>
+            <select id="input-token-filter" aria-describedby="input-token-help">
+              <option value="hide" selected>Hidden</option>
+              <option value="show">Shown</option>
             </select>
+            <span id="input-token-help" class="visually-hidden">Hiding input nodes affects only the graph display. Select a neuron to inspect every value in its complete profiles.</span>
           </label>
 
           <label class="filter-field" for="polarity-filter">
@@ -292,7 +297,6 @@
 
     <noscript>This viewer requires JavaScript to render trace graphs.</noscript>
     <script src="/vendor/d3.js"></script>
-    <script src="/vendor/dagre.min.js"></script>
     <script type="module" src="/assets/app.js"></script>
   </body>
 </html>
