@@ -60,6 +60,7 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "WIDTH1_SOURCE_MANIFEST_FILE_SHA256",
         "EXPECTED_ATTENTION_BACKEND",
         "EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION",
+        "EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
         "EXPECTED_EMBEDDING_EDGE_MATERIALIZATION",
         "EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION",
@@ -67,8 +68,11 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         'export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
         "run config allocator policy disagrees",
         "run config contribution execution disagrees",
+        "run config target-lane chunk size disagrees",
         "saved artifact allocator identity disagrees",
         "saved artifact contribution execution identity disagrees",
+        "saved artifact target-lane chunk size identity disagrees",
+        "chunk_size_field not in artifact_adag",
         "saved artifact lacks the exact requested allocator runtime receipt",
         "run config embedding-edge materialization disagrees",
         "saved artifact embedding-edge materialization identity disagrees",
@@ -91,6 +95,8 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
     assert "skipped_complete" not in launcher
     for execution in CONTRIBUTION_EXECUTIONS:
         assert execution in launcher
+    assert '!= "none"' in launcher
+    assert "^[1-9][0-9]*$" in launcher
 
 
 def test_embedding_edge_materialization_configs_clone_allocator_default() -> None:
@@ -189,6 +195,37 @@ def test_sparse_contribution_config_clones_cached_range_control_exactly() -> Non
     del normalized_control["adag_config"]["stop_gradient_contribution_execution"]
     del normalized_candidate["adag_config"]["stop_gradient_contribution_execution"]
     assert normalized_candidate == normalized_control
+
+
+def test_target_lane_chunk_configs_differ_only_by_explicit_chunk_size() -> None:
+    configs = []
+    for suffix, expected_chunk_size in (("none", None), ("1", 1)):
+        path = (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_stop_gradient_target_lane_chunk_qualification_"
+            f"{suffix}_v1.json"
+        )
+        config = json.loads(path.read_text(encoding="utf-8"))
+        assert (
+            config["adag_config"]["stop_gradient_contribution_execution"]
+            == "source_leaf_v1"
+        )
+        assert (
+            config["adag_config"]["stop_gradient_contribution_target_lane_chunk_size"]
+            == expected_chunk_size
+        )
+        assert (
+            config["artifact_root"] == "results/bonafide/"
+            "process-witness-target-lane-chunk-qualification-v1"
+        )
+        configs.append(config)
+
+    normalized = []
+    for config in configs:
+        copied = json.loads(json.dumps(config))
+        del copied["adag_config"]["stop_gradient_contribution_target_lane_chunk_size"]
+        normalized.append(copied)
+    assert normalized[0] == normalized[1]
 
 
 def test_backend_configs_clone_frozen_v4_except_for_explicit_backend() -> None:

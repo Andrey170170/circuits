@@ -7,6 +7,7 @@ from copy import deepcopy
 import pytest
 from circuits.tracing.artifact import save_topk_compact_trace
 from circuits.tracing.backend_qualification import (
+    CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
@@ -22,6 +23,8 @@ from scripts.bonafide.topk_backend_qualification import (
 )
 from tests.test_teacher_forced_trace import _topk_trace
 
+_UNSET = object()
+
 
 def _manifest(
     backend: str,
@@ -31,6 +34,7 @@ def _manifest(
     allocator_policy: str | None = None,
     embedding_edge_materialization: str | None = None,
     cross_layer_jacobian_execution: str | None = None,
+    contribution_target_lane_chunk_size: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -85,6 +89,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "stop_gradient_contribution_execution"
         ] = contribution_execution
+    if contribution_target_lane_chunk_size is not _UNSET:
+        manifest["artifact_identity"]["adag_config"][
+            "stop_gradient_contribution_target_lane_chunk_size"
+        ] = contribution_target_lane_chunk_size
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -168,6 +176,8 @@ def _save_pair(
     *,
     reference_execution: str | None = "full_graph_v1",
     candidate_execution: str | None = "full_graph_v1",
+    reference_chunk_size: object = _UNSET,
+    candidate_chunk_size: object = _UNSET,
 ):
     reference = _topk_trace()
     candidate = deepcopy(reference)
@@ -184,7 +194,11 @@ def _save_pair(
             "cuda_peak_reserved_bytes": 120,
             "rss_peak_after_bytes": 200,
         },
-        manifest=_manifest("eager", contribution_execution=reference_execution),
+        manifest=_manifest(
+            "eager",
+            contribution_execution=reference_execution,
+            contribution_target_lane_chunk_size=reference_chunk_size,
+        ),
     )
     save_topk_compact_trace(
         candidate_path,
@@ -195,7 +209,11 @@ def _save_pair(
             "cuda_peak_reserved_bytes": 80,
             "rss_peak_after_bytes": 190,
         },
-        manifest=_manifest("sdpa_ov_only", contribution_execution=candidate_execution),
+        manifest=_manifest(
+            "sdpa_ov_only",
+            contribution_execution=candidate_execution,
+            contribution_target_lane_chunk_size=candidate_chunk_size,
+        ),
     )
     return reference_path, candidate_path
 
@@ -266,6 +284,46 @@ def test_backend_qualification_can_allow_contribution_execution_difference(
         "artifact_identity.adag_config.stop_gradient_attention_backend",
         "artifact_identity.adag_config.stop_gradient_contribution_execution",
     }
+
+
+def test_backend_qualification_can_allow_target_lane_chunk_size_difference(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_chunk_size=None,
+        candidate_chunk_size=1,
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=[
+            *_allowed_paths(),
+            *CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
+        ],
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+    )
+
+    assert report["validation_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    allowed = report["identity"]["artifact_identity"]["allowed_differences"]
+    assert {difference["path"] for difference in allowed} >= {
+        "artifact_identity.adag_config.stop_gradient_attention_backend",
+        "artifact_identity.adag_config."
+        "stop_gradient_contribution_target_lane_chunk_size",
+    }
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config."
+                "stop_gradient_contribution_target_lane_chunk_size.*"
+            ],
+        )
 
 
 def test_backend_qualification_rejects_wildcard_for_scalar_strategy(

@@ -36,6 +36,7 @@ cd "$REPO_ROOT"
 : "${EXPECTED_GIT_COMMIT:?Set EXPECTED_GIT_COMMIT to the exact launch commit}"
 : "${EXPECTED_ATTENTION_BACKEND:?Set EXPECTED_ATTENTION_BACKEND to the explicit public backend name}"
 : "${EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION:?Set EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION to the explicit contribution strategy}"
+: "${EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE:?Set EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE to none or a positive integer}"
 : "${WAVE:?Set WAVE to exactly one qualification-v4 wave ID}"
 : "${ONLY_ARTIFACT_ID:?Set ONLY_ARTIFACT_ID to exactly one item in WAVE}"
 : "${UV_PROJECT_ENVIRONMENT:?Set a lane-specific absolute uv environment}"
@@ -73,6 +74,11 @@ case "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION" in
         exit 2
         ;;
 esac
+if [[ "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" != "none" ]] &&
+   [[ ! "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE must be none or a positive integer." >&2
+    exit 2
+fi
 case "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" in
     ""|scalar_v1|vectorized_v1) ;;
     *)
@@ -171,11 +177,13 @@ wave_id=sys.argv[4]
 source_id=sys.argv[5]
 expected_backend=sys.argv[6]
 expected_contribution_execution=sys.argv[7]
-expected_source_sha=sys.argv[8]
-repo_root=pathlib.Path(sys.argv[9])
-expected_allocator_policy=sys.argv[10] or None
-expected_embedding_edge_materialization=sys.argv[11] or None
-expected_cross_layer_jacobian_execution=sys.argv[12] or None
+expected_chunk_size_raw=sys.argv[8]
+expected_chunk_size=None if expected_chunk_size_raw == "none" else int(expected_chunk_size_raw)
+expected_source_sha=sys.argv[9]
+repo_root=pathlib.Path(sys.argv[10])
+expected_allocator_policy=sys.argv[11] or None
+expected_embedding_edge_materialization=sys.argv[12] or None
+expected_cross_layer_jacobian_execution=sys.argv[13] or None
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -185,6 +193,9 @@ if adag["stop_gradient_attention_backend"] != expected_backend:
     raise SystemExit("run config backend disagrees with EXPECTED_ATTENTION_BACKEND")
 if adag.get("stop_gradient_contribution_execution") != expected_contribution_execution:
     raise SystemExit("run config contribution execution disagrees with EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION")
+chunk_size_field="stop_gradient_contribution_target_lane_chunk_size"
+if chunk_size_field not in adag or adag[chunk_size_field] != expected_chunk_size:
+    raise SystemExit("run config target-lane chunk size disagrees with EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE")
 declared_embedding_edge_materialization=adag.get("embedding_edge_materialization")
 if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
@@ -231,6 +242,7 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$CONFIG" "$MANIFEST" "$ARTIFACT_ROOT" "$WAVE" \
         "$ONLY_ARTIFACT_ID" "$EXPECTED_ATTENTION_BACKEND" \
         "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION" \
+        "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
         "$WIDTH1_SOURCE_MANIFEST_FILE_SHA256" "$REPO_ROOT" \
         "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
         "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
@@ -250,6 +262,7 @@ export TRANSFORMERS_OFFLINE=1
 echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} wave=${WAVE} source=${ONLY_ARTIFACT_ID}"
 echo "backend=${EXPECTED_ATTENTION_BACKEND} config=${CONFIG} manifest=${MANIFEST}"
 echo "stop_gradient_contribution_execution=${EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION}"
+echo "stop_gradient_contribution_target_lane_chunk_size=${EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
 echo "cross_layer_jacobian_execution=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-legacy_unbound}"
@@ -306,10 +319,12 @@ expected_source=sys.argv[2]
 expected_output=str(pathlib.Path(sys.argv[3]))
 expected_backend=sys.argv[4]
 expected_contribution_execution=sys.argv[5]
-expected_gpu=sys.argv[6]
-expected_allocator_policy=sys.argv[7] or None
-expected_embedding_edge_materialization=sys.argv[8] or None
-expected_cross_layer_jacobian_execution=sys.argv[9] or None
+expected_chunk_size_raw=sys.argv[6]
+expected_chunk_size=None if expected_chunk_size_raw == "none" else int(expected_chunk_size_raw)
+expected_gpu=sys.argv[7]
+expected_allocator_policy=sys.argv[8] or None
+expected_embedding_edge_materialization=sys.argv[9] or None
+expected_cross_layer_jacobian_execution=sys.argv[10] or None
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -331,6 +346,10 @@ artifact_adag=identity.get("adag_config", {})
 observed_contribution_execution=artifact_adag.get("stop_gradient_contribution_execution")
 if observed_contribution_execution != expected_contribution_execution:
     raise SystemExit("saved artifact contribution execution identity disagrees with requested strategy")
+chunk_size_field="stop_gradient_contribution_target_lane_chunk_size"
+observed_chunk_size=artifact_adag.get(chunk_size_field)
+if chunk_size_field not in artifact_adag or observed_chunk_size != expected_chunk_size:
+    raise SystemExit("saved artifact target-lane chunk size identity disagrees with requested strategy")
 observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materialization")
 if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
@@ -361,7 +380,9 @@ if expected_allocator_policy is not None:
         raise SystemExit("saved artifact lacks the exact requested allocator runtime receipt")' \
     "$SUMMARY_JSONL" "$ONLY_ARTIFACT_ID" "$EXPECTED_OUTPUT_DIR" \
     "$EXPECTED_ATTENTION_BACKEND" \
-    "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION" "$EXPECTED_GPU_NAME" \
+    "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION" \
+    "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
+    "$EXPECTED_GPU_NAME" \
     "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
     "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
     "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION"

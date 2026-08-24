@@ -47,6 +47,9 @@ CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS = (
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
 )
 CROSS_LAYER_JACOBIAN_AB_STRATEGIES = ("full_model_v1", "cached_range_v1")
+CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.stop_gradient_contribution_target_lane_chunk_size",
+)
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",
     "selected_target_activations",
@@ -56,6 +59,7 @@ CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
 _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config.stop_gradient_attention_backend",
     "artifact_identity.adag_config.stop_gradient_contribution_execution",
+    "artifact_identity.adag_config.stop_gradient_contribution_target_lane_chunk_size",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -208,9 +212,9 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
         ):
             raise ValueError(
                 "identity difference may only allow the stop-gradient attention "
-                "backend, stop-gradient contribution execution, CUDA allocator "
-                "policy, embedding-edge materialization, cross-layer Jacobian "
-                "execution, or fields under "
+                "backend, stop-gradient contribution execution or target-lane "
+                "chunk size, CUDA allocator policy, embedding-edge "
+                "materialization, cross-layer Jacobian execution, or fields under "
                 "code_revision/runtime_environment: "
                 f"{path!r}"
             )
@@ -1158,6 +1162,8 @@ def compare_execution_artifacts(
         EXECUTION_REPORT_SCHEMA
         if {
             "artifact_identity.adag_config.stop_gradient_contribution_execution",
+            "artifact_identity.adag_config."
+            "stop_gradient_contribution_target_lane_chunk_size",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",
