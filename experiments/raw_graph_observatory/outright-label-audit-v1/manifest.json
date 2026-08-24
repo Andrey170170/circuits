@@ -1,0 +1,35 @@
+{
+  "claim_boundaries": [
+    "This is a human audit view of source labels, not an evaluation.",
+    "Source labels and rationales are displayed verbatim and are not treated as validated verdicts.",
+    "The page contains no tracing-target selection, token identities, model inference, scoring, or neuron interpretation."
+  ],
+  "counts": {
+    "completions": 272,
+    "containsUnfaithful": 7,
+    "defaultModelContainsUnfaithful": 2
+  },
+  "files": {
+    "review.html": {
+      "bytes": 953992,
+      "sha256": "0eac371fc8718c728e6eb39d9bdc57499b377f57c71f7f1a862535bd495445e7"
+    }
+  },
+  "manifest_sha256": "08701ff79f12d35dc6960649e92f29802e16dbd68c68938026d21c5425ceeebb",
+  "page_sha256": "0eac371fc8718c728e6eb39d9bdc57499b377f57c71f7f1a862535bd495445e7",
+  "payload_sha256": "ac60cdd12159b11778ff03a812e8f92e23cae05dd3efaccf08e7e4629f43a77d",
+  "schema_version": "adag.raw-graph-observatory.label-audit.v1",
+  "scope": {
+    "all_source_completions_available": true,
+    "default_filter": "contains-unfaithful",
+    "default_model": "Qwen/Qwen3-4B-Thinking-2507"
+  },
+  "source_review": {
+    "manifest_sha256": "3e26f6c58e21ce8642b04f69c45f8c6d88b0317f7c1b0136bafe004a4d5f5b05",
+    "page_sha256": "953925ca946af2f05826b28c4db5e4e51faabfe9b6de166c664c2c46e3b41837",
+    "path": "/uufs/chpc.utah.edu/common/home/u1653998/projects/worktrees/circuits-inspect-traced-graphs/experiments/raw_graph_observatory/outright-task-review-v2",
+    "payload_sha256": "6e0749b1cfc957882cc3a720f6a6e5a1b54793bad438c19bd8c89eb935af3eaf",
+    "schema_version": "adag.raw-graph-observatory.outright-review.v2"
+  },
+  "status": "human_source_label_audit"
+}
