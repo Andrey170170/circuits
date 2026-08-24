@@ -203,6 +203,21 @@ parity claim. `sparse_source_leaf_v1` remains opt-in and unpromoted. Before exte
 it, freeze the numerical policy and validate it on a separate target, then choose the next memory
 owner rather than assuming wider sparse-source integration will lower the global peak.
 
+### Level 1b development slice: bounded target-lane VJP chunks
+
+The next bounded slice addresses the measured 13.45 GB backward workspace without changing source
+selection. `stop_gradient_contribution_target_lane_chunk_size` limits contiguous target lanes per
+stop-gradient contribution VJP while keeping all batch lanes for those targets together. `None`
+preserves the historical all-target execution. Positive widths project each raw dense or sparse
+chunk immediately into canonical `(coordinate, batch, target)` order, retain the graph for every
+non-final chunk, and apply the adapter's historical graph-lifetime contract to the final chunk.
+
+This is an orthogonal, provenance-bearing stop-gradient contribution option. It does not chunk the
+ordinary combined contribution path, selected-neuron attribution lanes, embedding contributions,
+or cross-layer Jacobians. CPU qualification covers algebra, ordering, validation, telemetry, and
+failure cleanup only; no capacity or runtime benefit should be claimed until a same-commit A100
+comparison measures the contribution-stage and run-wide peaks.
+
 ## Level 2: host-backed boundary streaming and source-group reuse
 
 ### Method

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+import weakref
 from dataclasses import asdict
 from types import SimpleNamespace
 from typing import cast
@@ -12,11 +14,13 @@ from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.contribution_execution import (
     StopGradientContributionExecution,
     resolve_stop_gradient_contribution_execution,
+    resolve_stop_gradient_contribution_target_lane_chunk_size,
     run_stop_gradient_contribution_forward,
     run_stop_gradient_contribution_vjp,
 )
 from circuits.tracing.instrumentation import TraceInstrumentation
 from circuits.tracing.sparse_source_injection import sparse_source_injection
+from circuits.tracing.tensor_receipts import raw_tensor_sha256
 from torch import nn
 
 
@@ -89,6 +93,18 @@ class _FailingEmbedding(nn.Module):
 def _down_projection(model: _FakeModel, layer: int = 0) -> nn.Module:
     mlp = model.model.layers[layer].mlp
     return mlp.mlp.down_proj if hasattr(mlp, "mlp") else mlp.down_proj
+
+
+def _five_targets(logits: torch.Tensor) -> torch.Tensor:
+    return torch.stack(
+        [
+            logits[:, -1, 0],
+            logits[:, -2, 1],
+            logits[:, 0, 2],
+            logits[:, 1, 3],
+            logits[:, -1, 4],
+        ]
+    )
 
 
 @pytest.mark.parametrize("nested", [False, True])
@@ -276,6 +292,212 @@ def test_execution_is_validated_and_restored_in_adag_config() -> None:
     restored = ADAGConfig.__new__(ADAGConfig)
     restored.__setstate__({"device": "cpu"})
     assert restored.stop_gradient_contribution_execution == "full_graph_v1"
+    assert restored.stop_gradient_contribution_target_lane_chunk_size is None
+
+
+def test_target_lane_chunk_size_is_validated_and_round_trips_in_config() -> None:
+    config = ADAGConfig(
+        device="cpu",
+        stop_gradient_contribution_target_lane_chunk_size=2,
+    )
+    assert asdict(config)["stop_gradient_contribution_target_lane_chunk_size"] == 2
+    assert resolve_stop_gradient_contribution_target_lane_chunk_size(None) is None
+    assert resolve_stop_gradient_contribution_target_lane_chunk_size(3) == 3
+
+    for invalid in (0, -1, True, False, 1.5, "2"):
+        with pytest.raises(ValueError, match="positive integer or None"):
+            resolve_stop_gradient_contribution_target_lane_chunk_size(  # type: ignore[arg-type]
+                invalid
+            )
+        with pytest.raises(ValueError, match="positive integer or None"):
+            ADAGConfig(
+                stop_gradient_contribution_target_lane_chunk_size=invalid  # type: ignore[arg-type]
+            )
+
+
+@pytest.mark.parametrize(
+    "execution", ["full_graph_v1", "source_leaf_v1", "sparse_source_leaf_v1"]
+)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("chunk_size", [1, 2, 99])
+def test_target_lane_chunking_is_exact_and_preserves_canonical_order(
+    execution: StopGradientContributionExecution,
+    dtype: torch.dtype,
+    chunk_size: int,
+) -> None:
+    torch.manual_seed(101)
+    model = _FakeModel(nested=True).to(dtype=dtype)
+    input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+    coordinates = [[2, 6], [0, 1], [2, 6], [1, 4]]
+
+    reference = run_stop_gradient_contribution_forward(
+        model,
+        input_ids,
+        None,
+        layer=0,
+        execution=execution,
+        selected_coordinates=coordinates,
+    )
+    reference_vjp = run_stop_gradient_contribution_vjp(
+        reference, _five_targets(reference.logits), layer=0
+    )
+    chunked = run_stop_gradient_contribution_forward(
+        model,
+        input_ids,
+        None,
+        layer=0,
+        execution=execution,
+        selected_coordinates=coordinates,
+    )
+    chunked_vjp = run_stop_gradient_contribution_vjp(
+        chunked,
+        _five_targets(chunked.logits),
+        layer=0,
+        target_lane_chunk_size=chunk_size,
+    )
+
+    torch.testing.assert_close(chunked.logits, reference.logits, atol=0, rtol=0)
+    torch.testing.assert_close(chunked_vjp, reference_vjp, atol=0, rtol=0)
+    assert chunked_vjp.shape == (len(coordinates), 2, 5)
+    torch.testing.assert_close(chunked_vjp[0], chunked_vjp[2], atol=0, rtol=0)
+
+
+def test_target_lane_chunking_telemetry_keeps_all_batch_lanes_together() -> None:
+    model = _FakeModel(nested=True)
+    instrumentation = TraceInstrumentation(device="cpu")
+    coordinates = [[0, 1], [2, 6], [0, 1]]
+    forward = run_stop_gradient_contribution_forward(
+        model,
+        torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        None,
+        layer=0,
+        execution="sparse_source_leaf_v1",
+        selected_coordinates=coordinates,
+        instrumentation=instrumentation,
+    )
+    result = run_stop_gradient_contribution_vjp(
+        forward,
+        _five_targets(forward.logits),
+        layer=0,
+        target_lane_chunk_size=2,
+        instrumentation=instrumentation,
+    )
+
+    snapshot = instrumentation.snapshot()
+    layer = snapshot["layers"][0]
+    counters = snapshot["counters"]
+    assert layer["stop_gradient_contribution_raw_vjp_shape"] is None
+    assert layer["stop_gradient_contribution_raw_vjp_chunk_shapes"] == [
+        [4, 2, 3],
+        [4, 2, 3],
+        [2, 2, 3],
+    ]
+    assert layer["stop_gradient_contribution_grad_outputs_shape"] is None
+    assert layer["stop_gradient_contribution_max_grad_outputs_shape"] == [4, 4]
+    assert layer["stop_gradient_contribution_target_lane_count"] == 5
+    assert layer["stop_gradient_contribution_target_lane_chunk_size_requested"] == 2
+    assert layer["stop_gradient_contribution_target_lane_chunk_size_resolved"] == 2
+    assert layer["stop_gradient_contribution_target_lane_chunk_count"] == 3
+    assert layer["stop_gradient_contribution_max_materialized_target_lanes"] == 2
+    assert layer["stop_gradient_contribution_max_materialized_autograd_lanes"] == 4
+    assert counters["stop_gradient_contribution_vjp_chunk_executions"] == 3
+    assert counters["stop_gradient_contribution_max_materialized_target_lanes"] == 2
+    assert counters["stop_gradient_contribution_max_materialized_autograd_lanes"] == 4
+    assert result.shape == (3, 2, 5)
+    assert layer["stop_gradient_contribution_projected_vjp_sha256"] == (
+        raw_tensor_sha256(result)
+    )
+
+
+def test_dense_raw_vjp_chunk_dies_before_next_backward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _FakeModel(nested=True)
+    forward = run_stop_gradient_contribution_forward(
+        model,
+        torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        None,
+        layer=0,
+        execution="source_leaf_v1",
+        selected_coordinates=[[0, 1], [2, 6]],
+    )
+    original_grad = torch.autograd.grad
+    raw_chunk_refs: list[weakref.ReferenceType[torch.Tensor]] = []
+
+    def observe_chunk_lifetime(*args, **kwargs):
+        if raw_chunk_refs:
+            gc.collect()
+            assert raw_chunk_refs[-1]() is None
+        result = original_grad(*args, **kwargs)
+        raw_chunk_refs.append(weakref.ref(result[0]))
+        return result
+
+    monkeypatch.setattr(torch.autograd, "grad", observe_chunk_lifetime)
+    result = run_stop_gradient_contribution_vjp(
+        forward,
+        torch.stack(
+            [
+                forward.logits[:, -1, 0],
+                forward.logits[:, -2, 1],
+                forward.logits[:, 0, 2],
+            ]
+        ),
+        layer=0,
+        target_lane_chunk_size=1,
+    )
+
+    gc.collect()
+    assert len(raw_chunk_refs) == 3
+    assert raw_chunk_refs[-1]() is None
+    assert result.shape == (2, 2, 3)
+
+
+@pytest.mark.parametrize(
+    ("execution", "expected_retain_graph"),
+    [
+        ("full_graph_v1", [True, True, True]),
+        ("source_leaf_v1", [True, True, False]),
+        ("sparse_source_leaf_v1", [True, True, False]),
+    ],
+)
+def test_target_lane_chunks_preserve_final_graph_lifetime_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    execution: StopGradientContributionExecution,
+    expected_retain_graph: list[bool],
+) -> None:
+    model = _FakeModel(nested=True)
+    coordinates = [[0, 1], [2, 6]]
+    forward = run_stop_gradient_contribution_forward(
+        model,
+        torch.tensor([[1, 2, 3]]),
+        None,
+        layer=0,
+        execution=execution,
+        selected_coordinates=coordinates,
+    )
+    original_grad = torch.autograd.grad
+    observed_retain_graph: list[bool] = []
+
+    def record_grad(*args, **kwargs):
+        observed_retain_graph.append(bool(kwargs["retain_graph"]))
+        return original_grad(*args, **kwargs)
+
+    monkeypatch.setattr(torch.autograd, "grad", record_grad)
+    result = run_stop_gradient_contribution_vjp(
+        forward,
+        torch.stack(
+            [
+                forward.logits[:, -1, 0],
+                forward.logits[:, -2, 1],
+                forward.logits[:, 0, 2],
+            ]
+        ),
+        layer=0,
+        target_lane_chunk_size=1,
+    )
+
+    assert result.shape == (2, 1, 3)
+    assert observed_retain_graph == expected_retain_graph
 
 
 @pytest.mark.parametrize("nested", [False, True])
@@ -544,5 +766,50 @@ def test_sparse_vjp_failure_leaves_no_execution_hook_or_parameter_mutation() -> 
     with pytest.raises(RuntimeError, match="not have been used"):
         run_stop_gradient_contribution_vjp(forward, unrelated_targets, layer=0)
 
+    assert tuple(projection._forward_hooks) == hooks_before
+    assert [parameter.requires_grad for parameter in model.parameters()] == flags_before
+
+
+def test_target_lane_chunk_failure_leaves_no_hook_or_parameter_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _FakeModel(nested=True)
+    projection = _down_projection(model)
+    hooks_before = tuple(projection._forward_hooks)
+    flags_before = [parameter.requires_grad for parameter in model.parameters()]
+    forward = run_stop_gradient_contribution_forward(
+        model,
+        torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        None,
+        layer=0,
+        execution="sparse_source_leaf_v1",
+        selected_coordinates=[[0, 1], [2, 6]],
+    )
+    original_grad = torch.autograd.grad
+    calls = 0
+
+    def fail_second_chunk(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("synthetic chunk VJP failure")
+        return original_grad(*args, **kwargs)
+
+    monkeypatch.setattr(torch.autograd, "grad", fail_second_chunk)
+    with pytest.raises(RuntimeError, match="synthetic chunk VJP failure"):
+        run_stop_gradient_contribution_vjp(
+            forward,
+            torch.stack(
+                [
+                    forward.logits[:, -1, 0],
+                    forward.logits[:, -2, 1],
+                    forward.logits[:, 0, 2],
+                ]
+            ),
+            layer=0,
+            target_lane_chunk_size=1,
+        )
+
+    assert calls == 2
     assert tuple(projection._forward_hooks) == hooks_before
     assert [parameter.requires_grad for parameter in model.parameters()] == flags_before

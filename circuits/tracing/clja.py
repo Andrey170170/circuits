@@ -28,6 +28,7 @@ from circuits.tracing.contribution_execution import (
     DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION,
     StopGradientContributionExecution,
     resolve_stop_gradient_contribution_execution,
+    resolve_stop_gradient_contribution_target_lane_chunk_size,
 )
 from circuits.tracing.cross_layer_jacobian_execution import (
     DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION,
@@ -142,6 +143,8 @@ class ADAGConfig:
     cross_layer_jacobian_execution: CrossLayerJacobianExecution = (
         DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION
     )
+    # Appended to preserve the positional order of historical fields.
+    stop_gradient_contribution_target_lane_chunk_size: int | None = None
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
@@ -150,6 +153,9 @@ class ADAGConfig:
         )
         resolve_embedding_edge_materialization(self.embedding_edge_materialization)
         resolve_cross_layer_jacobian_execution(self.cross_layer_jacobian_execution)
+        resolve_stop_gradient_contribution_target_lane_chunk_size(
+            self.stop_gradient_contribution_target_lane_chunk_size
+        )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Load artifacts pickled before stop-gradient strategies were explicit."""
@@ -167,12 +173,17 @@ class ADAGConfig:
             self.embedding_edge_materialization = DEFAULT_EMBEDDING_EDGE_MATERIALIZATION
         if "cross_layer_jacobian_execution" not in state:
             self.cross_layer_jacobian_execution = DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION
+        if "stop_gradient_contribution_target_lane_chunk_size" not in state:
+            self.stop_gradient_contribution_target_lane_chunk_size = None
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
         )
         resolve_embedding_edge_materialization(self.embedding_edge_materialization)
         resolve_cross_layer_jacobian_execution(self.cross_layer_jacobian_execution)
+        resolve_stop_gradient_contribution_target_lane_chunk_size(
+            self.stop_gradient_contribution_target_lane_chunk_size
+        )
 
 
 @dataclass(frozen=True)
@@ -293,6 +304,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     use_stop_grad_on_mlps = config.use_stop_grad_on_mlps
     stop_gradient_attention_backend = config.stop_gradient_attention_backend
     stop_gradient_contribution_execution = config.stop_gradient_contribution_execution
+    stop_gradient_contribution_target_lane_chunk_size = (
+        config.stop_gradient_contribution_target_lane_chunk_size
+    )
     embedding_edge_materialization = config.embedding_edge_materialization
     cross_layer_jacobian_execution = config.cross_layer_jacobian_execution
     if instrumentation is not None:
@@ -303,6 +317,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "stop_gradient_contribution_execution",
             stop_gradient_contribution_execution,
+        )
+        instrumentation.set_counter(
+            "stop_gradient_contribution_target_lane_chunk_size",
+            stop_gradient_contribution_target_lane_chunk_size,
         )
         instrumentation.set_counter(
             "embedding_edge_materialization",
@@ -675,6 +693,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 instrumentation=instrumentation,
                 attention_backend=stop_gradient_attention_backend,
                 contribution_execution=stop_gradient_contribution_execution,
+                contribution_target_lane_chunk_size=(
+                    stop_gradient_contribution_target_lane_chunk_size
+                ),
             )
         # store neuron attributions and contributions (keep on CPU to save GPU memory)
         neuron_attr_map_with_stop_grad_on_mlps: dict[NeuronIdx, torch.Tensor] = {}

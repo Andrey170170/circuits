@@ -53,3 +53,14 @@ Treat `sparse_source_leaf_v1` as unqualified until both focused CPU algebra and
 lifecycle tests and an accepted same-target, same-GPU comparison against
 `source_leaf_v1` pass the declared forward, Jacobian, topology, value, memory,
 and runtime gates. CPU tests alone do not qualify scientific use.
+
+`ADAGConfig.stop_gradient_contribution_target_lane_chunk_size` independently
+limits how many contiguous target lanes are differentiated by each
+stop-gradient contribution VJP. `None` is the compatibility default and uses
+all targets at once; a positive integer slices only the target axis and keeps
+every batch lane for each target together. Each chunk is projected into
+canonical `(coordinate, batch, target)` order before the next backward pass.
+This option currently applies only to the stop-gradient per-layer contribution
+loop, composes with every contribution execution adapter, and remains
+unqualified for scientific use until same-GPU memory, runtime, and value gates
+are recorded.

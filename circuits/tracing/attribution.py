@@ -509,6 +509,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
     contribution_execution: StopGradientContributionExecution = (
         DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION
     ),
+    contribution_target_lane_chunk_size: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions from source tokens and contributions to target tokens
@@ -804,6 +805,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                 contribution_forward,
                 tgt_vec,
                 layer=lid,
+                target_lane_chunk_size=contribution_target_lane_chunk_size,
                 instrumentation=instrumentation,
             )
         )

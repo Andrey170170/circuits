@@ -6,8 +6,6 @@ only the expensive forward/VJP execution behind one prepared-executor seam.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 
@@ -23,6 +21,7 @@ from circuits.tracing.grad import (
     resolve_stop_gradient_attention_backend,
 )
 from circuits.tracing.instrumentation import TraceInstrumentation
+from circuits.tracing.tensor_receipts import raw_tensor_sha256
 
 CrossLayerJacobianExecution = Literal["full_model_v1", "cached_range_v1"]
 DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION: CrossLayerJacobianExecution = "full_model_v1"
@@ -147,34 +146,15 @@ def _selected_activations(
     )
 
 
-def _raw_tensor_sha256(tensor: torch.Tensor) -> str:
-    """Hash dtype, shape, and exact compact tensor bytes without value casting."""
-
-    value = tensor.detach().contiguous()
-    header = json.dumps(
-        {"dtype": str(value.dtype), "shape": list(value.shape)},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("ascii")
-    digest = hashlib.sha256()
-    digest.update(header)
-    digest.update(b"\0")
-    # A size-one trailing dimension may remain "contiguous" with a non-unit
-    # stride. Flatten first so dtype reinterpretation always has byte-viewable
-    # storage without changing element order or values.
-    digest.update(value.reshape(-1).view(torch.uint8).cpu().numpy().tobytes())
-    return digest.hexdigest()
-
-
 def _receipts(
     source_values: torch.Tensor,
     target_values: torch.Tensor,
     raw_jacobian: torch.Tensor,
 ) -> CrossLayerJacobianReceipts:
     return CrossLayerJacobianReceipts(
-        selected_source_activations_sha256=_raw_tensor_sha256(source_values),
-        selected_target_activations_sha256=_raw_tensor_sha256(target_values),
-        selected_raw_jacobian_sha256=_raw_tensor_sha256(raw_jacobian),
+        selected_source_activations_sha256=raw_tensor_sha256(source_values),
+        selected_target_activations_sha256=raw_tensor_sha256(target_values),
+        selected_raw_jacobian_sha256=raw_tensor_sha256(raw_jacobian),
     )
 
 
