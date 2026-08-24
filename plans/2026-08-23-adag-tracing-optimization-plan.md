@@ -145,6 +145,36 @@ numerically valid, and stream projected results so pair-local graphs die promptl
 largest architectural optimization and requires separate parity gates for source activation,
 target activation, pair Jacobian, retained edges, and whole artifact.
 
+Implementation status: implemented and CPU-qualified; A100 qualification pending. The accepted P3
+artifact makes the performance loop explicit:
+cross-layer expansion takes 103.95 seconds and fails the provisional under-50-second P4 target.
+Pair Jacobians account for 101.76 seconds across 190 pairs, while pair materialization takes only
+1.43 seconds. The legacy implementation executes all 36 decoder layers for every pair, retains a
+full source-width VJP tensor, and copies that tensor through `torch.cat` before selecting the few
+planned source coordinates.
+
+The first P4 seam is a named cross-layer Jacobian execution strategy. `full_model_v1` remains the
+default and exact historical reference; `cached_range_v1` is the candidate. Pair planning, frozen
+topology, thresholds, target-contribution reduction, and edge ordering remain in `clja.py`. The
+candidate prepares source-layer inputs under the exact stop-gradient attention implementation,
+replays only the real decoder layers from source through target, begins autograd at an equal-valued
+source leaf, terminates at the target MLP input, and projects every target VJP chunk to ordered
+selected-source coordinates before accumulation. It must never silently fall back, remove
+unowned hooks, or retain a pair graph after returning. Integrated-gradients execution remains on
+the legacy strategy until separately designed and qualified.
+
+Qualification proceeds in two steps: first, the lifted `full_model_v1` artifact must match the
+trusted P3 vectorized artifact exactly; second, the strict full-to-cached comparison must use the
+same commit and A100 model, allow only the scalar execution-strategy identity field to differ,
+require exact topology, and apply zero tolerance to all saved values. Each canonical pair records
+raw-dtype SHA-256 receipts over the ordered selected source activations, target activations, and
+raw selected Jacobian before source multiplication or normalization. The strict comparator fails
+closed on missing, malformed, reordered, or unequal receipts, so retained-edge pruning cannot hide
+an internal-path difference. Focused and broader tracing regressions pass on CPU, including exact
+float32/BF16 multi-chunk parity and injected preparation, replay, and VJP failures. A later
+source-group sweep may reuse one graph for several targets, but it will be a separately named
+adapter after pairwise partial execution establishes the target-boundary contract.
+
 ### P5. Batched-VJP lane chunking as a capacity fallback
 
 Split the five candidate lanes only if P1--P4 do not provide sufficient headroom. Telemetry shows

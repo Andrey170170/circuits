@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from circuits.tracing.backend_qualification import (
+    CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
@@ -84,6 +85,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--cross-layer-jacobian-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed cross-layer Jacobian A/B profile: canonical "
+            "full-model reference and cached-range candidate, same GPU model, "
+            "exact topology, zero numerical tolerances, and only the exact "
+            "Jacobian execution strategy field may differ."
+        ),
+    )
+    parser.add_argument(
         "--allow-identity-difference",
         action="append",
         default=[],
@@ -118,13 +129,18 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
         group: (getattr(args, f"{group}_atol"), getattr(args, f"{group}_rtol"))
         for group in TOLERANCE_GROUPS
     }
-    if args.cuda_allocator_ab and args.embedding_edge_ab:
-        raise ValueError(
-            "--cuda-allocator-ab and --embedding-edge-ab are mutually exclusive"
+    selected_profiles = [
+        option
+        for enabled, option in (
+            (args.cuda_allocator_ab, "--cuda-allocator-ab"),
+            (args.embedding_edge_ab, "--embedding-edge-ab"),
+            (args.cross_layer_jacobian_ab, "--cross-layer-jacobian-ab"),
         )
-    strict_profile = "--cuda-allocator-ab" if args.cuda_allocator_ab else None
-    if args.embedding_edge_ab:
-        strict_profile = "--embedding-edge-ab"
+        if enabled
+    ]
+    if len(selected_profiles) > 1:
+        raise ValueError(f"{', '.join(selected_profiles)} are mutually exclusive")
+    strict_profile = selected_profiles[0] if selected_profiles else None
     if strict_profile is not None:
         if args.allow_identity_difference:
             raise ValueError(
@@ -137,11 +153,12 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(
                 f"{strict_profile} fixes every numerical tolerance at zero"
             )
-        identity_paths = (
-            CUDA_ALLOCATOR_AB_IDENTITY_PATHS
-            if args.cuda_allocator_ab
-            else EMBEDDING_EDGE_AB_IDENTITY_PATHS
-        )
+        if args.cuda_allocator_ab:
+            identity_paths = CUDA_ALLOCATOR_AB_IDENTITY_PATHS
+        elif args.embedding_edge_ab:
+            identity_paths = EMBEDDING_EDGE_AB_IDENTITY_PATHS
+        else:
+            identity_paths = CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS
         return {
             "allowed_identity_difference_paths": identity_paths,
             "tolerances": {
@@ -154,6 +171,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             "require_exact_edge_topology": True,
             "require_canonical_cuda_allocator_ab": args.cuda_allocator_ab,
             "require_canonical_embedding_edge_ab": args.embedding_edge_ab,
+            "require_canonical_cross_layer_jacobian_ab": (args.cross_layer_jacobian_ab),
         }
 
     return {
@@ -169,6 +187,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "require_canonical_cuda_allocator_ab": False,
         "require_canonical_embedding_edge_ab": False,
+        "require_canonical_cross_layer_jacobian_ab": False,
     }
 
 

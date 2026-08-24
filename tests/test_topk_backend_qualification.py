@@ -7,6 +7,7 @@ from copy import deepcopy
 import pytest
 from circuits.tracing.artifact import save_topk_compact_trace
 from circuits.tracing.backend_qualification import (
+    CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
@@ -29,6 +30,7 @@ def _manifest(
     contribution_execution: str | None = "full_graph_v1",
     allocator_policy: str | None = None,
     embedding_edge_materialization: str | None = None,
+    cross_layer_jacobian_execution: str | None = None,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -87,6 +89,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
         ] = embedding_edge_materialization
+    if cross_layer_jacobian_execution is not None:
+        manifest["artifact_identity"]["adag_config"][
+            "cross_layer_jacobian_execution"
+        ] = cross_layer_jacobian_execution
     if allocator_policy is not None:
         allocator_value = (
             None if allocator_policy == "default_v1" else "expandable_segments:True"
@@ -675,6 +681,271 @@ def test_embedding_edge_materialization_requires_exact_allowlist_path(
             candidate,
             allowed_identity_difference_paths=[
                 "artifact_identity.adag_config.embedding_edge_materialization.*"
+            ],
+        )
+
+
+def _save_cross_layer_jacobian_pair(
+    tmp_path,
+    *,
+    reference_strategy: str = "full_model_v1",
+    candidate_strategy: str = "cached_range_v1",
+    candidate_code_revision: str = "same-commit",
+    reference_receipts: list[dict[str, str]] | None = None,
+    candidate_receipts: list[dict[str, str]] | None = None,
+    include_candidate_pair_coordinates: bool = True,
+):
+    reference_trace = _topk_trace()
+    candidate_trace = deepcopy(reference_trace)
+    _complete_trace_metadata(reference_trace)
+    _complete_trace_metadata(candidate_trace)
+    canonical_receipts = [
+        {"name": "selected_source_activations", "sha256": "1" * 64},
+        {"name": "selected_target_activations", "sha256": "2" * 64},
+        {"name": "selected_raw_jacobian", "sha256": "3" * 64},
+    ]
+    if reference_receipts is None:
+        reference_receipts = deepcopy(canonical_receipts)
+    if candidate_receipts is None:
+        candidate_receipts = deepcopy(canonical_receipts)
+    reference_trace.circuit_data.trace_metadata["instrumentation"] = {
+        "layer_pairs": [
+            {
+                "src_layer": 1,
+                "tgt_layer": 3,
+                "exact_receipts": reference_receipts,
+            }
+        ]
+    }
+    candidate_pair = {"exact_receipts": candidate_receipts}
+    if include_candidate_pair_coordinates:
+        candidate_pair.update({"src_layer": 1, "tgt_layer": 3})
+    candidate_trace.circuit_data.trace_metadata["instrumentation"] = {
+        "layer_pairs": [candidate_pair]
+    }
+    reference_path = tmp_path / "cross-layer-jacobian-full-model"
+    candidate_path = tmp_path / "cross-layer-jacobian-cached-range"
+    save_topk_compact_trace(
+        reference_path,
+        reference_trace,
+        manifest=_manifest(
+            "eager",
+            cross_layer_jacobian_execution=reference_strategy,
+            code_revision="same-commit",
+        ),
+    )
+    save_topk_compact_trace(
+        candidate_path,
+        candidate_trace,
+        manifest=_manifest(
+            "eager",
+            cross_layer_jacobian_execution=candidate_strategy,
+            code_revision=candidate_code_revision,
+        ),
+    )
+    return reference_path, candidate_path
+
+
+def _cross_layer_jacobian_options(reference, candidate, output):
+    return comparison_options(
+        build_parser().parse_args(
+            [
+                "--reference",
+                str(reference),
+                "--candidate",
+                str(candidate),
+                "--output",
+                str(output),
+                "--cross-layer-jacobian-ab",
+            ]
+        )
+    )
+
+
+def test_cross_layer_jacobian_ab_passes_strict_canonical_profile(tmp_path) -> None:
+    reference, candidate = _save_cross_layer_jacobian_pair(tmp_path)
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        **_cross_layer_jacobian_options(reference, candidate, tmp_path / "unused.json"),
+    )
+
+    assert report["validation_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    assert report["cross_layer_jacobian_ab_contract"]["passed"] is True
+    assert report["cross_layer_jacobian_ab_contract"]["exact_receipts"]["passed"]
+    assert {gate["gate"] for gate in report["gates"]} >= {
+        "same_gpu_family",
+        "same_gpu_model",
+        "canonical_cross_layer_jacobian_ab_pair",
+        "exact_node_topology",
+        "exact_edge_topology",
+        *(f"{group}_numeric_tolerance" for group in TOLERANCE_GROUPS),
+    }
+    allowed = report["identity"]["artifact_identity"]["allowed_differences"]
+    assert {difference["path"] for difference in allowed} == set(
+        CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS
+    )
+
+
+@pytest.mark.parametrize("malformation", ["missing", "mismatched", "reordered"])
+def test_cross_layer_jacobian_ab_fails_closed_on_receipts(
+    tmp_path, malformation
+) -> None:
+    canonical = [
+        {"name": "selected_source_activations", "sha256": "1" * 64},
+        {"name": "selected_target_activations", "sha256": "2" * 64},
+        {"name": "selected_raw_jacobian", "sha256": "3" * 64},
+    ]
+    candidate = deepcopy(canonical)
+    if malformation == "missing":
+        candidate.pop()
+    elif malformation == "mismatched":
+        candidate[2]["sha256"] = "4" * 64
+    else:
+        candidate.reverse()
+    reference_path, candidate_path = _save_cross_layer_jacobian_pair(
+        tmp_path,
+        reference_receipts=canonical,
+        candidate_receipts=candidate,
+    )
+
+    report = compare_execution_artifacts(
+        reference_path,
+        candidate_path,
+        **_cross_layer_jacobian_options(
+            reference_path, candidate_path, tmp_path / "unused.json"
+        ),
+    )
+
+    receipt_contract = report["cross_layer_jacobian_ab_contract"]["exact_receipts"]
+    assert report["validation_passed"] is False
+    assert receipt_contract["passed"] is False
+
+
+def test_cross_layer_jacobian_ab_fails_closed_without_pair_coordinates(
+    tmp_path,
+) -> None:
+    reference_path, candidate_path = _save_cross_layer_jacobian_pair(
+        tmp_path,
+        include_candidate_pair_coordinates=False,
+    )
+
+    report = compare_execution_artifacts(
+        reference_path,
+        candidate_path,
+        **_cross_layer_jacobian_options(
+            reference_path, candidate_path, tmp_path / "unused.json"
+        ),
+    )
+
+    assert report["validation_passed"] is False
+    assert not report["cross_layer_jacobian_ab_contract"]["exact_receipts"]["passed"]
+
+
+def test_cross_layer_jacobian_ab_cli_is_strict_and_non_overridable() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--reference",
+            "reference",
+            "--candidate",
+            "candidate",
+            "--output",
+            "report.json",
+            "--cross-layer-jacobian-ab",
+        ]
+    )
+
+    options = comparison_options(args)
+
+    assert options["allowed_identity_difference_paths"] == (
+        CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_same_gpu_family"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+    assert options["require_canonical_cuda_allocator_ab"] is False
+    assert options["require_canonical_embedding_edge_ab"] is False
+    assert options["require_canonical_cross_layer_jacobian_ab"] is True
+    assert options["tolerances"] == {
+        group: NumericTolerance(absolute=0.0, relative=0.0)
+        for group in TOLERANCE_GROUPS
+    }
+
+    args.allow_identity_difference = ["artifact_identity.code_revision.*"]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        comparison_options(args)
+
+    args.allow_identity_difference = []
+    args.edge_rtol = 1e-6
+    with pytest.raises(ValueError, match="fixes every numerical tolerance at zero"):
+        comparison_options(args)
+
+    args.edge_rtol = None
+    args.embedding_edge_ab = True
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        comparison_options(args)
+
+
+def test_cross_layer_jacobian_ab_rejects_code_revision_drift(tmp_path) -> None:
+    reference, candidate = _save_cross_layer_jacobian_pair(
+        tmp_path, candidate_code_revision="different-commit"
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        **_cross_layer_jacobian_options(reference, candidate, tmp_path / "unused.json"),
+    )
+
+    assert report["validation_passed"] is False
+    disallowed = report["identity"]["artifact_identity"]["unallowed_differences"]
+    assert {difference["path"] for difference in disallowed} == {
+        "artifact_identity.code_revision.git_commit"
+    }
+
+
+@pytest.mark.parametrize(
+    ("reference_strategy", "candidate_strategy"),
+    [
+        ("full_model_v1", "full_model_v1"),
+        ("cached_range_v1", "full_model_v1"),
+    ],
+)
+def test_cross_layer_jacobian_ab_rejects_equal_or_reversed_lanes(
+    tmp_path, reference_strategy, candidate_strategy
+) -> None:
+    reference, candidate = _save_cross_layer_jacobian_pair(
+        tmp_path,
+        reference_strategy=reference_strategy,
+        candidate_strategy=candidate_strategy,
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
+        require_canonical_cross_layer_jacobian_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    assert report["cross_layer_jacobian_ab_contract"]["passed"] is False
+
+
+def test_cross_layer_jacobian_execution_requires_exact_allowlist_path(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_cross_layer_jacobian_pair(tmp_path)
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config.cross_layer_jacobian_execution.*"
             ],
         )
 

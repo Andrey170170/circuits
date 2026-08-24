@@ -43,12 +43,24 @@ EMBEDDING_EDGE_AB_IDENTITY_PATHS = (
     "artifact_identity.adag_config.embedding_edge_materialization",
 )
 EMBEDDING_EDGE_AB_STRATEGIES = ("scalar_v1", "vectorized_v1")
+CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.cross_layer_jacobian_execution",
+)
+CROSS_LAYER_JACOBIAN_AB_STRATEGIES = ("full_model_v1", "cached_range_v1")
+CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
+    "selected_source_activations",
+    "selected_target_activations",
+    "selected_raw_jacobian",
+)
 
-_ALLOWABLE_IDENTITY_RULES = (
+_ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config.stop_gradient_attention_backend",
     "artifact_identity.adag_config.stop_gradient_contribution_execution",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
+    "artifact_identity.adag_config.cross_layer_jacobian_execution",
+)
+_ALLOWABLE_SUBTREE_IDENTITY_RULES = (
     "artifact_identity.code_revision.",
     "artifact_identity.runtime_environment.",
 )
@@ -181,23 +193,24 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
                 "allowed identity difference paths must be non-empty strings"
             )
         prefix = path[:-2] if path.endswith(".*") else path
-        if path.endswith(".*") and prefix in _ALLOWABLE_IDENTITY_RULES[:4]:
+        if path.endswith(".*") and prefix in _ALLOWABLE_SCALAR_IDENTITY_RULES:
             raise ValueError(
                 "scalar execution-strategy identity differences must be "
                 f"allow-listed by exact path: {path!r}"
             )
         if not (
-            prefix in _ALLOWABLE_IDENTITY_RULES[:4]
+            prefix in _ALLOWABLE_SCALAR_IDENTITY_RULES
             or any(
                 prefix == allowed_prefix.removesuffix(".")
                 or prefix.startswith(allowed_prefix)
-                for allowed_prefix in _ALLOWABLE_IDENTITY_RULES[4:]
+                for allowed_prefix in _ALLOWABLE_SUBTREE_IDENTITY_RULES
             )
         ):
             raise ValueError(
                 "identity difference may only allow the stop-gradient attention "
                 "backend, stop-gradient contribution execution, CUDA allocator "
-                "policy, or fields under "
+                "policy, embedding-edge materialization, cross-layer Jacobian "
+                "execution, or fields under "
                 "code_revision/runtime_environment: "
                 f"{path!r}"
             )
@@ -745,6 +758,134 @@ def _embedding_edge_materialization_contract(
     }
 
 
+def _cross_layer_jacobian_execution_contract(
+    artifact: TopKCompactTraceArtifact,
+    *,
+    expected_strategy: str,
+) -> dict[str, Any]:
+    identity = artifact.manifest.get("artifact_identity")
+    adag_config = identity.get("adag_config") if isinstance(identity, Mapping) else None
+    observed_strategy = (
+        adag_config.get("cross_layer_jacobian_execution")
+        if isinstance(adag_config, Mapping)
+        else None
+    )
+    return {
+        "expected_strategy": expected_strategy,
+        "observed_strategy": observed_strategy,
+        "passed": observed_strategy == expected_strategy,
+    }
+
+
+def _cross_layer_jacobian_receipt_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+) -> dict[str, Any]:
+    """Require canonical ordered pair receipts to match exactly across lanes."""
+
+    def layer_pairs(artifact: TopKCompactTraceArtifact) -> Any:
+        instrumentation = artifact.topk_trace.circuit_data.trace_metadata.get(
+            "instrumentation"
+        )
+        return (
+            instrumentation.get("layer_pairs")
+            if isinstance(instrumentation, Mapping)
+            else None
+        )
+
+    def validate(pairs: Any) -> tuple[bool, list[dict[str, Any]]]:
+        summaries: list[dict[str, Any]] = []
+        if not isinstance(pairs, list) or not pairs:
+            return False, summaries
+        passed = True
+        coordinates: list[tuple[int, int]] = []
+        for pair in pairs:
+            if not isinstance(pair, Mapping):
+                passed = False
+                continue
+            src_layer = pair.get("src_layer")
+            tgt_layer = pair.get("tgt_layer")
+            coordinates_valid = (
+                type(src_layer) is int
+                and type(tgt_layer) is int
+                and 0 <= src_layer < tgt_layer
+            )
+            if coordinates_valid:
+                coordinates.append((src_layer, tgt_layer))
+            receipts = pair.get("exact_receipts")
+            receipt_names = (
+                [item.get("name") for item in receipts]
+                if isinstance(receipts, list)
+                and all(isinstance(item, Mapping) for item in receipts)
+                else None
+            )
+            receipt_hashes = (
+                [item.get("sha256") for item in receipts]
+                if receipt_names is not None
+                else None
+            )
+            receipt_shape_valid = (
+                receipt_names == list(CROSS_LAYER_JACOBIAN_RECEIPT_NAMES)
+                and receipt_hashes is not None
+                and all(set(item) == {"name", "sha256"} for item in receipts)
+                and all(
+                    isinstance(value, str)
+                    and len(value) == 64
+                    and all(character in "0123456789abcdef" for character in value)
+                    for value in receipt_hashes
+                )
+            )
+            passed = passed and coordinates_valid and receipt_shape_valid
+            summaries.append(
+                {
+                    "src_layer": src_layer,
+                    "tgt_layer": tgt_layer,
+                    "exact_receipts": receipts,
+                    "valid": coordinates_valid and receipt_shape_valid,
+                }
+            )
+        canonical_coordinates = sorted(
+            coordinates, key=lambda coordinate: (-coordinate[1], -coordinate[0])
+        )
+        passed = (
+            passed
+            and len(coordinates) == len(pairs)
+            and len(set(coordinates)) == len(coordinates)
+            and coordinates == canonical_coordinates
+        )
+        return passed, summaries
+
+    reference_valid, reference_pairs = validate(layer_pairs(reference))
+    candidate_valid, candidate_pairs = validate(layer_pairs(candidate))
+    pair_order_equal = [
+        (pair.get("src_layer"), pair.get("tgt_layer")) for pair in reference_pairs
+    ] == [(pair.get("src_layer"), pair.get("tgt_layer")) for pair in candidate_pairs]
+    receipt_hashes_equal = (
+        reference_valid
+        and candidate_valid
+        and len(reference_pairs) == len(candidate_pairs)
+        and all(
+            reference_pair["exact_receipts"] == candidate_pair["exact_receipts"]
+            for reference_pair, candidate_pair in zip(
+                reference_pairs, candidate_pairs, strict=True
+            )
+        )
+    )
+    checks = {
+        "reference_presence_and_order": reference_valid,
+        "candidate_presence_and_order": candidate_valid,
+        "pair_order_equal": pair_order_equal,
+        "receipt_hashes_exact": receipt_hashes_equal,
+    }
+    return {
+        "receipt_names": list(CROSS_LAYER_JACOBIAN_RECEIPT_NAMES),
+        "reference_pairs": reference_pairs,
+        "candidate_pairs": candidate_pairs,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def compare_execution_artifacts(
     reference_path: str | Path,
     candidate_path: str | Path,
@@ -757,13 +898,14 @@ def compare_execution_artifacts(
     require_exact_edge_topology: bool = False,
     require_canonical_cuda_allocator_ab: bool = False,
     require_canonical_embedding_edge_ab: bool = False,
+    require_canonical_cross_layer_jacobian_ab: bool = False,
 ) -> dict[str, Any]:
     """Compare two saved execution traces under explicit qualification gates.
 
     The historical public name is retained for compatibility. Callers may
     explicitly qualify a named attention, contribution, allocator, or
-    embedding-edge execution strategy, but no other scientific configuration
-    field.
+    embedding-edge, or cross-layer Jacobian execution strategy, but no other
+    scientific configuration field.
     """
 
     allowed_paths = _validate_allowed_identity_paths(allowed_identity_difference_paths)
@@ -930,6 +1072,32 @@ def compare_execution_artifacts(
                 "passed": embedding_edge_contract["passed"],
             }
         )
+    cross_layer_jacobian_contract = None
+    if require_canonical_cross_layer_jacobian_ab:
+        reference_cross_layer_contract = _cross_layer_jacobian_execution_contract(
+            reference, expected_strategy=CROSS_LAYER_JACOBIAN_AB_STRATEGIES[0]
+        )
+        candidate_cross_layer_contract = _cross_layer_jacobian_execution_contract(
+            candidate, expected_strategy=CROSS_LAYER_JACOBIAN_AB_STRATEGIES[1]
+        )
+        receipt_contract = _cross_layer_jacobian_receipt_contract(reference, candidate)
+        cross_layer_jacobian_contract = {
+            "reference": reference_cross_layer_contract,
+            "candidate": candidate_cross_layer_contract,
+            "exact_receipts": receipt_contract,
+            "passed": (
+                reference_cross_layer_contract["passed"]
+                and candidate_cross_layer_contract["passed"]
+                and receipt_contract["passed"]
+            ),
+        }
+        gates.append(
+            {
+                "gate": "canonical_cross_layer_jacobian_ab_pair",
+                "required": True,
+                "passed": cross_layer_jacobian_contract["passed"],
+            }
+        )
     if require_same_gpu_family:
         gates.append(
             {
@@ -992,6 +1160,7 @@ def compare_execution_artifacts(
             "artifact_identity.adag_config.stop_gradient_contribution_execution",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
+            "artifact_identity.adag_config.cross_layer_jacobian_execution",
         }
         & set(allowed_paths)
         else REPORT_SCHEMA
@@ -1038,6 +1207,7 @@ def compare_execution_artifacts(
         },
         "cuda_allocator_ab_contract": allocator_contract,
         "embedding_edge_ab_contract": embedding_edge_contract,
+        "cross_layer_jacobian_ab_contract": cross_layer_jacobian_contract,
         "counts": {
             "reference": {
                 "nodes": len(reference_nodes),

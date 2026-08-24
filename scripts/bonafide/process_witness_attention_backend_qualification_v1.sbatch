@@ -40,6 +40,7 @@ cd "$REPO_ROOT"
 : "${UV_PROJECT_ENVIRONMENT:?Set a lane-specific absolute uv environment}"
 EXPECTED_CUDA_ALLOCATOR_POLICY="${EXPECTED_CUDA_ALLOCATOR_POLICY:-}"
 EXPECTED_EMBEDDING_EDGE_MATERIALIZATION="${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-}"
+EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION="${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-}"
 
 for path_name in CONFIG MANIFEST ARTIFACT_ROOT UV_PROJECT_ENVIRONMENT; do
     path_value="${!path_name}"
@@ -68,6 +69,13 @@ case "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" in
     ""|scalar_v1|vectorized_v1) ;;
     *)
         echo "Unsupported EXPECTED_EMBEDDING_EDGE_MATERIALIZATION=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION}." >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION" in
+    ""|full_model_v1|cached_range_v1) ;;
+    *)
+        echo "Unsupported EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION}." >&2
         exit 2
         ;;
 esac
@@ -158,6 +166,7 @@ expected_source_sha=sys.argv[7]
 repo_root=pathlib.Path(sys.argv[8])
 expected_allocator_policy=sys.argv[9] or None
 expected_embedding_edge_materialization=sys.argv[10] or None
+expected_cross_layer_jacobian_execution=sys.argv[11] or None
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -169,6 +178,10 @@ declared_embedding_edge_materialization=adag.get("embedding_edge_materialization
 if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
         raise SystemExit("run config embedding-edge materialization disagrees with EXPECTED_EMBEDDING_EDGE_MATERIALIZATION")
+declared_cross_layer_jacobian_execution=adag.get("cross_layer_jacobian_execution")
+if declared_cross_layer_jacobian_execution != expected_cross_layer_jacobian_execution:
+    if expected_cross_layer_jacobian_execution is not None or "cross_layer_jacobian_execution" in adag:
+        raise SystemExit("run config cross-layer Jacobian execution disagrees with EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION")
 declared_allocator_policy=declared_cuda_allocator_policy(config)
 if declared_allocator_policy != expected_allocator_policy:
     raise SystemExit("run config allocator policy disagrees with EXPECTED_CUDA_ALLOCATOR_POLICY")
@@ -208,7 +221,8 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$ONLY_ARTIFACT_ID" "$EXPECTED_ATTENTION_BACKEND" \
         "$WIDTH1_SOURCE_MANIFEST_FILE_SHA256" "$REPO_ROOT" \
         "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
-        "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION"
+        "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
+        "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION"
 )"
 
 for target in "$EXPECTED_OUTPUT_DIR" "$SUMMARY_JSONL"; do
@@ -225,6 +239,7 @@ echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} wave=${WAVE} source=${ONLY_
 echo "backend=${EXPECTED_ATTENTION_BACKEND} config=${CONFIG} manifest=${MANIFEST}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
+echo "cross_layer_jacobian_execution=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-legacy_unbound}"
 echo "artifact_root=${ARTIFACT_ROOT} expected_output=${EXPECTED_OUTPUT_DIR}"
 echo "summary_jsonl=${SUMMARY_JSONL} uv_environment=${UV_PROJECT_ENVIRONMENT}"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
@@ -280,6 +295,7 @@ expected_backend=sys.argv[4]
 expected_gpu=sys.argv[5]
 expected_allocator_policy=sys.argv[6] or None
 expected_embedding_edge_materialization=sys.argv[7] or None
+expected_cross_layer_jacobian_execution=sys.argv[8] or None
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -302,6 +318,10 @@ observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materi
 if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
         raise SystemExit("saved artifact embedding-edge materialization identity disagrees with requested strategy")
+observed_cross_layer_jacobian_execution=artifact_adag.get("cross_layer_jacobian_execution")
+if observed_cross_layer_jacobian_execution != expected_cross_layer_jacobian_execution:
+    if expected_cross_layer_jacobian_execution is not None or "cross_layer_jacobian_execution" in artifact_adag:
+        raise SystemExit("saved artifact cross-layer Jacobian execution identity disagrees with requested strategy")
 if identity.get("cuda_allocator_policy") != expected_allocator_policy:
     if expected_allocator_policy is not None or "cuda_allocator_policy" in identity:
         raise SystemExit("saved artifact allocator identity disagrees with requested policy")
@@ -325,4 +345,5 @@ if expected_allocator_policy is not None:
     "$SUMMARY_JSONL" "$ONLY_ARTIFACT_ID" "$EXPECTED_OUTPUT_DIR" \
     "$EXPECTED_ATTENTION_BACKEND" "$EXPECTED_GPU_NAME" \
     "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
-    "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION"
+    "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
+    "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION"

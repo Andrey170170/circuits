@@ -15,6 +15,7 @@ BACKENDS = (
     "flash_sdpa_causal_v1",
 )
 EMBEDDING_EDGE_MATERIALIZATIONS = ("scalar_v1", "vectorized_v1")
+CROSS_LAYER_JACOBIAN_EXECUTIONS = ("full_model_v1", "cached_range_v1")
 
 
 def _config(backend: str) -> dict:
@@ -55,6 +56,7 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "EXPECTED_ATTENTION_BACKEND",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
         "EXPECTED_EMBEDDING_EDGE_MATERIALIZATION",
+        "EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION",
         "unset PYTORCH_CUDA_ALLOC_CONF",
         'export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
         "run config allocator policy disagrees",
@@ -62,6 +64,8 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "saved artifact lacks the exact requested allocator runtime receipt",
         "run config embedding-edge materialization disagrees",
         "saved artifact embedding-edge materialization identity disagrees",
+        "run config cross-layer Jacobian execution disagrees",
+        "saved artifact cross-layer Jacobian execution identity disagrees",
         "validate_cuda_allocator_environment(config)",
         '"observed_allocator_backend": "native"',
         "EXPECTED_GPU_NAME",
@@ -106,6 +110,46 @@ def test_embedding_edge_materialization_configs_clone_allocator_default() -> Non
     del scalar["adag_config"]["embedding_edge_materialization"]
     del vectorized["adag_config"]["embedding_edge_materialization"]
     assert scalar == vectorized
+
+
+def test_cross_layer_jacobian_configs_clone_accepted_vectorized_config() -> None:
+    vectorized = json.loads(
+        (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_embedding_edge_materialization_qualification_"
+            "vectorized_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    execution_configs = []
+    for execution in CROSS_LAYER_JACOBIAN_EXECUTIONS:
+        path = (
+            CONFIG_ROOT / "qwen3_4b_thinking_cross_layer_jacobian_qualification_"
+            f"{execution}.json"
+        )
+        config = json.loads(path.read_text(encoding="utf-8"))
+        assert config["adag_config"]["cross_layer_jacobian_execution"] == execution
+        assert config["cuda_allocator_policy"] == "default_v1"
+        assert (
+            config["adag_config"]["stop_gradient_attention_backend"]
+            == "flash_sdpa_causal_v1"
+        )
+        assert (
+            config["adag_config"]["stop_gradient_contribution_execution"]
+            == "source_leaf_v1"
+        )
+        assert (
+            config["adag_config"]["embedding_edge_materialization"] == "vectorized_v1"
+        )
+        normalized = json.loads(json.dumps(config))
+        del normalized["adag_config"]["cross_layer_jacobian_execution"]
+        assert normalized == vectorized
+        execution_configs.append(config)
+
+    full_model = json.loads(json.dumps(execution_configs[0]))
+    cached_range = json.loads(json.dumps(execution_configs[1]))
+    del full_model["adag_config"]["cross_layer_jacobian_execution"]
+    del cached_range["adag_config"]["cross_layer_jacobian_execution"]
+    assert full_model == cached_range
 
 
 def test_backend_configs_clone_frozen_v4_except_for_explicit_backend() -> None:

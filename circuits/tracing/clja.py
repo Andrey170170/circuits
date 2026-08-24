@@ -29,6 +29,15 @@ from circuits.tracing.contribution_execution import (
     StopGradientContributionExecution,
     resolve_stop_gradient_contribution_execution,
 )
+from circuits.tracing.cross_layer_jacobian_execution import (
+    DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION,
+    CrossLayerJacobianExecution,
+    CrossLayerJacobianPair,
+    CrossLayerJacobianPairResult,
+    CrossLayerJacobianPreparation,
+    prepare_cross_layer_jacobian_execution,
+    resolve_cross_layer_jacobian_execution,
+)
 from circuits.tracing.embedding_edge_materialization import (
     DEFAULT_EMBEDDING_EDGE_MATERIALIZATION,
     EmbeddingEdgeMaterialization,
@@ -130,6 +139,9 @@ class ADAGConfig:
     embedding_edge_materialization: EmbeddingEdgeMaterialization = (
         DEFAULT_EMBEDDING_EDGE_MATERIALIZATION
     )
+    cross_layer_jacobian_execution: CrossLayerJacobianExecution = (
+        DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION
+    )
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
@@ -137,6 +149,7 @@ class ADAGConfig:
             self.stop_gradient_contribution_execution
         )
         resolve_embedding_edge_materialization(self.embedding_edge_materialization)
+        resolve_cross_layer_jacobian_execution(self.cross_layer_jacobian_execution)
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Load artifacts pickled before stop-gradient strategies were explicit."""
@@ -152,11 +165,14 @@ class ADAGConfig:
             )
         if "embedding_edge_materialization" not in state:
             self.embedding_edge_materialization = DEFAULT_EMBEDDING_EDGE_MATERIALIZATION
+        if "cross_layer_jacobian_execution" not in state:
+            self.cross_layer_jacobian_execution = DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
         )
         resolve_embedding_edge_materialization(self.embedding_edge_materialization)
+        resolve_cross_layer_jacobian_execution(self.cross_layer_jacobian_execution)
 
 
 @dataclass(frozen=True)
@@ -278,6 +294,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     stop_gradient_attention_backend = config.stop_gradient_attention_backend
     stop_gradient_contribution_execution = config.stop_gradient_contribution_execution
     embedding_edge_materialization = config.embedding_edge_materialization
+    cross_layer_jacobian_execution = config.cross_layer_jacobian_execution
     if instrumentation is not None:
         instrumentation.set_counter(
             "stop_gradient_attention_backend",
@@ -290,6 +307,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "embedding_edge_materialization",
             embedding_edge_materialization,
+        )
+        instrumentation.set_counter(
+            "cross_layer_jacobian_execution",
+            cross_layer_jacobian_execution,
         )
     ablation_mode = config.ablation_mode
     center_logits = config.center_logits
@@ -726,6 +747,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 frozen_topology.edges if frozen_topology is not None else None
             ),
             embedding_edge_materialization=embedding_edge_materialization,
+            cross_layer_jacobian_execution=cross_layer_jacobian_execution,
             instrumentation=instrumentation,
         )
 
@@ -843,6 +865,9 @@ def _get_cl_ja_based_edges(
     frozen_edges: frozenset[tuple[NeuronIdx, NeuronIdx]] | None = None,
     embedding_edge_materialization: EmbeddingEdgeMaterialization = (
         DEFAULT_EMBEDDING_EDGE_MATERIALIZATION
+    ),
+    cross_layer_jacobian_execution: CrossLayerJacobianExecution = (
+        DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION
     ),
     # IG params
     ig_steps: int | None = None,
@@ -1233,6 +1258,43 @@ def _get_cl_ja_based_edges(
             "cross_layer_retained_edge_count",
         ):
             instrumentation.set_counter(counter_name, 0)
+    active_cross_layer_layers = tuple(
+        layer
+        for layer in range(start_layer + 1, end_layer)
+        if global_important_neurons_mask[layer].any()
+    )
+    if cross_layer_jacobian_execution == "cached_range_v1" and ig_steps is not None:
+        raise ValueError(
+            "cached_range_v1 does not support integrated-gradients cross-layer tracing"
+        )
+    jacobian_executor = None
+    if ig_steps is None:
+        jacobian_executor = prepare_cross_layer_jacobian_execution(
+            CrossLayerJacobianPreparation(
+                model=model,
+                input_ids=input_ids,
+                attention_mask=attn_mask_final,
+                source_layers=active_cross_layer_layers[:-1],
+                use_relp_grad=use_relp_grad,
+                disable_stop_grad=disable_stop_grad,
+                use_stop_grad_on_mlps=use_stop_grad_on_mlps,
+                device=device,
+                attention_backend=stop_gradient_attention_backend,
+                instrumentation=instrumentation,
+            ),
+            execution=cross_layer_jacobian_execution,
+        )
+    elif instrumentation is not None:
+        # The legacy IG path performs its own repeated full-model work. These
+        # non-IG execution counters are explicitly unavailable, never false zeroes.
+        for counter_name in (
+            "cross_layer_preparation_forward_count",
+            "cross_layer_preparation_cache_bytes",
+            "cross_layer_full_decoder_layer_executions",
+            "cross_layer_replay_decoder_layer_entries",
+            "cross_layer_vjp_chunk_executions",
+        ):
+            instrumentation.set_counter(counter_name, None)
     for tgt_layer in range(end_layer - 1, start_layer + 1, -1):
         # if there is no important neurons in the target layer, skip
         if not global_important_neurons_mask[tgt_layer].any():
@@ -1298,26 +1360,23 @@ def _get_cl_ja_based_edges(
                 if instrumentation is not None
                 else None
             )
+            exact_receipts = None
             if ig_steps is None:
-                relative_attribution = _compute_cl_ja_layer_jacobian(
-                    model,
-                    input_ids,
-                    attn_mask_final,
-                    src_layer,
-                    tgt_layer,
-                    src_neuron_list,
-                    tgt_neuron_list,
-                    keep_tokens,
-                    src_tokens if src_layer == -1 else None,
-                    # stop grad params
-                    use_relp_grad,
-                    disable_stop_grad,
-                    use_stop_grad_on_mlps,
-                    device,
-                    attention_backend=stop_gradient_attention_backend,
-                    tgt_chunk_size=50,  # Can use larger chunk for non-IG
-                    verbose=verbose,
-                )  # shape: (batch, n_src, n_tgt)
+                if jacobian_executor is None:
+                    raise RuntimeError("non-IG Jacobian executor was not prepared")
+                pair_result = jacobian_executor.compute_pair(
+                    CrossLayerJacobianPair(
+                        src_layer=src_layer,
+                        tgt_layer=tgt_layer,
+                        src_neurons=tuple(src_neuron_list),
+                        tgt_neurons=tuple(tgt_neuron_list),
+                        tgt_chunk_size=50,
+                    )
+                )
+                if not isinstance(pair_result, CrossLayerJacobianPairResult):
+                    raise TypeError("non-IG Jacobian execution returned IG components")
+                relative_attribution = pair_result.relative_attribution
+                exact_receipts = pair_result.receipts.ordered()
             else:
                 relative_attribution = _compute_cl_ja_layer_jacobian_ig(
                     model,
@@ -1428,6 +1487,7 @@ def _get_cl_ja_based_edges(
                     jacobian_seconds=jacobian_seconds,
                     materialization_seconds=materialization_seconds,
                     retained_edges=retained_edges,
+                    exact_receipts=exact_receipts,
                     **pair_telemetry,
                 )
             del relative_attribution
