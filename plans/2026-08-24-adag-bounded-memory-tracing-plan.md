@@ -1,8 +1,9 @@
 # ADAG bounded-memory tracing execution plan
 
-Status: active under explicit user authorization. The Level 1a sparse-source, Level 1b bounded
-target-lane stop-gradient contribution, and Level 1e ordinary-contribution slices are implemented
-and measured; none completes Level 1 or authorizes broader tracing runs by itself.
+Status: active under explicit user authorization. The Level 1a sparse-source and Level 1b bounded
+target-lane stop-gradient contribution slices are implemented and measured. The Level 1e ordinary
+contribution slice is accepted as a numerically equivalent BF16 capacity primitive. None completes
+Level 1 or authorizes broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -17,11 +18,15 @@ host RAM. The near-term capability target is a scientifically valid 20,000-token
 provided empirical scaling retains a safe device- and host-memory margin. A completed 20k run is a
 target, not a prediction or current capability claim.
 
-The execution method, target selection, attribution objective, graph topology rules, thresholding,
-and saved values must remain unchanged. Each optimization is a named execution adapter with
-artifact provenance and a reference adapter. Ordinary floating-point drift from a different
-projection kernel may be acceptable only under a tolerance declared before GPU qualification;
-identity, ordering, forward-value, topology, and lifecycle gates remain exact.
+The execution method, target selection, attribution objective, graph topology rules, and
+thresholding must remain unchanged. Each optimization is a named execution adapter with artifact
+provenance and a reference adapter. A change in CUDA kernel shape, batching, accumulation order, or
+storage schedule may introduce ordinary dtype-scale floating-point drift without changing the
+scientific computation. Accept such an adapter only when the numerical mechanism is localized,
+identity and ordering remain exact, forward values and selections remain unchanged, topology is
+exact, and the drift magnitude and qualitative edge cases are reported. Use a labeled calibration
+target to set any numerical policy, then freeze that policy before a promotion panel or scientific
+holdout; do not tune it against the holdout.
 
 This plan deliberately stops at three levels:
 
@@ -385,15 +390,18 @@ and 172 within four. One near-zero value changes sign from `-0.00274658203125` t
 the pair also retains a run- or hardware-level nondeterminism confound.
 
 These diagnostics are consistent with the batched-five-lane versus repeated-single-lane backward
-kernel shape, but they do not satisfy the plan's zero-tolerance gate. No tolerance will be widened
-on this inspected target. Width one therefore remains an opt-in, memory-qualified calibration
-adapter rather than a correctness-qualified or promoted default. If promotion is needed, first run
-`None`, explicit width five, and width one sequentially on one physical A100. Require `None` versus
-width five to remain bit-exact, and freeze a dtype-aware per-layer numerical policy from this
-calibration before inspecting the fresh width-one confirmation. Then validate that unchanged gate
-on a separate holdout target. The next memory-owner optimization is the ordinary
-embedding-contribution VJP; apply the same chunk/project design at that deep execution seam before
-considering broader streaming.
+kernel shape. The zero-tolerance report remains failed evidence rather than being rewritten, but
+the user explicitly accepted this localized dtype-scale drift on 2026-08-25. Width one is therefore
+an accepted numerically equivalent BF16 capacity primitive and may be used in subsequent optimized
+profiles. It remains an explicit option and the compatibility default remains `None`; acceptance
+does not claim bitwise equivalence or validate other chunk widths, targets, dtypes, or GPU families.
+
+Before changing the compatibility default or making a broader production claim, run `None`,
+explicit width five, and width one sequentially on one physical A100. Require `None` versus width
+five to remain bit-exact, freeze a dtype-aware per-layer numerical policy from this calibration,
+and validate it unchanged on a short/medium/long promotion panel. The next memory-owner
+optimization is the ordinary embedding-contribution VJP; apply the same chunk/project design at
+that deep execution seam before considering broader streaming.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 
