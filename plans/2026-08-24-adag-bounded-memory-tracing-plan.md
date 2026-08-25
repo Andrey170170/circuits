@@ -250,6 +250,48 @@ headroom peaks. The remaining owner is localized only to the enclosing
 specific operation inside that stage. Add finer forward and post-VJP telemetry before choosing an
 offload or recomputation design.
 
+### Level 1c measured checkpoint: stop-gradient allocation lifetimes
+
+Commit `f1204016c67034273071434c2f46bc5ad62adb9d` adds an exhaustive partition of the
+allocation-bearing happy path inside `stop_grad_mlp_attribution_contribution`. The new lifetime
+regions checkpoint and reset allocator peak counters without adding CUDA synchronization; the
+three existing VJP timing regions retain their historical synchronized timing semantics. The CPU
+gate passed 97 focused tests, including exact telemetry-off versus telemetry-on toy outputs and an
+explicit assertion that memory-only regions do not synchronize when the enclosing recorder does.
+
+Immutable worktree
+`/scratch/general/vast/u1653998/circuits/run-worktrees/stop-grad-telemetry-qual-f120401` ran job
+`15117291` alone on the frozen 2,951-token width-one A100 target. It completed on `notch369` in
+3:27 with zero OOMs or allocator retries. Its artifact is
+`topk-trace-4d0c76be6126f7b52b4c5f3f`. The strict zero-tolerance report
+`.../qualification-reports/width1-telemetry-zero-v1.json`, SHA-256
+`ba7f454782131cb13bbc0168944b1a1b5a1a201c4435dfe2b3925924bff0ff4e`, passed exact target,
+node, edge, candidate-profile, and topology gates. All 20 projected contribution-VJP raw-dtype
+receipts also match the accepted width-one reference exactly.
+
+The telemetry preserved both the 46,990,911,488-byte allocated peak and the
+51,661,242,368-byte reserved peak exactly. Trace wall time changed from 136.8338000040967 to
+137.63252190989442 seconds, an approximately 0.58 percent increase. The largest direct child,
+`stop_grad_selected_layer_forward`, reproduced the enclosing allocated peak exactly, so the
+partition closed the previous 6,400,353,792-byte localization gap.
+
+The decisive call is the selected-attribution forward for layer 1:
+
+| Boundary | Allocated bytes |
+| --- | ---: |
+| Layer-1 forward entry | 30,956,872,704 |
+| Layer-1 forward peak | 46,990,911,488 |
+| Layer-1 forward exit | 30,926,695,936 |
+
+Layer 0's forward exits with 30,594,133,504 allocated bytes; the next model forward transiently
+overlaps that retained graph before rebinding the previous `out`. The sharp rise and return to the
+same approximately 30.9 GB baseline confirms a cross-forward graph-lifetime overlap rather than a
+persistent accumulation of the compact attribution outputs. The next bounded optimization is to
+release the selected-attribution autograd graph on the final neuron chunk of each layer, then rerun
+the same exact qualification. If successful, the next exposed owner is expected to be the
+40,590,557,696-byte embedding-contribution VJP; that expectation is a forecast, not qualification
+evidence.
+
 ## Level 2: host-backed boundary streaming and source-group reuse
 
 ### Method
