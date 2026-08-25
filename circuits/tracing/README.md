@@ -93,8 +93,15 @@ Both forms preserve source-token order and duplicates and retain the shared
 forward graph for subsequent selected-neuron traversals. The caller creates a
 full identity only when this adapter or the ordinary selected-neuron adapter
 uses its `None` compatibility width, and shares that identity between both
-unchunked adapters. Explicit widths are opt-in and provenance-bearing. Qualify
-the full-width adapter (`None` versus width five for the frozen five-target
-item) under exact gates before comparing width five against width one under the
-declared BF16 numerical-equivalence gates; neither comparison establishes
-scientific parity.
+unchunked adapters. Explicit widths are opt-in and provenance-bearing. Commit
+`54339ff41b4f87be285acae8300743154f519fc9` passed the frozen same-node A100
+qualification: `None` versus width five was bit-exact, and width one reduced
+the run-wide allocated peak from 42,660,260,352 to 37,109,122,560 bytes. The
+width-five versus width-one execution-shape change produced bounded BF16 drift
+only in embedding-source contribution profiles and their direct aggregation
+into the five logit-node source-attribution maps; topology, targets, scalar
+node values, all non-logit source-attribution maps, MLP contribution profiles,
+and edges were exact. Width one is accepted only as an opt-in BF16 capacity
+primitive on that calibration target. `None` remains the compatibility
+default, and this evidence does not establish bitwise equivalence, scientific
+parity, or broader hardware/workload qualification.
