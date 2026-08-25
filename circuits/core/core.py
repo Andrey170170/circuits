@@ -21,6 +21,9 @@ from circuits.core.grad import (
     stop_nonlinear_grad_for_llama,
 )
 from circuits.core.utils import Edge, NeuronIdx, Node, collect_acts
+from circuits.tracing.important_neuron_selection import (
+    has_any_strictly_positive_value,
+)
 
 
 def precompute_cross_layer_headwise_OV(
@@ -416,8 +419,7 @@ def _get_global_important_neurons_mask(
     flat_abs_attributions = abs_attributions.flatten(start_dim=1)
     if verbose:
         print("flat_abs_attributions", flat_abs_attributions.shape)
-    nonzero_values = flat_abs_attributions[flat_abs_attributions > 0]
-    if len(nonzero_values) == 0:
+    if not has_any_strictly_positive_value(flat_abs_attributions):
         if verbose:
             print("all zero values")
         return torch.zeros_like(abs_attributions)[0]

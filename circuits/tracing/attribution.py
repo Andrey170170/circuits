@@ -27,6 +27,9 @@ from circuits.tracing.grad import (
     remove_forward_hooks,
     revert_stop_nonlinear_grad,
 )
+from circuits.tracing.important_neuron_selection import (
+    has_any_strictly_positive_value,
+)
 from circuits.tracing.instrumentation import (
     TraceInstrumentation,
     cuda_memory_instrumentation_stage,
@@ -419,8 +422,7 @@ def _get_global_important_neurons_mask(
     flat_abs_attributions = abs_attributions.flatten(start_dim=1)
     if verbose:
         print("flat_abs_attributions", flat_abs_attributions.shape)
-    nonzero_values = flat_abs_attributions[flat_abs_attributions > 0]
-    if len(nonzero_values) == 0:
+    if not has_any_strictly_positive_value(flat_abs_attributions):
         if verbose:
             print("all zero values")
         return torch.zeros_like(abs_attributions)[0]
