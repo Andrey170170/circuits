@@ -98,6 +98,8 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
     monkeypatch,
 ) -> None:
     calls: list[tuple[str, dict]] = []
+    retain_graph_calls: list[bool | None] = []
+    original_autograd_grad = torch.autograd.grad
 
     @contextmanager
     def capture_stage(_instrumentation, name, *, metadata):
@@ -174,6 +176,12 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
         fake_contribution_vjp,
     )
 
+    def capture_autograd_grad(*args, **kwargs):
+        retain_graph_calls.append(kwargs.get("retain_graph"))
+        return original_autograd_grad(*args, **kwargs)
+
+    monkeypatch.setattr(torch.autograd, "grad", capture_autograd_grad)
+
     def run(model, instrumentation):
         return _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             model,
@@ -229,3 +237,4 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
     assert selected_forward["planned_chunk_count"] == 2
     assert selected_forward["activation_shape"] == [1, 2, 3]
     assert calls[-1][1]["contribution_shape"] == [2, 1, 1]
+    assert retain_graph_calls == [True, False, True, True, False, True]

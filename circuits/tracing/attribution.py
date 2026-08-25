@@ -634,6 +634,9 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                 layer_neuron_acts = torch.stack(layer_neuron_acts)  # (n_chunk, batch)
                 batch = layer_neuron_acts.shape[1]
                 n_chunk = layer_neuron_acts.shape[0]
+                retain_attribution_graph = chunk_start + len(chunk_pairs) < len(
+                    all_pairs
+                )
                 grad_outputs = torch.eye(
                     n_chunk * batch, device=device
                 )  # (n_chunk * batch, n_chunk * batch)
@@ -643,6 +646,9 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                 if prepare_measurement is not None:
                     prepare_measurement.metadata["chunk_neuron_count"] = n_chunk
                     prepare_measurement.metadata["lane_count"] = n_chunk * batch
+                    prepare_measurement.metadata["retain_graph"] = (
+                        retain_attribution_graph
+                    )
                     prepare_measurement.metadata["selected_activation_shape"] = list(
                         layer_neuron_acts.shape
                     )
@@ -661,6 +667,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                     "differentiated_output_shape": list(layer_neuron_acts.shape),
                     "differentiated_input_shape": list(embeds.shape),
                     "grad_outputs_shape": list(grad_outputs.shape),
+                    "retain_graph": retain_attribution_graph,
                 },
             ) as vjp_measurement:
                 layer_grad_attr = torch.autograd.grad(
@@ -668,7 +675,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                     embeds,  # (batch, seq, d)
                     grad_outputs=grad_outputs,  # (n_chunk * batch, n_chunk * batch)
                     is_grads_batched=True,
-                    retain_graph=True,
+                    retain_graph=retain_attribution_graph,
                 )[0]
                 if vjp_measurement is not None:
                     vjp_measurement.metadata["vjp_result_shape"] = list(
