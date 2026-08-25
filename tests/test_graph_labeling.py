@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import multiprocessing
 from pathlib import Path
+from typing import Any
 
 import pytest
 from circuits.analysis.bonafide.canonical import canonical_sha256, file_sha256
 from circuits.graph_labeling.evidence import (
     allowed_evidence_ids,
     reads_from_evidence_ids,
+)
+from circuits.graph_labeling.openai_batch import (
+    _parse_output,
+    collect_openai_batch,
+    openai_batch_status,
+    prepare_openai_batch,
+    recover_openai_batch,
+    recover_openai_upload,
+    submit_openai_batch,
 )
 from circuits.graph_labeling.runtime import (
     execute,
@@ -23,6 +35,7 @@ from circuits.graph_labeling.schema import (
     EvidencePacket,
     ExecutionSpec,
     GraphLabelingSpec,
+    PromptRequest,
 )
 from circuits.observatory import (
     CATALOG_SCHEMA,
@@ -635,7 +648,9 @@ def test_external_result_ingestion_is_complete_bound_and_immutable(
         label_binding_receipt.label_set_id,
         label_result_sha256="1" * 64,
     )
-    with pytest.raises(ValueError, match="result/request binding mismatch"):
+    with pytest.raises(
+        ValueError, match=r"result/request binding mismatch|finalization receipt drift"
+    ):
         status(label_binding_run)
 
     manifest_binding_run = tmp_path / "manifest-binding-run"
@@ -654,7 +669,9 @@ def test_external_result_ingestion_is_complete_bound_and_immutable(
         manifest_binding_receipt.label_set_id,
         binding_result_sha256="2" * 64,
     )
-    with pytest.raises(ValueError, match="result/request binding mismatch"):
+    with pytest.raises(
+        ValueError, match=r"result/request binding mismatch|finalization receipt drift"
+    ):
         status(manifest_binding_run)
 
 
@@ -675,3 +692,401 @@ def test_file_bearing_ids_reject_traversal(tmp_path: Path) -> None:
     }
     with pytest.raises(ValueError, match="secret provider parameter"):
         GraphLabelingSpec.model_validate(payload)
+
+
+class _FakeOpenAIBatchTransport:
+    def __init__(
+        self,
+        output: bytes = b"",
+        *,
+        fail_create: bool = False,
+        fail_upload: bool = False,
+    ) -> None:
+        self.output = output
+        self.fail_create = fail_create
+        self.fail_upload = fail_upload
+        self.create_calls = 0
+        self.metadata: dict[str, str] = {}
+        self.input_bytes = b""
+        self.aggregate_output_tokens = 40
+
+    def upload_batch_input(self, path: Path) -> dict[str, object]:
+        self.input_bytes = path.read_bytes()
+        assert self.input_bytes
+        if self.fail_upload:
+            raise RuntimeError("simulated ambiguous upload")
+        return {"id": "file-input", "purpose": "batch", "bytes": path.stat().st_size}
+
+    def retrieve_file(self, file_id: str) -> dict[str, object]:
+        assert file_id == "file-input"
+        return {"id": file_id, "purpose": "batch", "bytes": len(self.input_bytes)}
+
+    def create_batch(
+        self,
+        *,
+        input_file_id: str,
+        endpoint: str,
+        completion_window: str,
+        metadata: dict[str, str],
+    ) -> dict[str, object]:
+        self.create_calls += 1
+        self.metadata = metadata
+        if self.fail_create:
+            raise RuntimeError("simulated ambiguous create")
+        return {
+            "id": "batch-test",
+            "input_file_id": input_file_id,
+            "endpoint": endpoint,
+            "completion_window": completion_window,
+            "metadata": metadata,
+            "status": "validating",
+            "output_file_id": None,
+            "error_file_id": None,
+        }
+
+    def retrieve_batch(self, batch_id: str) -> dict[str, object]:
+        assert batch_id == "batch-test"
+        return {
+            "id": batch_id,
+            "input_file_id": "file-input",
+            "endpoint": "/v1/responses",
+            "completion_window": "24h",
+            "metadata": self.metadata,
+            "status": "completed",
+            "output_file_id": "file-output",
+            "error_file_id": None,
+            "request_counts": {"total": 1, "completed": 1, "failed": 0},
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": self.aggregate_output_tokens,
+                "total_tokens": 100 + self.aggregate_output_tokens,
+            },
+        }
+
+    def download_file(self, file_id: str) -> bytes:
+        if file_id == "file-input":
+            return self.input_bytes
+        if file_id == "file-output":
+            return self.output
+        raise AssertionError(file_id)
+
+
+def _hold_flock(path: str, ready: Any, release: Any) -> None:
+    with Path(path).open("r+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        ready.set()
+        release.wait(10)
+
+
+def _openai_batch_spec(site: Path, hashes: dict[str, str]) -> GraphLabelingSpec:
+    payload = _spec(site, hashes).model_dump(mode="json")
+    payload["study"]["methods"][1]["labeler"]["model"] = "gpt-5.6-terra"
+    payload["study"]["methods"][1]["labeler"]["reasoning"] = {"effort": "medium"}
+    payload["study"]["methods"][1]["prompt_version"] = "structured-llm-graph-role-v2"
+    return GraphLabelingSpec.model_validate(payload)
+
+
+def _batch_output(run: Path) -> bytes:
+    external = _external_row(run)
+    item = {
+        "custom_id": external["request_id"],
+        "error": None,
+        "response": {
+            "status_code": 200,
+            "request_id": "req-remote",
+            "body": {
+                "id": "resp-remote",
+                "status": "completed",
+                "error": None,
+                "model": "gpt-5.6-terra-2026-08-01",
+                "service_tier": "default",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(external["raw_payload"]),
+                            }
+                        ],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 40,
+                    "total_tokens": 140,
+                },
+            },
+        },
+    }
+    return _bytes(item) + b"\n"
+
+
+def test_openai_batch_adapter_is_cost_guarded_idempotent_and_collects(
+    tmp_path: Path,
+) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "batch-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    with pytest.raises(ValueError, match="cost guard"):
+        prepare_openai_batch(run, "structured-llm-graph-role-v1", max_cost_usd=0.000001)
+    plan = prepare_openai_batch(run, "structured-llm-graph-role-v1", max_cost_usd=10.0)
+    batch_root = run / "openai-batches" / plan["label_set_id"]
+    input_rows = [
+        json.loads(line)
+        for line in (batch_root / "input.jsonl").read_text().splitlines()
+    ]
+    assert input_rows[0]["url"] == "/v1/responses"
+    assert input_rows[0]["body"]["store"] is False
+    assert input_rows[0]["body"]["text"]["format"]["strict"] is True
+    serialized_input = json.dumps(input_rows[0]["body"]["input"])
+    assert "selection_group" not in serialized_input
+    assert "direct_target_parent" not in serialized_input
+    assert '"coverage"' not in serialized_input
+    assert '"path_search"' not in serialized_input
+    assert "coverage_and_truncation" not in serialized_input
+    assert "target_path_search" not in serialized_input
+    assert "subject_identity" not in serialized_input
+    assert "trace_unit_id" not in serialized_input
+    assert "source_trace_sha256" not in serialized_input
+    assert plan["price_snapshot_id"] == "official-api-prices-2026-08-25-graph-labeling"
+
+    fake = _FakeOpenAIBatchTransport()
+    first = submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    second = submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    assert first == second
+    assert fake.create_calls == 1
+    assert (batch_root / "upload.json").is_file()
+    assert (batch_root / "upload-intent.json").is_file()
+    assert (batch_root / "create-intent.json").is_file()
+
+    status_receipt = openai_batch_status(
+        run, "structured-llm-graph-role-v1", transport=fake
+    )
+    assert status_receipt["usage"]["total_tokens"] == 140
+    fake.output = _batch_output(run)
+    collection = collect_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        transport=fake,
+        finalize=True,
+    )
+    assert collection["request_count"] == 1
+    assert collection["per_request_remote_metadata"]
+    assert collection["actual_cost_usd"] <= collection["authorized_cost_guard_usd"]
+    attempts = list((batch_root / "collection-attempts").iterdir())
+    assert len(attempts) == 1
+    assert (attempts[0] / "intent.json").is_file()
+    assert (attempts[0] / "snapshot.json").is_file()
+    assert (attempts[0] / "download.json").is_file()
+    assert (batch_root / "collection/provider-output.jsonl").is_file()
+    assert (batch_root / "collection/finalization.json").is_file()
+    result_manifest = json.loads(
+        (run / f"label-sets/{plan['label_set_id']}/manifest.json").read_text()
+    )
+    assert result_manifest["result_source"]["kind"] == "openai_batch_collection_v1"
+    assert result_manifest["result_source"]["provider_exact_models"] == [
+        "gpt-5.6-terra-2026-08-01"
+    ]
+    finalization = json.loads((batch_root / "collection/finalization.json").read_text())
+    assert finalization["label_set_manifest_sha256"] == result_manifest["content_hash"]
+    assert finalization["output_file_sha256"] == collection["output_file_sha256"]
+    fake.output = b"provider output must not be fetched again"
+    repeated = collect_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        transport=fake,
+        finalize=True,
+    )
+    assert repeated == collection
+    assert len(list((batch_root / "collection-attempts").iterdir())) == 1
+    assert status(run)["methods"]["structured-llm-graph-role-v1"]["label_count"] == 1
+
+
+def test_openai_batch_adapter_rejects_missing_custom_id(tmp_path: Path) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "missing-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    fake = _FakeOpenAIBatchTransport()
+    submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    foreign = json.loads(_batch_output(run))
+    foreign["custom_id"] = "req-foreign"
+    fake.output = _bytes(foreign) + b"\n"
+    with pytest.raises(ValueError, match="unknown custom_id"):
+        collect_openai_batch(run, "structured-llm-graph-role-v1", transport=fake)
+
+    summary = status(run)
+    label_set_id = summary["methods"]["structured-llm-graph-role-v1"]["label_set_id"]
+    request = PromptRequest.model_validate(
+        json.loads((run / f"requests/{label_set_id}/occ-selected.json").read_text())
+    )
+    valid = _batch_output(run)
+    with pytest.raises(ValueError, match="repeats custom_id"):
+        _parse_output(valid + valid, {request.request_id: request})
+    with pytest.raises(ValueError, match="omitted custom_ids"):
+        _parse_output(b"", {request.request_id: request})
+    malformed = json.loads(valid)
+    malformed["response"]["body"]["output"][0]["content"][0]["text"] = "not-json"
+    with pytest.raises(ValueError, match="malformed structured output"):
+        _parse_output(_bytes(malformed) + b"\n", {request.request_id: request})
+    failed = json.loads(valid)
+    failed["response"]["status_code"] = 500
+    with pytest.raises(ValueError, match="request failed"):
+        _parse_output(_bytes(failed) + b"\n", {request.request_id: request})
+
+
+def test_position_120_v2_has_separate_luna_and_terra_batches() -> None:
+    spec = GraphLabelingSpec.model_validate(
+        json.loads(
+            Path(
+                "scripts/bonafide/configs/graph_labeling/"
+                "qwen-position-120-occurrence-role-v2.json"
+            ).read_text()
+        )
+    )
+    methods = {method.method_id: method for method in spec.study.methods}
+    assert set(methods) == {
+        "structured-llm-graph-role-luna-medium-v2",
+        "structured-llm-graph-role-terra-medium-v2",
+    }
+    assert {method.labeler.model for method in methods.values() if method.labeler} == {
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+    }
+    assert all(
+        method.labeler is not None
+        and method.prompt_version == "structured-llm-graph-role-v2"
+        and method.labeler.reasoning == {"effort": "medium"}
+        and method.labeler.max_output_tokens == 4000
+        for method in methods.values()
+    )
+
+
+def test_labeler_rejects_reasoning_with_temperature(tmp_path: Path) -> None:
+    site, hashes = _site(tmp_path)
+    payload = _spec(site, hashes).model_dump(mode="json")
+    payload["study"]["methods"][1]["labeler"]["reasoning"] = {"effort": "medium"}
+    payload["study"]["methods"][1]["labeler"]["temperature"] = 0.2
+    with pytest.raises(ValueError, match="reasoning and temperature"):
+        GraphLabelingSpec.model_validate(payload)
+
+
+def test_openai_batch_recovery_proves_remote_input(tmp_path: Path) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "recovery-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    fake = _FakeOpenAIBatchTransport(fail_create=True)
+    with pytest.raises(RuntimeError, match="ambiguous create"):
+        submit_openai_batch(
+            run,
+            "structured-llm-graph-role-v1",
+            max_cost_usd=10.0,
+            transport=fake,
+        )
+    fake.fail_create = False
+    recovered = recover_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        "batch-test",
+        transport=fake,
+    )
+    assert recovered["receipt_mode"] == "recovered"
+    assert recovered["batch_id"] == "batch-test"
+    status_receipt = openai_batch_status(
+        run, "structured-llm-graph-role-v1", transport=fake
+    )
+    assert status_receipt["batch_id"] == "batch-test"
+
+
+def test_openai_batch_upload_recovery_is_explicit_and_byte_bound(
+    tmp_path: Path,
+) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "upload-recovery-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    fake = _FakeOpenAIBatchTransport(fail_upload=True)
+    with pytest.raises(RuntimeError, match="ambiguous upload"):
+        submit_openai_batch(
+            run,
+            "structured-llm-graph-role-v1",
+            max_cost_usd=10.0,
+            transport=fake,
+        )
+    fake.fail_upload = False
+    recovered = recover_openai_upload(
+        run,
+        "structured-llm-graph-role-v1",
+        "file-input",
+        transport=fake,
+    )
+    assert recovered["receipt_mode"] == "recovered"
+    submitted = submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    assert submitted["attempt_id"] == recovered["attempt_id"]
+
+
+def test_openai_batch_gate_and_usage_reconciliation_fail_closed(tmp_path: Path) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "gate-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    fake = _FakeOpenAIBatchTransport()
+    submission = submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    lock = (
+        run
+        / "openai-batches/.locks"
+        / f"{submission['remote']['metadata']['graph_label_set']}.lock"
+    )
+    process_context = multiprocessing.get_context("spawn")
+    ready = process_context.Event()
+    release = process_context.Event()
+    holder = process_context.Process(
+        target=_hold_flock, args=(str(lock), ready, release)
+    )
+    holder.start()
+    assert ready.wait(5)
+    try:
+        with pytest.raises(RuntimeError, match="lifecycle gate"):
+            openai_batch_status(run, "structured-llm-graph-role-v1", transport=fake)
+    finally:
+        release.set()
+        holder.join(5)
+    assert holder.exitcode == 0
+    fake.output = _batch_output(run)
+    fake.aggregate_output_tokens = 41
+    with pytest.raises(ValueError, match="aggregate usage mismatch"):
+        collect_openai_batch(run, "structured-llm-graph-role-v1", transport=fake)
+    attempts_root = (
+        run
+        / "openai-batches"
+        / submission["remote"]["metadata"]["graph_label_set"]
+        / "collection-attempts"
+    )
+    [attempt] = list(attempts_root.iterdir())
+    assert (attempt / "intent.json").is_file()
+    assert (attempt / "snapshot.json").is_file()
+    assert (attempt / "output.jsonl").is_file()
+    assert not (attempt.parent.parent / "collection").exists()

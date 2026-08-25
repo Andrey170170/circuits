@@ -1,0 +1,43 @@
+{
+  "schema_version": "adag.labeling.prices.v1",
+  "snapshot_id": "official-api-prices-2026-08-25-graph-labeling",
+  "effective_date": "2026-08-25",
+  "currency": "USD",
+  "unit": "per_million_tokens",
+  "notes": [
+    "OpenAI Luna and Terra rates were verified against official model pricing on 2026-08-25.",
+    "Native Batch rates apply the documented 50 percent Batch discount."
+  ],
+  "rates": {
+    "openai": {
+      "gpt-5.6-luna": {
+        "live": {
+          "input_per_million": 0.2,
+          "cache_read_per_million": 0.02,
+          "cache_write_per_million": 0.25,
+          "output_per_million": 1.2
+        },
+        "native_batch": {
+          "input_per_million": 0.1,
+          "cache_read_per_million": 0.01,
+          "cache_write_per_million": 0.125,
+          "output_per_million": 0.6
+        }
+      },
+      "gpt-5.6-terra": {
+        "live": {
+          "input_per_million": 2.0,
+          "cache_read_per_million": 0.2,
+          "cache_write_per_million": 2.5,
+          "output_per_million": 12.0
+        },
+        "native_batch": {
+          "input_per_million": 1.0,
+          "cache_read_per_million": 0.1,
+          "cache_write_per_million": 1.25,
+          "output_per_million": 6.0
+        }
+      }
+    }
+  }
+}

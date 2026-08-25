@@ -1,0 +1,87 @@
+{
+  "schema_version": "adag.graph-labeling.spec.v1",
+  "run_name": "qwen-position-120-occurrence-role-v2",
+  "study": {
+    "study_name": "qwen-position-120-explicit-26-v1",
+    "source": {
+      "site_root": "/scratch/general/vast/u1653998/circuits/results/bonafide/raw-graph-observatory-viewer-v1",
+      "viewer_manifest_sha256": "3e42cdd84ecea4f13e3064e998a99bfdfbcecc4678cc45b1e009c6adcdf06dfc",
+      "catalog_sha256": "9c812c597547eae9842f6feeba6da1c88dcd742de1dfa887f49deec1742889e8"
+    },
+    "trace": {
+      "artifact_id": "trace-ea72d986c5ba93906e3bc5eb",
+      "response_position": 120,
+      "artifact_source_sha256": "130cfce662d884b244e2f32a8350df7184453289fd65761011f10a804fa428ca",
+      "trace_file_sha256": "f48ad39e892bbd023cec892b1843021cd93689c89a6e2cc7a2b328587bbc72ee"
+    },
+    "selection": {
+      "policy": "explicit_occurrence_groups_v1",
+      "groups": {
+        "direct_target_parent": [
+          "occ-5e8b63421870ed879372f1d8",
+          "occ-d77c7f5604f61e60118e91d6",
+          "occ-2aff3856f5b099effc2d7540",
+          "occ-0c90e992422867ef118d6dfa",
+          "occ-aca9afdae0424e5b42181f0e",
+          "occ-0b34544fda30a0c308d49721",
+          "occ-710c372d03e568e06d2dcea0",
+          "occ-c106b317a8023e59b5896053",
+          "occ-dabaf4519736b86710a115bd",
+          "occ-56c7e5c8fe3f50d23768ce87",
+          "occ-b0b60823b42aa8d48dcd1638",
+          "occ-1867120a82f31d82b213e074",
+          "occ-5b0c80000107edd0c83a6c5f",
+          "occ-b0e3d42be27cdf65181148ab",
+          "occ-eae1bccd4b9821db9a3b387a"
+        ],
+        "upstream_salient_repeated": [
+          "occ-46dd9afc98de391ae951f94a",
+          "occ-69b3981cdf9ca3c2b3c712eb",
+          "occ-d2c1e9493fc79bd4e75c44fd",
+          "occ-5e392638b608f09d4f40dca1",
+          "occ-555af1b40383f0d5cd0ff3a4",
+          "occ-ecf2415269327adb4793244a"
+        ],
+        "lower_salience_retained": [
+          "occ-525b050efb21d47248a16da1",
+          "occ-73249d8cfd8d437626ee6deb",
+          "occ-b72777b631465ad6fcc83fa4",
+          "occ-05934ffedb1fde9f35fffd17",
+          "occ-a513b423d38d8d55e4ef3ea5"
+        ]
+      }
+    },
+    "evidence": {
+      "policy": "graph_local_occurrence_evidence_v1",
+      "top_positive_sources": 8,
+      "top_negative_sources": 8,
+      "top_incoming_edges": 12,
+      "top_outgoing_edges": 12
+    },
+    "control_policy": "none_v1",
+    "methods": [
+      {
+        "method_id": "structured-llm-graph-role-luna-medium-v2",
+        "kind": "structured_llm_graph_role_v1",
+        "prompt_version": "structured-llm-graph-role-v2",
+        "labeler": {
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "max_output_tokens": 4000,
+          "reasoning": {"effort": "medium"}
+        }
+      },
+      {
+        "method_id": "structured-llm-graph-role-terra-medium-v2",
+        "kind": "structured_llm_graph_role_v1",
+        "prompt_version": "structured-llm-graph-role-v2",
+        "labeler": {
+          "provider": "openai",
+          "model": "gpt-5.6-terra",
+          "max_output_tokens": 4000,
+          "reasoning": {"effort": "medium"}
+        }
+      }
+    ]
+  }
+}

@@ -119,3 +119,63 @@ Selection, evidence construction, and labeling method are versioned choices behi
 module. V1 deliberately supports only canonicalized explicit occurrence groups and `none_v1`
 controls. New selectors or transformed controls require new named implementations and identities;
 they must not silently alter this study.
+
+## OpenAI Batch transport
+
+The OpenAI adapter creates one independent Batch per structured method. The v2 position-120 spec
+therefore produces separate Luna-medium and Terra-medium request sets; neither provider output is
+mixed into the other's immutable label-set identity. Both allow 4,000 output tokens so medium
+reasoning does not crowd out the structured answer.
+
+Prepare and inspect the cost-bound input before authorizing any provider mutation:
+
+```bash
+python -m circuits.graph_labeling prepare-openai-batch \
+  --run-root RUN_ROOT --method-id METHOD_ID --max-cost-usd 10
+```
+
+The plan binds the run, study, method, every logical request/evidence hash, exact JSONL bytes, the
+Responses endpoint, 24-hour window, and the dated graph-labeling price snapshot. Its conservative
+input proxy charges each UTF-8 request-body byte at the larger of uncached-input or cache-write
+rates and combines that with the full configured output ceiling. Submission refuses a guard below
+this ceiling. Collection applies the same conservative policy to actual usage: every inclusive
+input token is charged at `max(input_rate, cache_write_rate)`, then output is added. It also
+requires the Batch aggregate usage to equal the sum of typed per-response usage before promotion.
+
+Live commands read `OPENAI_API_KEY` from the process environment only. They never write or print
+it. Submission uses one cross-process lifecycle gate, disables SDK retries, and separately records
+an upload intent, purpose=batch upload receipt, create intent, and `/v1/responses` Batch receipt.
+Repeating a completed local submission returns the same receipt; an intent without its next receipt
+is treated as indeterminate and cannot auto-submit. An upload-only attempt can be explicitly
+recovered with `recover-openai-upload --input-file-id`; it verifies the provider file's purpose and
+byte-compares it with the frozen JSONL. After an indeterminate create, locate the one matching Batch
+in the provider dashboard and use `recover-openai-batch --batch-id`; recovery likewise downloads
+and byte-compares its input before creating a local recovered receipt.
+If operator investigation instead proves the attempt should never continue,
+`abandon-openai-attempt --reason` writes a terminal, provenance-bound abandonment receipt; it
+does not silently retry or create another upload.
+
+```bash
+python -m circuits.graph_labeling submit-openai-batch \
+  --run-root RUN_ROOT --method-id METHOD_ID --max-cost-usd 10
+python -m circuits.graph_labeling openai-batch-status \
+  --run-root RUN_ROOT --method-id METHOD_ID
+python -m circuits.graph_labeling collect-openai-batch \
+  --run-root RUN_ROOT --method-id METHOD_ID --finalize
+```
+
+Status observations are append-only and hash-linked. Each collection attempt first persists its
+exclusive claim and intent, then its remote snapshot and exact output/error bytes in an attempt
+directory. Only a completed,
+zero-failure Batch with exactly one successful response for every frozen `custom_id`, reconciled
+typed per-request/aggregate usage, and actual priced cost below both guards is atomically promoted.
+Unknown, missing, duplicate, failed, partial, malformed, or cost-inconsistent responses fail closed
+without poisoning a later attempt. `--finalize` invokes the existing ingestion path with a result
+source bound to the collection receipt, provider IDs, output hash, exact provider-returned model,
+usage, and cost. The finalization receipt then binds that collection to the immutable label-set
+manifest, labels file, and label-set finalization receipt. No command polls in a tight loop; rerun
+status when desired.
+
+The v2 prompt uses `adag.graph-labeling.labeler-evidence-projection.v2`: selection-group,
+trace-provenance, sampling, path-search, and audit/coverage fields remain in frozen local evidence
+but are excluded from provider messages. V1 prompt requests are unchanged.

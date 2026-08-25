@@ -192,10 +192,87 @@ def _render_prompt(
         "attribution or incoming-edge evidence. target_effect is supports, suppresses, "
         "mixed, or unclear. Abstain when the packet is insufficient."
     )
+    if method.prompt_version == "structured-llm-graph-role-v2":
+        packet_value = packet.model_dump(mode="json")
+        evidence_for_labeler = {
+            "schema_version": "adag.graph-labeling.labeler-evidence-projection.v2",
+            "evidence_policy": packet.evidence_policy,
+            "claim_boundary": packet.claim_boundary,
+            "subject": {
+                key: packet_value["subject"][key]
+                for key in (
+                    "occurrence_id",
+                    "basis_id",
+                    "layer",
+                    "neuron_index",
+                    "polarity",
+                    "token_position",
+                    "target",
+                )
+            },
+            "context": packet.context,
+            "node": packet.node,
+            "facts": [
+                fact
+                for fact in packet.facts
+                if fact.get("category")
+                in {"node_measurement", "target_identity", "target_contribution"}
+            ],
+            "top_positive_sources": packet.top_positive_sources,
+            "top_negative_sources": packet.top_negative_sources,
+            "top_incoming_edges": packet.top_incoming_edges,
+            "top_outgoing_edges": packet.top_outgoing_edges,
+            "direct_target_edges": packet.direct_target_edges,
+            "target_connected_paths": packet.target_connected_paths,
+        }
+        forbidden_keys = {
+            "selection_group",
+            "trace_unit_id",
+            "source_trace_sha256",
+            "evidence_sha256",
+            "coverage",
+            "path_search",
+        }
+
+        def remove_audit_fields(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {
+                    key: remove_audit_fields(nested)
+                    for key, nested in value.items()
+                    if key not in forbidden_keys
+                    and "sampling" not in key.lower()
+                    and "audit" not in key.lower()
+                }
+            if isinstance(value, list):
+                return [remove_audit_fields(nested) for nested in value]
+            return value
+
+        evidence_for_labeler = remove_audit_fields(evidence_for_labeler)
+
+        def assert_projection_fence(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    normalized = key.lower()
+                    if (
+                        key in forbidden_keys
+                        or "sampling" in normalized
+                        or "audit" in normalized
+                    ):
+                        raise ValueError(
+                            f"labeler projection contains forbidden audit key: {key}"
+                        )
+                    assert_projection_fence(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    assert_projection_fence(nested)
+
+        assert_projection_fence(evidence_for_labeler)
+    else:
+        evidence_for_labeler = packet.model_dump(mode="json")
     user = (
         "Evidence packet follows. Every evidential claim must cite its evidence_id.\n"
         "<evidence_packet>\n"
-        + json.dumps(packet.model_dump(mode="json"), indent=2, sort_keys=True)
+        + json.dumps(evidence_for_labeler, indent=2, sort_keys=True)
         + "\n</evidence_packet>"
     )
     messages = [
@@ -684,6 +761,17 @@ def _finalize_label_set(
         }
         result_manifest = {**core, "content_hash": canonical_sha256(core)}
         atomic_write_json(staging / "manifest.json", result_manifest)
+        finalization_core = {
+            "schema_version": "adag.graph-labeling.finalization-receipt.v1",
+            "label_set_id": label_set_id,
+            "label_set_manifest_sha256": result_manifest["content_hash"],
+            "labels_file_sha256": result_manifest["labels_file_sha256"],
+            "result_source_sha256": canonical_sha256(result_source),
+        }
+        atomic_write_json(
+            staging / "finalization-receipt.json",
+            {**finalization_core, "content_hash": canonical_sha256(finalization_core)},
+        )
         if destination.exists():
             existing = _load_label_set(root, manifest, method)
             if existing[0]["content_hash"] != result_manifest["content_hash"]:
@@ -705,6 +793,7 @@ def _load_label_set(
     label_set_id = label_set_identity(manifest["study_sha256"], method.identity_sha256)
     result_root = root / "label-sets" / label_set_id
     result_manifest = _read_stable_json(result_root / "manifest.json")
+    finalization_path = result_root / "finalization-receipt.json"
     core = dict(result_manifest)
     recorded = core.pop("content_hash", None)
     expected = {
@@ -719,6 +808,53 @@ def _load_label_set(
         result_manifest.get(key) != value for key, value in expected.items()
     ):
         raise ValueError("label-set result manifest identity mismatch")
+    result_source = result_manifest.get("result_source")
+    requires_finalization = (
+        isinstance(result_source, dict)
+        and result_source.get("kind") == "openai_batch_collection_v1"
+    )
+    if requires_finalization:
+        collection_path = (
+            root / "openai-batches" / label_set_id / "collection" / "receipt.json"
+        )
+        collection = _read_stable_json(collection_path)
+        collection_core = dict(collection)
+        collection_hash = collection_core.pop("content_hash", None)
+        labeler = method.labeler
+        if (
+            collection_hash != canonical_sha256(collection_core)
+            or result_source.get("collection_receipt_sha256") != collection_hash
+            or result_source.get("output_file_sha256")
+            != collection.get("output_file_sha256")
+            or result_source.get("batch_id") != collection.get("batch_id")
+            or result_source.get("input_file_id") != collection.get("input_file_id")
+            or result_source.get("output_file_id") != collection.get("output_file_id")
+            or result_source.get("configured_model")
+            != collection.get("configured_model")
+            or labeler is None
+            or result_source.get("configured_model") != labeler.model
+            or result_source.get("provider_exact_models")
+            != collection.get("provider_exact_models")
+            or result_source.get("provider_response_bindings_sha256")
+            != collection.get("provider_response_bindings_sha256")
+        ):
+            raise ValueError("OpenAI Batch label-set collection provenance drift")
+    if requires_finalization and not finalization_path.is_file():
+        raise ValueError("OpenAI Batch label set lacks a finalization receipt")
+    if finalization_path.exists():
+        finalization = _read_stable_json(finalization_path)
+        finalization_core = dict(finalization)
+        finalization_hash = finalization_core.pop("content_hash", None)
+        if (
+            finalization_hash != canonical_sha256(finalization_core)
+            or finalization.get("label_set_id") != label_set_id
+            or finalization.get("label_set_manifest_sha256") != recorded
+            or finalization.get("labels_file_sha256")
+            != result_manifest.get("labels_file_sha256")
+            or finalization.get("result_source_sha256")
+            != canonical_sha256(result_manifest.get("result_source"))
+        ):
+            raise ValueError("label-set finalization receipt drift")
     labels_path = result_root / str(result_manifest.get("labels_file"))
     rows, labels_file_sha = _read_stable_jsonl(labels_path)
     if labels_file_sha != result_manifest.get("labels_file_sha256"):
@@ -894,7 +1030,13 @@ def _read_stable_jsonl(path: Path) -> tuple[list[dict[str, Any]], str]:
     return values, hashlib.sha256(first).hexdigest()
 
 
-def ingest_results(run_root: Path, method_id: str, results_jsonl: Path) -> RunReceipt:
+def ingest_results(
+    run_root: Path,
+    method_id: str,
+    results_jsonl: Path,
+    *,
+    result_source: dict[str, Any] | None = None,
+) -> RunReceipt:
     """Validate a complete external result file and atomically finalize its labels."""
 
     root = run_root.expanduser().resolve()
@@ -951,7 +1093,8 @@ def ingest_results(run_root: Path, method_id: str, results_jsonl: Path) -> RunRe
         manifest,
         method,
         labels,
-        result_source={
+        result_source=result_source
+        or {
             "kind": "external_jsonl_v1",
             "input_file_sha256": input_file_sha,
             "row_count": len(rows),

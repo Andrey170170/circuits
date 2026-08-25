@@ -87,6 +87,8 @@ class LabelerSpec(StrictModel):
 
     @model_validator(mode="after")
     def reject_operational_or_secret_parameters(self) -> LabelerSpec:
+        if self.reasoning and self.temperature is not None:
+            raise ValueError("reasoning and temperature cannot be configured together")
         forbidden = {
             "api_key",
             "api_key_env",
