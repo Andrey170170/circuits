@@ -535,6 +535,54 @@ reservation-based headroom. The next Level 1 checkpoint should remove the mask-s
 compaction used only for the all-zero test, then separately qualify immediate detach of terminal
 attribution projections. No broader trace run was launched during this checkpoint.
 
+### Level 1h measured checkpoint: important-mask positive-value guard
+
+Execution commit `6e61b4f5459d383ff4b483b63ca41510046dd870` replaces the
+`important_mask_selection` boolean-index compaction with an explicit comparison reduction. The
+old path materialized all positive values, together with the dynamic nonzero/index workspace,
+although it consumed only `len(nonzero_values) == 0`. The shared replacement is used by both the
+active tracing path and the legacy core path. It retains the strict `> 0` comparison, so empty
+tensors, signed zero, negative inputs, NaNs, and infinities keep the previous predicate semantics.
+The reduction still materializes a one-byte comparison tensor and is therefore a Level 1
+coefficient reduction rather than bounded-memory selection.
+
+The focused semantic, operator-lifetime, teacher-forced probe, and upstream T5 gates passed 37
+tests, Ruff check and format, and diff hygiene. A separate critical review found no blocking issue.
+The repository-wide ty gate remains red on pre-existing coarse-sampling and tracing diagnostics;
+`circuits/tracing/attribution.py` is also outside the configured typed boundary. The immutable
+execution worktree is
+`/scratch/general/vast/u1653998/circuits/run-worktrees/important-mask-selection-qual-6e61b4f`.
+Slurm job `15120817` ran the frozen 2,951-token width-one target on a single A100 80GB PCIe at
+`notch369`, completed with exit `0:0` in 3:35, and produced artifact
+`topk-trace-b506c0605383a78f4d6756b5`.
+
+| Measurement | Accepted width-one baseline | Positive-value reduction | Difference |
+| --- | ---: | ---: | ---: |
+| Trace wall seconds | 136.11017425195314 | 139.66994787286967 | +3.55977362091653 (+2.62 percent) |
+| Global peak allocated bytes | 36,359,686,656 | 36,084,537,856 | -275,148,800 (-0.76 percent) |
+| Global peak reserved bytes | 51,661,242,368 | 38,486,933,504 | -13,174,308,864 (-25.50 percent) |
+| Important-mask peak allocated bytes | 36,359,686,656 | 19,313,699,328 | -17,045,987,328 (-46.88 percent) |
+| Important-mask incremental workspace bytes | 23,249,362,944 | 6,203,375,616 | -17,045,987,328 (-73.32 percent) |
+| Important-mask peak reserved bytes | 51,661,242,368 | 34,613,493,760 | -17,047,748,608 (-33.00 percent) |
+| Important-mask wall seconds | 0.14330808888189495 | 0.10546518489718437 | -0.03784290398471 (-26.41 percent) |
+
+The single-run total trace time was 2.62 percent slower on a different physical A100 node, while
+the changed stage itself was 26.41 percent faster. This is insufficient evidence for a total
+runtime regression or improvement, and no repeated timing campaign was run. The strict report
+`.../qualification-reports/prior-width1-vs-mask-reduction-zero-v1.json`, SHA-256
+`9a10a242cb9347e0ee0f614ee6eeaa869eda5d101218d9568044521f16b27bfb`, records
+`qualification_passed=true`: both artifact identities are internally valid, the frozen scientific
+identity and A100 model match, node and edge topology are exact, and targets, node values, edge
+values, source-attribution profiles, and all five candidate profiles have zero maximum absolute
+error.
+
+The selection allocation is therefore retired as the global owner. The new allocated peak is
+36,084,537,856 bytes in `selected_attribution_contribution`, specifically its
+`selected_attribution_vjp` calls; its first measured call begins at 14,144,219,648 bytes and peaks
+at 36,084,537,856 bytes. The next Level 1 checkpoint should qualify immediate detach/release of
+terminal attribution projections within that path before introducing Level 2 host-backed
+offload. No broader trace run was launched during this checkpoint.
+
 ## Level 2: host-backed boundary streaming and source-group reuse
 
 ### Method

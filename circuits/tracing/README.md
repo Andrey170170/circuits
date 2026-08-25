@@ -122,3 +122,17 @@ runtime penalty. The newly exposed owner is `important_mask_selection`;
 reserved CUDA memory remains unchanged. Width one is accepted only as an
 opt-in exact capacity primitive on this calibration target, and `None` remains
 the compatibility default.
+
+Commit `6e61b4f5459d383ff4b483b63ca41510046dd870` removes the
+`important_mask_selection` boolean-index compaction that was used only to test
+whether any strictly positive attribution exists. A shared comparison reduction
+preserves the previous empty, zero, NaN, and infinity semantics in both the active
+and legacy selection paths. On the same frozen 2,951-token target and A100 model,
+the selection-stage allocated peak fell from 36,359,686,656 to 19,313,699,328
+bytes and its incremental workspace fell from 23,249,362,944 to 6,203,375,616
+bytes. The run is bit-exact against the accepted width-one artifact at zero
+tolerance for targets, nodes, edges, candidate profiles, and topology. The
+run-wide allocated peak fell only to 36,084,537,856 bytes because ownership moved
+to `selected_attribution_contribution`; the run-wide reserved peak fell to
+38,486,933,504 bytes. This exact lifetime optimization is the active behavior,
+while the remaining comparison tensor still scales at one boolean per attribution.
