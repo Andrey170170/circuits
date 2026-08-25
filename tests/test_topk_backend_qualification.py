@@ -11,6 +11,7 @@ from circuits.tracing.backend_qualification import (
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+    SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_attention_backend_artifacts,
@@ -35,6 +36,7 @@ def _manifest(
     embedding_edge_materialization: str | None = None,
     cross_layer_jacobian_execution: str | None = None,
     contribution_target_lane_chunk_size: object = _UNSET,
+    selected_neuron_contribution_target_lane_chunk_size: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -93,6 +95,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "stop_gradient_contribution_target_lane_chunk_size"
         ] = contribution_target_lane_chunk_size
+    if selected_neuron_contribution_target_lane_chunk_size is not _UNSET:
+        manifest["artifact_identity"]["adag_config"][
+            "selected_neuron_contribution_target_lane_chunk_size"
+        ] = selected_neuron_contribution_target_lane_chunk_size
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -153,6 +159,21 @@ def _complete_trace_metadata(trace) -> None:
     )
 
 
+def _selected_neuron_receipt_instrumentation(layers: list[dict]) -> dict:
+    return {
+        "layers": layers,
+        "early_predictors": {
+            "selected_neuron_counts_by_layer": [
+                {
+                    "layer": layer["layer"],
+                    "count": layer.get("selected_neuron_count", 0),
+                }
+                for layer in layers
+            ]
+        },
+    }
+
+
 def _rehash_manifest(manifest: dict) -> dict:
     identity = manifest["artifact_identity"]
     identity_without_hash = {
@@ -174,15 +195,29 @@ def _rehash_manifest(manifest: dict) -> dict:
 def _save_pair(
     tmp_path,
     *,
+    reference_backend: str = "eager",
+    candidate_backend: str = "sdpa_ov_only",
     reference_execution: str | None = "full_graph_v1",
     candidate_execution: str | None = "full_graph_v1",
     reference_chunk_size: object = _UNSET,
     candidate_chunk_size: object = _UNSET,
+    reference_selected_neuron_chunk_size: object = _UNSET,
+    candidate_selected_neuron_chunk_size: object = _UNSET,
+    reference_selected_neuron_receipts: list[dict] | None = None,
+    candidate_selected_neuron_receipts: list[dict] | None = None,
 ):
     reference = _topk_trace()
     candidate = deepcopy(reference)
     _complete_trace_metadata(reference)
     _complete_trace_metadata(candidate)
+    if reference_selected_neuron_receipts is not None:
+        reference.circuit_data.trace_metadata["instrumentation"] = (
+            _selected_neuron_receipt_instrumentation(reference_selected_neuron_receipts)
+        )
+    if candidate_selected_neuron_receipts is not None:
+        candidate.circuit_data.trace_metadata["instrumentation"] = (
+            _selected_neuron_receipt_instrumentation(candidate_selected_neuron_receipts)
+        )
     reference_path = tmp_path / "reference"
     candidate_path = tmp_path / "candidate"
     save_topk_compact_trace(
@@ -195,9 +230,12 @@ def _save_pair(
             "rss_peak_after_bytes": 200,
         },
         manifest=_manifest(
-            "eager",
+            reference_backend,
             contribution_execution=reference_execution,
             contribution_target_lane_chunk_size=reference_chunk_size,
+            selected_neuron_contribution_target_lane_chunk_size=(
+                reference_selected_neuron_chunk_size
+            ),
         ),
     )
     save_topk_compact_trace(
@@ -210,9 +248,12 @@ def _save_pair(
             "rss_peak_after_bytes": 190,
         },
         manifest=_manifest(
-            "sdpa_ov_only",
+            candidate_backend,
             contribution_execution=candidate_execution,
             contribution_target_lane_chunk_size=candidate_chunk_size,
+            selected_neuron_contribution_target_lane_chunk_size=(
+                candidate_selected_neuron_chunk_size
+            ),
         ),
     )
     return reference_path, candidate_path
@@ -339,6 +380,189 @@ def test_backend_qualification_rejects_wildcard_for_scalar_strategy(
                 "artifact_identity.adag_config.stop_gradient_contribution_execution.*"
             ],
         )
+
+
+def test_backend_qualification_can_allow_selected_neuron_chunk_size_difference(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_selected_neuron_chunk_size=None,
+        candidate_selected_neuron_chunk_size=1,
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=[
+            *_allowed_paths(),
+            *SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
+        ],
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+    )
+
+    assert report["validation_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    allowed = report["identity"]["artifact_identity"]["allowed_differences"]
+    assert {difference["path"] for difference in allowed} >= {
+        "artifact_identity.adag_config.stop_gradient_attention_backend",
+        "artifact_identity.adag_config."
+        "selected_neuron_contribution_target_lane_chunk_size",
+    }
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config."
+                "selected_neuron_contribution_target_lane_chunk_size.*"
+            ],
+        )
+
+
+def _selected_neuron_receipts() -> list[dict]:
+    selected = [
+        {
+            "layer": layer,
+            "selected_neuron_count": layer + 1,
+            "selected_neuron_contribution_projected_vjp_shape": [layer + 1, 1, 5],
+            "selected_neuron_contribution_target_lane_count": 5,
+            "selected_neuron_contribution_projected_vjp_sha256": character * 64,
+        }
+        for layer, character in ((0, "1"), (3, "a"))
+    ]
+    selected.insert(
+        1,
+        {
+            "layer": 1,
+            "selected_neuron_count": 0,
+            "unrelated_layer_telemetry": True,
+        },
+    )
+    return selected
+
+
+def test_selected_neuron_chunk_ab_requires_exact_projected_receipts(tmp_path) -> None:
+    receipts = _selected_neuron_receipts()
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_neuron_chunk_size=None,
+        candidate_selected_neuron_chunk_size=1,
+        reference_selected_neuron_receipts=deepcopy(receipts),
+        candidate_selected_neuron_receipts=deepcopy(receipts),
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        require_canonical_selected_neuron_contribution_target_lane_chunk_ab=True,
+    )
+
+    assert report["qualification_passed"] is True
+    contract = report["selected_neuron_contribution_target_lane_chunk_ab_contract"]
+    assert contract["passed"] is True
+    assert contract["exact_receipts"]["checks"] == {
+        "reference_presence_and_order": True,
+        "candidate_presence_and_order": True,
+        "layer_order_equal": True,
+        "receipt_hashes_exact": True,
+    }
+
+
+def test_selected_neuron_chunk_ab_cli_selects_fail_closed_profile(tmp_path) -> None:
+    args = build_parser().parse_args(
+        [
+            "--reference",
+            str(tmp_path / "reference"),
+            "--candidate",
+            str(tmp_path / "candidate"),
+            "--output",
+            str(tmp_path / "report.json"),
+            "--selected-neuron-contribution-target-lane-chunk-ab",
+        ]
+    )
+
+    options = comparison_options(args)
+
+    assert options["allowed_identity_difference_paths"] == (
+        SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+    assert (
+        options["require_canonical_selected_neuron_contribution_target_lane_chunk_ab"]
+        is True
+    )
+    assert all(
+        tolerance == NumericTolerance(absolute=0.0, relative=0.0)
+        for tolerance in options["tolerances"].values()
+    )
+
+
+@pytest.mark.parametrize(
+    "defect", ["missing", "reordered", "mismatch", "both_complete_missing"]
+)
+def test_selected_neuron_chunk_ab_fails_closed_on_receipt_defects(
+    tmp_path, defect: str
+) -> None:
+    reference_receipts = _selected_neuron_receipts()
+    candidate_receipts = deepcopy(reference_receipts)
+    receipt_fields = (
+        "selected_neuron_contribution_projected_vjp_shape",
+        "selected_neuron_contribution_target_lane_count",
+        "selected_neuron_contribution_projected_vjp_sha256",
+    )
+    if defect == "missing":
+        candidate_receipts[0].pop("selected_neuron_contribution_projected_vjp_sha256")
+    elif defect == "reordered":
+        candidate_receipts.reverse()
+    elif defect == "mismatch":
+        candidate_receipts[2]["selected_neuron_contribution_projected_vjp_sha256"] = (
+            "b" * 64
+        )
+    else:
+        for receipts in (reference_receipts, candidate_receipts):
+            for field in receipt_fields:
+                receipts[2].pop(field)
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_neuron_chunk_size=None,
+        candidate_selected_neuron_chunk_size=1,
+        reference_selected_neuron_receipts=reference_receipts,
+        candidate_selected_neuron_receipts=candidate_receipts,
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        require_canonical_selected_neuron_contribution_target_lane_chunk_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    assert (
+        report["selected_neuron_contribution_target_lane_chunk_ab_contract"]["passed"]
+        is False
+    )
 
 
 def test_execution_qualification_allows_exact_allocator_policy_only(

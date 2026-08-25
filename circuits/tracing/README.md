@@ -74,3 +74,13 @@ peak. The remaining owner is localized only to the enclosing
 `stop_grad_mlp_attribution_contribution` stage, not yet to a specific operation.
 Add finer forward/post-VJP telemetry before choosing offload or recomputation
 work from this result.
+
+`ADAGConfig.selected_neuron_contribution_target_lane_chunk_size` is the
+independent counterpart for the ordinary selected-neuron contribution loop.
+It preserves the shared forward graph across every layer and target chunk,
+projects each dense raw VJP into canonical selected-coordinate storage before
+the next traversal, and leaves the embedding contribution VJP unchunked.
+`None` preserves the historical all-target execution and identity-matrix reuse;
+a positive integer opts into bounded target-axis chunks. Treat this option as
+an engineering candidate until a frozen same-code `None` versus width-one A100
+qualification passes exact projected-receipt and compact-artifact gates.

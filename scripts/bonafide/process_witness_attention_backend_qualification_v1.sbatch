@@ -43,6 +43,7 @@ cd "$REPO_ROOT"
 EXPECTED_CUDA_ALLOCATOR_POLICY="${EXPECTED_CUDA_ALLOCATOR_POLICY:-}"
 EXPECTED_EMBEDDING_EDGE_MATERIALIZATION="${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-}"
 EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION="${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-}"
+EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE="${EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE:-legacy_unbound}"
 
 for path_name in CONFIG MANIFEST ARTIFACT_ROOT UV_PROJECT_ENVIRONMENT; do
     path_value="${!path_name}"
@@ -77,6 +78,12 @@ esac
 if [[ "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" != "none" ]] &&
    [[ ! "$EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" =~ ^[1-9][0-9]*$ ]]; then
     echo "EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE must be none or a positive integer." >&2
+    exit 2
+fi
+if [[ "$EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" != "legacy_unbound" ]] &&
+   [[ "$EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" != "none" ]] &&
+   [[ ! "$EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE must be legacy_unbound, none, or a positive integer." >&2
     exit 2
 fi
 case "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" in
@@ -184,6 +191,12 @@ repo_root=pathlib.Path(sys.argv[10])
 expected_allocator_policy=sys.argv[11] or None
 expected_embedding_edge_materialization=sys.argv[12] or None
 expected_cross_layer_jacobian_execution=sys.argv[13] or None
+expected_selected_chunk_size_raw=sys.argv[14]
+expected_selected_chunk_size=(
+    None
+    if expected_selected_chunk_size_raw in {"legacy_unbound", "none"}
+    else int(expected_selected_chunk_size_raw)
+)
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -196,6 +209,13 @@ if adag.get("stop_gradient_contribution_execution") != expected_contribution_exe
 chunk_size_field="stop_gradient_contribution_target_lane_chunk_size"
 if chunk_size_field not in adag or adag[chunk_size_field] != expected_chunk_size:
     raise SystemExit("run config target-lane chunk size disagrees with EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE")
+selected_chunk_size_field="selected_neuron_contribution_target_lane_chunk_size"
+selected_chunk_size_is_bound=expected_selected_chunk_size_raw != "legacy_unbound"
+if selected_chunk_size_is_bound:
+    if selected_chunk_size_field not in adag or adag[selected_chunk_size_field] != expected_selected_chunk_size:
+        raise SystemExit("run config selected-neuron target-lane chunk size disagrees with EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE")
+elif selected_chunk_size_field in adag:
+    raise SystemExit("legacy-unbound qualification config unexpectedly declares selected-neuron target-lane chunk size")
 declared_embedding_edge_materialization=adag.get("embedding_edge_materialization")
 if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
@@ -246,7 +266,8 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$WIDTH1_SOURCE_MANIFEST_FILE_SHA256" "$REPO_ROOT" \
         "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
         "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
-        "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION"
+        "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION" \
+        "$EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE"
 )"
 
 for target in "$EXPECTED_OUTPUT_DIR" "$SUMMARY_JSONL"; do
@@ -263,6 +284,7 @@ echo "job_id=${SLURM_JOB_ID} node=${SLURMD_NODENAME} wave=${WAVE} source=${ONLY_
 echo "backend=${EXPECTED_ATTENTION_BACKEND} config=${CONFIG} manifest=${MANIFEST}"
 echo "stop_gradient_contribution_execution=${EXPECTED_STOP_GRADIENT_CONTRIBUTION_EXECUTION}"
 echo "stop_gradient_contribution_target_lane_chunk_size=${EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE}"
+echo "selected_neuron_contribution_target_lane_chunk_size=${EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
 echo "cross_layer_jacobian_execution=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-legacy_unbound}"
@@ -325,6 +347,12 @@ expected_gpu=sys.argv[7]
 expected_allocator_policy=sys.argv[8] or None
 expected_embedding_edge_materialization=sys.argv[9] or None
 expected_cross_layer_jacobian_execution=sys.argv[10] or None
+expected_selected_chunk_size_raw=sys.argv[11]
+expected_selected_chunk_size=(
+    None
+    if expected_selected_chunk_size_raw in {"legacy_unbound", "none"}
+    else int(expected_selected_chunk_size_raw)
+)
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -350,6 +378,14 @@ chunk_size_field="stop_gradient_contribution_target_lane_chunk_size"
 observed_chunk_size=artifact_adag.get(chunk_size_field)
 if chunk_size_field not in artifact_adag or observed_chunk_size != expected_chunk_size:
     raise SystemExit("saved artifact target-lane chunk size identity disagrees with requested strategy")
+selected_chunk_size_field="selected_neuron_contribution_target_lane_chunk_size"
+selected_chunk_size_is_bound=expected_selected_chunk_size_raw != "legacy_unbound"
+observed_selected_chunk_size=artifact_adag.get(selected_chunk_size_field)
+if selected_chunk_size_is_bound:
+    if selected_chunk_size_field not in artifact_adag or observed_selected_chunk_size != expected_selected_chunk_size:
+        raise SystemExit("saved artifact selected-neuron target-lane chunk size identity disagrees with requested strategy")
+elif selected_chunk_size_field in artifact_adag:
+    raise SystemExit("legacy-unbound artifact unexpectedly declares selected-neuron target-lane chunk size")
 observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materialization")
 if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
@@ -385,4 +421,5 @@ if expected_allocator_policy is not None:
     "$EXPECTED_GPU_NAME" \
     "$EXPECTED_CUDA_ALLOCATOR_POLICY" \
     "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
-    "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION"
+    "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION" \
+    "$EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE"

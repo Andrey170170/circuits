@@ -14,6 +14,7 @@ from circuits.tracing.backend_qualification import (
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+    SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_execution_artifacts,
@@ -95,6 +96,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--selected-neuron-contribution-target-lane-chunk-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed ordinary selected-neuron contribution target-lane "
+            "chunk A/B profile: explicit None control and width-one candidate, "
+            "same GPU model, exact topology and per-layer projected-VJP receipts, "
+            "zero numerical tolerances, and only the exact chunk-width field may "
+            "differ."
+        ),
+    )
+    parser.add_argument(
         "--allow-identity-difference",
         action="append",
         default=[],
@@ -135,6 +147,10 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             (args.cuda_allocator_ab, "--cuda-allocator-ab"),
             (args.embedding_edge_ab, "--embedding-edge-ab"),
             (args.cross_layer_jacobian_ab, "--cross-layer-jacobian-ab"),
+            (
+                args.selected_neuron_contribution_target_lane_chunk_ab,
+                "--selected-neuron-contribution-target-lane-chunk-ab",
+            ),
         )
         if enabled
     ]
@@ -157,8 +173,12 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             identity_paths = CUDA_ALLOCATOR_AB_IDENTITY_PATHS
         elif args.embedding_edge_ab:
             identity_paths = EMBEDDING_EDGE_AB_IDENTITY_PATHS
-        else:
+        elif args.cross_layer_jacobian_ab:
             identity_paths = CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS
+        else:
+            identity_paths = (
+                SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+            )
         return {
             "allowed_identity_difference_paths": identity_paths,
             "tolerances": {
@@ -172,6 +192,9 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             "require_canonical_cuda_allocator_ab": args.cuda_allocator_ab,
             "require_canonical_embedding_edge_ab": args.embedding_edge_ab,
             "require_canonical_cross_layer_jacobian_ab": (args.cross_layer_jacobian_ab),
+            "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": (
+                args.selected_neuron_contribution_target_lane_chunk_ab
+            ),
         }
 
     return {
@@ -188,6 +211,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
         "require_canonical_cuda_allocator_ab": False,
         "require_canonical_embedding_edge_ab": False,
         "require_canonical_cross_layer_jacobian_ab": False,
+        "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": False,
     }
 
 

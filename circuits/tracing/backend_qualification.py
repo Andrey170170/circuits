@@ -50,6 +50,10 @@ CROSS_LAYER_JACOBIAN_AB_STRATEGIES = ("full_model_v1", "cached_range_v1")
 CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
     "artifact_identity.adag_config.stop_gradient_contribution_target_lane_chunk_size",
 )
+SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.selected_neuron_contribution_target_lane_chunk_size",
+)
+SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_STRATEGIES = (None, 1)
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",
     "selected_target_activations",
@@ -60,6 +64,7 @@ _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config.stop_gradient_attention_backend",
     "artifact_identity.adag_config.stop_gradient_contribution_execution",
     "artifact_identity.adag_config.stop_gradient_contribution_target_lane_chunk_size",
+    "artifact_identity.adag_config.selected_neuron_contribution_target_lane_chunk_size",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -890,6 +895,148 @@ def _cross_layer_jacobian_receipt_contract(
     }
 
 
+def _selected_neuron_contribution_receipt_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+) -> dict[str, Any]:
+    """Require canonical per-layer projected ordinary-VJP receipts to match."""
+
+    receipt_field = "selected_neuron_contribution_projected_vjp_sha256"
+    shape_field = "selected_neuron_contribution_projected_vjp_shape"
+    target_count_field = "selected_neuron_contribution_target_lane_count"
+
+    def instrumentation(artifact: TopKCompactTraceArtifact) -> Any:
+        return artifact.topk_trace.circuit_data.trace_metadata.get("instrumentation")
+
+    def validate(raw_instrumentation: Any) -> tuple[bool, list[dict[str, Any]]]:
+        summaries: list[dict[str, Any]] = []
+        if not isinstance(raw_instrumentation, Mapping):
+            return False, summaries
+        raw_layers = raw_instrumentation.get("layers")
+        early_predictors = raw_instrumentation.get("early_predictors")
+        selected_counts_by_layer = (
+            early_predictors.get("selected_neuron_counts_by_layer")
+            if isinstance(early_predictors, Mapping)
+            else None
+        )
+        if not isinstance(raw_layers, list) or not raw_layers:
+            return False, summaries
+        selected_counts_valid = (
+            isinstance(selected_counts_by_layer, list)
+            and bool(selected_counts_by_layer)
+            and all(
+                isinstance(item, Mapping)
+                and type(item.get("layer")) is int
+                and item["layer"] >= 0
+                and type(item.get("count")) is int
+                and item["count"] >= 0
+                for item in selected_counts_by_layer
+            )
+        )
+        if not selected_counts_valid:
+            return False, summaries
+        expected_counts = {
+            item["layer"]: item["count"] for item in selected_counts_by_layer
+        }
+        selected_count_layers = [item["layer"] for item in selected_counts_by_layer]
+        selected_counts_valid = len(expected_counts) == len(
+            selected_counts_by_layer
+        ) and selected_count_layers == sorted(selected_count_layers)
+        if not selected_counts_valid:
+            return False, summaries
+        expected_layers = [
+            layer for layer, count in expected_counts.items() if count > 0
+        ]
+        if not expected_layers:
+            return False, summaries
+        raw_layer_ids = [
+            raw_layer.get("layer")
+            for raw_layer in raw_layers
+            if isinstance(raw_layer, Mapping)
+        ]
+        raw_layers_valid = (
+            len(raw_layer_ids) == len(raw_layers)
+            and all(type(layer) is int and layer >= 0 for layer in raw_layer_ids)
+            and len(set(raw_layer_ids)) == len(raw_layer_ids)
+            and raw_layer_ids == sorted(raw_layer_ids)
+        )
+        records_by_layer = {
+            raw_layer["layer"]: raw_layer
+            for raw_layer in raw_layers
+            if isinstance(raw_layer, Mapping) and type(raw_layer.get("layer")) is int
+        }
+        passed = True
+        for layer in expected_layers:
+            raw_layer = records_by_layer.get(layer, {})
+            receipt = raw_layer.get(receipt_field)
+            shape = raw_layer.get(shape_field)
+            target_count = raw_layer.get(target_count_field)
+            selected_neuron_count = raw_layer.get("selected_neuron_count")
+            layer_valid = selected_neuron_count == expected_counts[layer]
+            receipt_valid = (
+                isinstance(receipt, str)
+                and len(receipt) == 64
+                and all(character in "0123456789abcdef" for character in receipt)
+            )
+            shape_valid = (
+                isinstance(shape, list)
+                and len(shape) == 3
+                and all(type(extent) is int and extent > 0 for extent in shape)
+            )
+            target_count_valid = (
+                type(target_count) is int
+                and target_count > 0
+                and shape_valid
+                and shape[2] == target_count
+            )
+            valid = layer_valid and receipt_valid and shape_valid and target_count_valid
+            summaries.append(
+                {
+                    "layer": layer,
+                    "projected_vjp_shape": shape,
+                    "target_lane_count": target_count,
+                    "projected_vjp_sha256": receipt,
+                    "valid": valid,
+                }
+            )
+            passed = passed and valid
+        return passed and raw_layers_valid, summaries
+
+    reference_valid, reference_layers = validate(instrumentation(reference))
+    candidate_valid, candidate_layers = validate(instrumentation(candidate))
+    layer_order_equal = [item.get("layer") for item in reference_layers] == [
+        item.get("layer") for item in candidate_layers
+    ]
+    receipts_exact = (
+        reference_valid
+        and candidate_valid
+        and len(reference_layers) == len(candidate_layers)
+        and all(
+            reference_layer["projected_vjp_shape"]
+            == candidate_layer["projected_vjp_shape"]
+            and reference_layer["target_lane_count"]
+            == candidate_layer["target_lane_count"]
+            and reference_layer["projected_vjp_sha256"]
+            == candidate_layer["projected_vjp_sha256"]
+            for reference_layer, candidate_layer in zip(
+                reference_layers, candidate_layers, strict=True
+            )
+        )
+    )
+    checks = {
+        "reference_presence_and_order": reference_valid,
+        "candidate_presence_and_order": candidate_valid,
+        "layer_order_equal": layer_order_equal,
+        "receipt_hashes_exact": receipts_exact,
+    }
+    return {
+        "reference_layers": reference_layers,
+        "candidate_layers": candidate_layers,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def compare_execution_artifacts(
     reference_path: str | Path,
     candidate_path: str | Path,
@@ -903,6 +1050,7 @@ def compare_execution_artifacts(
     require_canonical_cuda_allocator_ab: bool = False,
     require_canonical_embedding_edge_ab: bool = False,
     require_canonical_cross_layer_jacobian_ab: bool = False,
+    require_canonical_selected_neuron_contribution_target_lane_chunk_ab: bool = False,
 ) -> dict[str, Any]:
     """Compare two saved execution traces under explicit qualification gates.
 
@@ -1102,6 +1250,79 @@ def compare_execution_artifacts(
                 "passed": cross_layer_jacobian_contract["passed"],
             }
         )
+    selected_neuron_contribution_chunk_contract = None
+    if require_canonical_selected_neuron_contribution_target_lane_chunk_ab:
+        reference_identity = reference.manifest.get("artifact_identity")
+        candidate_identity = candidate.manifest.get("artifact_identity")
+        reference_adag = (
+            reference_identity.get("adag_config")
+            if isinstance(reference_identity, Mapping)
+            else None
+        )
+        candidate_adag = (
+            candidate_identity.get("adag_config")
+            if isinstance(candidate_identity, Mapping)
+            else None
+        )
+        field = "selected_neuron_contribution_target_lane_chunk_size"
+        reference_strategy_valid = (
+            isinstance(reference_adag, Mapping)
+            and field in reference_adag
+            and reference_adag[field]
+            == SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_STRATEGIES[0]
+        )
+        candidate_strategy_valid = (
+            isinstance(candidate_adag, Mapping)
+            and field in candidate_adag
+            and candidate_adag[field]
+            == SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_STRATEGIES[1]
+        )
+        receipt_contract = _selected_neuron_contribution_receipt_contract(
+            reference, candidate
+        )
+        selected_neuron_contribution_chunk_contract = {
+            "reference_strategy": {
+                "expected": (
+                    SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_STRATEGIES[0]
+                ),
+                "observed": (
+                    reference_adag.get(field)
+                    if isinstance(reference_adag, Mapping)
+                    else None
+                ),
+                "field_present": (
+                    isinstance(reference_adag, Mapping) and field in reference_adag
+                ),
+                "passed": reference_strategy_valid,
+            },
+            "candidate_strategy": {
+                "expected": (
+                    SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_STRATEGIES[1]
+                ),
+                "observed": (
+                    candidate_adag.get(field)
+                    if isinstance(candidate_adag, Mapping)
+                    else None
+                ),
+                "field_present": (
+                    isinstance(candidate_adag, Mapping) and field in candidate_adag
+                ),
+                "passed": candidate_strategy_valid,
+            },
+            "exact_receipts": receipt_contract,
+            "passed": (
+                reference_strategy_valid
+                and candidate_strategy_valid
+                and receipt_contract["passed"]
+            ),
+        }
+        gates.append(
+            {
+                "gate": "canonical_selected_neuron_contribution_target_lane_chunk_ab_pair",
+                "required": True,
+                "passed": selected_neuron_contribution_chunk_contract["passed"],
+            }
+        )
     if require_same_gpu_family:
         gates.append(
             {
@@ -1164,6 +1385,8 @@ def compare_execution_artifacts(
             "artifact_identity.adag_config.stop_gradient_contribution_execution",
             "artifact_identity.adag_config."
             "stop_gradient_contribution_target_lane_chunk_size",
+            "artifact_identity.adag_config."
+            "selected_neuron_contribution_target_lane_chunk_size",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -1214,6 +1437,9 @@ def compare_execution_artifacts(
         "cuda_allocator_ab_contract": allocator_contract,
         "embedding_edge_ab_contract": embedding_edge_contract,
         "cross_layer_jacobian_ab_contract": cross_layer_jacobian_contract,
+        "selected_neuron_contribution_target_lane_chunk_ab_contract": (
+            selected_neuron_contribution_chunk_contract
+        ),
         "counts": {
             "reference": {
                 "nodes": len(reference_nodes),

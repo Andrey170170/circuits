@@ -367,6 +367,15 @@ class TraceInstrumentation:
         record = self._layers.setdefault(int(layer), {"layer": int(layer)})
         record.update(values)
 
+    def append_layer_record(self, layer: int, name: str, **values: Any) -> None:
+        """Append one ordered execution record without overwriting earlier calls."""
+
+        record = self._layers.setdefault(int(layer), {"layer": int(layer)})
+        series = record.setdefault(name, [])
+        if not isinstance(series, list):
+            raise RuntimeError(f"layer field {name!r} is not an appendable record list")
+        series.append(values)
+
     def record_layer_pair(self, src_layer: int, tgt_layer: int, **values: Any) -> None:
         record = {"src_layer": int(src_layer), "tgt_layer": int(tgt_layer), **values}
         self._layer_pairs.append(record)

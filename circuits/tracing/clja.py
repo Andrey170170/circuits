@@ -27,6 +27,7 @@ from circuits.tracing.candidates import (
 from circuits.tracing.contribution_execution import (
     DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION,
     StopGradientContributionExecution,
+    resolve_selected_neuron_contribution_target_lane_chunk_size,
     resolve_stop_gradient_contribution_execution,
     resolve_stop_gradient_contribution_target_lane_chunk_size,
 )
@@ -145,6 +146,8 @@ class ADAGConfig:
     )
     # Appended to preserve the positional order of historical fields.
     stop_gradient_contribution_target_lane_chunk_size: int | None = None
+    # Independent from the stop-gradient contribution execution above.
+    selected_neuron_contribution_target_lane_chunk_size: int | None = None
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
@@ -155,6 +158,9 @@ class ADAGConfig:
         resolve_cross_layer_jacobian_execution(self.cross_layer_jacobian_execution)
         resolve_stop_gradient_contribution_target_lane_chunk_size(
             self.stop_gradient_contribution_target_lane_chunk_size
+        )
+        resolve_selected_neuron_contribution_target_lane_chunk_size(
+            self.selected_neuron_contribution_target_lane_chunk_size
         )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -175,6 +181,8 @@ class ADAGConfig:
             self.cross_layer_jacobian_execution = DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION
         if "stop_gradient_contribution_target_lane_chunk_size" not in state:
             self.stop_gradient_contribution_target_lane_chunk_size = None
+        if "selected_neuron_contribution_target_lane_chunk_size" not in state:
+            self.selected_neuron_contribution_target_lane_chunk_size = None
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
@@ -183,6 +191,9 @@ class ADAGConfig:
         resolve_cross_layer_jacobian_execution(self.cross_layer_jacobian_execution)
         resolve_stop_gradient_contribution_target_lane_chunk_size(
             self.stop_gradient_contribution_target_lane_chunk_size
+        )
+        resolve_selected_neuron_contribution_target_lane_chunk_size(
+            self.selected_neuron_contribution_target_lane_chunk_size
         )
 
 
@@ -307,6 +318,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     stop_gradient_contribution_target_lane_chunk_size = (
         config.stop_gradient_contribution_target_lane_chunk_size
     )
+    selected_neuron_contribution_target_lane_chunk_size = (
+        config.selected_neuron_contribution_target_lane_chunk_size
+    )
     embedding_edge_materialization = config.embedding_edge_materialization
     cross_layer_jacobian_execution = config.cross_layer_jacobian_execution
     if instrumentation is not None:
@@ -321,6 +335,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "stop_gradient_contribution_target_lane_chunk_size",
             stop_gradient_contribution_target_lane_chunk_size,
+        )
+        instrumentation.set_counter(
+            "selected_neuron_contribution_target_lane_chunk_size",
+            selected_neuron_contribution_target_lane_chunk_size,
         )
         instrumentation.set_counter(
             "embedding_edge_materialization",
@@ -619,6 +637,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                         neuron_chunk_size=50,
                         verbose=verbose,
                         instrumentation=instrumentation,
+                        contribution_target_lane_chunk_size=(
+                            selected_neuron_contribution_target_lane_chunk_size
+                        ),
                     )
                 )
             else:
@@ -639,6 +660,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                         neuron_chunk_size=20,  # Smaller chunk size for IG
                         verbose=verbose,
                         instrumentation=instrumentation,
+                        contribution_target_lane_chunk_size=(
+                            selected_neuron_contribution_target_lane_chunk_size
+                        ),
                     )
                 )
 

@@ -1,10 +1,10 @@
-"""Execution strategies for per-layer stop-gradient contribution VJPs.
+"""Execution strategies for selected-neuron contribution VJPs.
 
-The public seam in this module owns four details that attribution callers
-should not need to coordinate themselves: selecting the layer's real
-``down_proj`` beneath any stop-gradient wrapper, installing and removing the
-appropriate activation hook, deciding where the autograd graph begins, and
-projecting a batched VJP into canonical selected-coordinate order.
+The interfaces here own the autograd details attribution callers should not
+coordinate themselves: source selection and graph lifetime, target-lane
+chunking, and projection into canonical selected-coordinate order. The
+stop-gradient interface additionally owns temporary activation hooks and its
+choice of dense or sparse differentiated source.
 """
 
 from __future__ import annotations
@@ -43,6 +43,15 @@ class StopGradientContributionForward:
     source_representation: Literal["dense", "selected_coordinates"]
     dense_vjp_result_materialized: bool
     dense_source_shape: tuple[int, ...]
+    selected_coordinates: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class SelectedNeuronContributionSource:
+    """One ordinary contribution source in stable selected-layer order."""
+
+    layer: int
+    source_activation: torch.Tensor
     selected_coordinates: tuple[tuple[int, int], ...]
 
 
@@ -116,6 +125,25 @@ def resolve_stop_gradient_contribution_target_lane_chunk_size(
     ):
         raise ValueError(
             "stop-gradient contribution target-lane chunk size must be a "
+            "positive integer or None"
+        )
+    return chunk_size
+
+
+def resolve_selected_neuron_contribution_target_lane_chunk_size(
+    chunk_size: int | None,
+) -> int | None:
+    """Validate the ordinary selected-neuron target-axis VJP chunk width."""
+
+    if chunk_size is None:
+        return None
+    if (
+        isinstance(chunk_size, bool)
+        or not isinstance(chunk_size, int)
+        or chunk_size <= 0
+    ):
+        raise ValueError(
+            "selected-neuron contribution target-lane chunk size must be a "
             "positive integer or None"
         )
     return chunk_size
@@ -289,6 +317,255 @@ def _copy_dense_selected_vjp(
         dtype=torch.long,
     )
     return dense_vjp[:, :, positions, neurons].permute(2, 1, 0)
+
+
+def run_selected_neuron_contribution_vjps(
+    sources: Sequence[SelectedNeuronContributionSource],
+    target_values: torch.Tensor,
+    *,
+    target_lane_chunk_size: int | None = None,
+    full_grad_outputs: torch.Tensor | None = None,
+    instrumentation: TraceInstrumentation | None = None,
+    execution_index: int | None = None,
+) -> list[torch.Tensor]:
+    """Return compact ordinary VJPs in selected-layer order.
+
+    Results use canonical ``(coordinate, batch, target)`` order. Target chunks
+    are contiguous and retain every batch lane, while each dense raw VJP is
+    projected into selected-coordinate storage before the next traversal. The
+    shared forward graph is retained for every traversal because ordinary
+    contribution sources all belong to the same graph and later tracing work
+    may still consume it.
+
+    ``full_grad_outputs`` lets the compatibility path reuse the identity matrix
+    already materialized for the embedding VJP. It is accepted only when the
+    resolved execution has a single target chunk. ``execution_index`` records
+    repeated IG steps as an ordered receipt series instead of overwriting a
+    singular per-layer receipt.
+    """
+
+    if target_values.ndim != 2:
+        raise ValueError("selected-neuron targets must have shape (target, batch)")
+    target_count, batch = target_values.shape
+    if target_count <= 0 or batch <= 0:
+        raise ValueError(
+            "selected-neuron targets must have non-empty target and batch axes"
+        )
+    if not sources:
+        raise ValueError("selected-neuron contribution VJP requires a source")
+
+    requested_chunk_size = resolve_selected_neuron_contribution_target_lane_chunk_size(
+        target_lane_chunk_size
+    )
+    resolved_chunk_size = min(requested_chunk_size or target_count, target_count)
+    target_chunks = tuple(
+        (start, min(start + resolved_chunk_size, target_count))
+        for start in range(0, target_count, resolved_chunk_size)
+    )
+    if full_grad_outputs is not None:
+        expected_shape = (target_count * batch, target_count * batch)
+        if len(target_chunks) != 1:
+            raise ValueError(
+                "full grad outputs can only be reused by an unchunked "
+                "selected-neuron contribution VJP"
+            )
+        if tuple(full_grad_outputs.shape) != expected_shape:
+            raise ValueError(
+                "full grad outputs shape does not match selected-neuron targets"
+            )
+        if full_grad_outputs.device != target_values.device:
+            raise ValueError(
+                "full grad outputs and selected-neuron targets must share a device"
+            )
+
+    # Reuse one identity per distinct chunk width across every selected layer.
+    # This preserves the historical single-eye compatibility path and avoids
+    # trading bounded raw VJPs for repeated identity allocations.
+    grad_outputs_by_lane_count: dict[int, torch.Tensor] = {}
+    if full_grad_outputs is not None:
+        grad_outputs_by_lane_count[target_count * batch] = full_grad_outputs
+
+    results: list[torch.Tensor] = []
+    for source_spec in sources:
+        source = source_spec.source_activation
+        coordinates = source_spec.selected_coordinates
+        if source.ndim != 3:
+            raise ValueError(
+                "selected-neuron source must have shape (batch, sequence, neuron)"
+            )
+        if source.shape[0] != batch:
+            raise ValueError(
+                "selected-neuron source and target batch dimensions differ"
+            )
+        if not coordinates:
+            raise ValueError("selected-neuron contribution VJP requires coordinates")
+
+        source.grad = None
+        dense_vjp_shape = (target_count * batch, *source.shape)
+        metadata = {
+            "operation_kind": "batched_vjp",
+            "layer": source_spec.layer,
+            "source_representation": "dense",
+            "selected_neuron_count": len(coordinates),
+            "lane_count": target_count * batch,
+            "target_lane_count": target_count,
+            "target_lane_chunk_size_requested": requested_chunk_size,
+            "target_lane_chunk_size_resolved": resolved_chunk_size,
+            "target_lane_chunk_count": len(target_chunks),
+            "max_materialized_target_lanes": resolved_chunk_size,
+            "max_materialized_autograd_lanes": resolved_chunk_size * batch,
+            "differentiated_output_shape": list(target_values.shape),
+            "differentiated_input_shape": list(source.shape),
+            "grad_outputs_shape": (
+                [target_count * batch] * 2 if len(target_chunks) == 1 else None
+            ),
+            "max_grad_outputs_shape": [resolved_chunk_size * batch] * 2,
+            "dense_vjp_result_shape": list(dense_vjp_shape),
+            "dense_vjp_result_materialized": True,
+            "retain_graph": True,
+            "execution_index": execution_index,
+        }
+        with cuda_memory_instrumentation_stage(
+            instrumentation,
+            "selected_neuron_contribution_vjp",
+            metadata=metadata,
+        ) as vjp_measurement:
+            projected_chunks: list[torch.Tensor] = []
+            raw_vjp_chunk_shapes: list[list[int]] = []
+            grad_outputs_chunk_shapes: list[list[int]] = []
+            for target_start, target_end in target_chunks:
+                chunk_target_count = target_end - target_start
+                chunk_autograd_lanes = chunk_target_count * batch
+                grad_outputs = grad_outputs_by_lane_count.get(chunk_autograd_lanes)
+                if grad_outputs is None:
+                    grad_outputs = torch.eye(
+                        chunk_autograd_lanes, device=target_values.device
+                    )
+                    grad_outputs_by_lane_count[chunk_autograd_lanes] = grad_outputs
+                target_chunk = target_values[target_start:target_end]
+                raw_vjp = torch.autograd.grad(
+                    target_chunk.flatten(),
+                    source,
+                    grad_outputs=grad_outputs,
+                    is_grads_batched=True,
+                    retain_graph=True,
+                )[0]
+                raw_vjp_chunk_shapes.append(list(raw_vjp.shape))
+                grad_outputs_chunk_shapes.append(list(grad_outputs.shape))
+                dense_vjp = (
+                    raw_vjp.reshape(
+                        chunk_target_count,
+                        batch,
+                        batch,
+                        raw_vjp.shape[-2],
+                        raw_vjp.shape[-1],
+                    )
+                    .diagonal(dim1=1, dim2=2)
+                    .permute(0, 3, 1, 2)
+                )
+                projected_chunks.append(
+                    _copy_dense_selected_vjp(dense_vjp, coordinates)
+                )
+                del dense_vjp, raw_vjp, target_chunk
+
+            projected = (
+                projected_chunks[0]
+                if len(projected_chunks) == 1
+                else torch.cat(projected_chunks, dim=2)
+            )
+            if vjp_measurement is not None:
+                single_raw_shape = (
+                    raw_vjp_chunk_shapes[0] if len(raw_vjp_chunk_shapes) == 1 else None
+                )
+                vjp_measurement.metadata["vjp_result_shape"] = single_raw_shape
+                vjp_measurement.metadata["raw_vjp_result_shape"] = single_raw_shape
+                vjp_measurement.metadata["raw_vjp_chunk_shapes"] = raw_vjp_chunk_shapes
+                vjp_measurement.metadata["grad_outputs_chunk_shapes"] = (
+                    grad_outputs_chunk_shapes
+                )
+                vjp_measurement.metadata["projected_vjp_result_shape"] = list(
+                    projected.shape
+                )
+
+        if instrumentation is not None:
+            single_raw_shape = (
+                raw_vjp_chunk_shapes[0] if len(raw_vjp_chunk_shapes) == 1 else None
+            )
+            projected_receipt = raw_tensor_sha256(projected)
+            layer_values = {
+                "selected_neuron_contribution_raw_vjp_shape": single_raw_shape,
+                "selected_neuron_contribution_raw_vjp_chunk_shapes": (
+                    raw_vjp_chunk_shapes
+                ),
+                "selected_neuron_contribution_grad_outputs_shape": (
+                    [target_count * batch] * 2 if len(target_chunks) == 1 else None
+                ),
+                "selected_neuron_contribution_grad_outputs_chunk_shapes": (
+                    grad_outputs_chunk_shapes
+                ),
+                "selected_neuron_contribution_max_grad_outputs_shape": (
+                    [resolved_chunk_size * batch] * 2
+                ),
+                "selected_neuron_contribution_projected_vjp_shape": list(
+                    projected.shape
+                ),
+                "selected_neuron_contribution_target_lane_count": target_count,
+                "selected_neuron_contribution_target_lane_chunk_size_requested": (
+                    requested_chunk_size
+                ),
+                "selected_neuron_contribution_target_lane_chunk_size_resolved": (
+                    resolved_chunk_size
+                ),
+                "selected_neuron_contribution_target_lane_chunk_count": len(
+                    target_chunks
+                ),
+                "selected_neuron_contribution_max_materialized_target_lanes": (
+                    resolved_chunk_size
+                ),
+                "selected_neuron_contribution_max_materialized_autograd_lanes": (
+                    resolved_chunk_size * batch
+                ),
+                "selected_neuron_contribution_dense_vjp_result_materialized": True,
+                "selected_neuron_contribution_retain_graph": True,
+            }
+            if execution_index is None:
+                instrumentation.record_layer(
+                    source_spec.layer,
+                    **layer_values,
+                    selected_neuron_contribution_receipt_mode="singular",
+                    selected_neuron_contribution_projected_vjp_sha256=(
+                        projected_receipt
+                    ),
+                )
+            else:
+                instrumentation.record_layer(
+                    source_spec.layer,
+                    **layer_values,
+                    selected_neuron_contribution_receipt_mode="execution_indexed",
+                )
+                instrumentation.append_layer_record(
+                    source_spec.layer,
+                    "selected_neuron_contribution_execution_receipts",
+                    execution_index=execution_index,
+                    projected_vjp_shape=list(projected.shape),
+                    projected_vjp_sha256=projected_receipt,
+                    target_lane_count=target_count,
+                )
+            instrumentation.increment_counter(
+                "selected_neuron_contribution_vjp_chunk_executions",
+                len(target_chunks),
+            )
+            instrumentation.set_counter(
+                "selected_neuron_contribution_max_materialized_target_lanes",
+                resolved_chunk_size,
+            )
+            instrumentation.set_counter(
+                "selected_neuron_contribution_max_materialized_autograd_lanes",
+                resolved_chunk_size * batch,
+            )
+        results.append(projected)
+
+    return results
 
 
 def run_stop_gradient_contribution_vjp(
@@ -498,10 +775,13 @@ def run_stop_gradient_contribution_vjp(
 
 __all__ = [
     "DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION",
+    "SelectedNeuronContributionSource",
     "StopGradientContributionExecution",
     "StopGradientContributionForward",
+    "resolve_selected_neuron_contribution_target_lane_chunk_size",
     "resolve_stop_gradient_contribution_execution",
     "resolve_stop_gradient_contribution_target_lane_chunk_size",
+    "run_selected_neuron_contribution_vjps",
     "run_stop_gradient_contribution_forward",
     "run_stop_gradient_contribution_vjp",
 ]
