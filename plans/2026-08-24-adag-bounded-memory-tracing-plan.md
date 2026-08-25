@@ -292,6 +292,50 @@ the same exact qualification. If successful, the next exposed owner is expected 
 40,590,557,696-byte embedding-contribution VJP; that expectation is a forecast, not qualification
 evidence.
 
+### Level 1d measured checkpoint: selected-forward graph release
+
+Two one-variable lifetime changes tested the layer-forward diagnosis sequentially.
+
+Commit `0853c7e55d6b6416e4f691480cf6d16bdcde7be8` releases the selected-attribution
+autograd graph on the final neuron chunk of each layer. Immutable worktree
+`/scratch/general/vast/u1653998/circuits/run-worktrees/selected-graph-release-qual-0853c7e`
+ran job `15117371` on `notch369`; artifact `topk-trace-54c0f3000eb4319cc1d701a2` passed the
+strict report `.../qualification-reports/telemetry-vs-final-release-zero-v1.json`, SHA-256
+`65a098e44b75bedb097674e66ab46d7292ee9189127abb6d4d71ad74da3888e9`. All 20 projected
+contribution-VJP receipts remained exact. This reduced global allocated peak by only 270,263,296
+bytes and left the selected-layer forward as the owner. The result showed that the traversed prefix
+graph was only a small part of the overlap.
+
+Commit `ca8aa5f4d86c70a4eb256104b4dff167f22f914a` removes each selected-activation capture hook
+immediately after the forward and releases the unused logits and downstream suffix graph before
+the selected VJPs. The selected activation and its required prefix graph remain live. A forced
+forward-failure test verifies hook cleanup, and the focused CPU gate passed 98 tests. Immutable
+worktree
+`/scratch/general/vast/u1653998/circuits/run-worktrees/selected-suffix-release-qual-ca8aa5f`
+ran job `15117489` alone on the same `notch369` A100. Artifact
+`topk-trace-1162ee18dc3ac10c7b585107` passed the strict report
+`.../qualification-reports/final-release-vs-suffix-release-zero-v1.json`, SHA-256
+`350d8923b424db7f4e106f080009c6659d66ac9ffef896d7ba0019d60aa9cafd`, with exact targets,
+nodes, edges, candidate profiles, topology, and all 20 projected contribution-VJP receipts.
+
+| Measurement | Telemetry baseline | Suffix release | Change |
+| --- | ---: | ---: | ---: |
+| Trace wall seconds | 137.63252190989442 | 136.75125901889987 | -0.88126289099455 |
+| Global peak allocated bytes | 46,990,911,488 | 42,720,715,264 | -4,270,196,224 |
+| Global peak reserved bytes | 51,661,242,368 | 51,661,242,368 | unchanged |
+| Stop-gradient phase peak allocated bytes | 46,990,911,488 | 37,109,096,960 | -9,881,814,528 |
+| Stop-gradient selected-forward peak bytes | 46,990,911,488 | 30,699,150,848 | -16,291,760,640 |
+
+This retires selected-forward suffix overlap as the run-wide allocated owner without adding runtime.
+The next stop-gradient-local owner is the 37,109,096,960-byte embedding-contribution VJP. The new
+run-wide owner is outside that phase: `selected_neuron_contribution_vjp` in the ordinary selected
+attribution/contribution path at 42,720,715,264 bytes. That path still materializes all target lanes
+and was explicitly outside Level 1b target-lane chunking. The next bounded optimization should
+generalize the already-qualified target-lane chunk/project pattern to this ordinary selected-neuron
+contribution VJP, with a separate exact receipt and artifact qualification. Reserved peak remains
+unchanged, so the current result establishes lower live allocation, not yet lower reservation-based
+headroom.
+
 ## Level 2: host-backed boundary streaming and source-group reuse
 
 ### Method
