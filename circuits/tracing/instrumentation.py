@@ -215,11 +215,16 @@ class TraceInstrumentation:
             }
 
     def measurement_start(
-        self, name: str, *, metadata: Mapping[str, Any] | None = None
+        self,
+        name: str,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        synchronize: bool = True,
     ) -> StageMeasurement:
         """Start one stage call for code that cannot naturally use ``with``."""
 
-        self._synchronize()
+        if synchronize:
+            self._synchronize()
         if self.cuda_memory_telemetry:
             self._checkpoint_cuda()
             self._reset_cuda_peaks()
@@ -293,11 +298,17 @@ class TraceInstrumentation:
 
     @contextmanager
     def measure_stage(
-        self, name: str, *, metadata: Mapping[str, Any] | None = None
+        self,
+        name: str,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        synchronize: bool = True,
     ) -> Iterator[StageMeasurement]:
         """Measure one possibly nested call and return its completed record."""
 
-        measurement = self.measurement_start(name, metadata=metadata)
+        measurement = self.measurement_start(
+            name, metadata=metadata, synchronize=synchronize
+        )
         try:
             yield measurement
         except BaseException:
@@ -307,7 +318,7 @@ class TraceInstrumentation:
             self._fail_measurements_through(measurement)
             raise
         else:
-            self.measurement_finish(measurement)
+            self.measurement_finish(measurement, synchronize=synchronize)
 
     def _record_measurement(self, measurement: StageMeasurement) -> None:
         if measurement.wall_seconds is None:
@@ -437,6 +448,34 @@ def cuda_memory_instrumentation_stage(
     if instrumentation is None or not instrumentation.cuda_memory_telemetry:
         return nullcontext()
     return instrumentation.measure_stage(name, metadata=metadata)
+
+
+def cuda_memory_observation_stage(
+    instrumentation: TraceInstrumentation | None,
+    name: str,
+    *,
+    metadata: Mapping[str, Any],
+):
+    """Observe a CUDA allocation lifetime without adding synchronization.
+
+    These stages preserve the runner's existing CUDA scheduling while recording
+    allocator start/end/peak state. Their host wall time is enqueue time, not a
+    synchronized GPU duration; callers that need GPU timing should use
+    :func:`cuda_memory_instrumentation_stage`.
+    """
+
+    if instrumentation is None or not instrumentation.cuda_memory_telemetry:
+        return nullcontext()
+    observation_metadata = {
+        **metadata,
+        "timing_semantics": "host_enqueue_wall_v1",
+        "synchronizes_cuda": False,
+    }
+    return instrumentation.measure_stage(
+        name,
+        metadata=observation_metadata,
+        synchronize=False,
+    )
 
 
 def record_selection_predictors(

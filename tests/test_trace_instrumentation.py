@@ -10,6 +10,7 @@ from circuits.tracing.instrumentation import (
     SCHEMA_VERSION,
     TraceInstrumentation,
     cuda_memory_instrumentation_stage,
+    cuda_memory_observation_stage,
     record_selection_predictors,
 )
 
@@ -227,6 +228,36 @@ def test_cuda_memory_stage_is_noop_without_telemetry(monkeypatch) -> None:
         assert measurement is None
 
     assert "selected_attribution_vjp" not in recorder.snapshot()["stages"]
+
+
+def test_cuda_memory_observation_stage_does_not_synchronize(monkeypatch) -> None:
+    _install_fake_cuda(monkeypatch)
+    recorder = TraceInstrumentation(
+        device="cuda:0",
+        synchronize_cuda=True,
+        cuda_memory_telemetry=True,
+    )
+
+    def unexpected_synchronize() -> None:
+        raise AssertionError("memory-only observation synchronized CUDA")
+
+    monkeypatch.setattr(recorder, "_synchronize", unexpected_synchronize)
+    with cuda_memory_observation_stage(
+        recorder,
+        "stop_grad_selected_layer_forward",
+        metadata={"operation_kind": "model_forward", "layer": 3},
+    ):
+        pass
+
+    call = recorder.snapshot()["stages"]["stop_grad_selected_layer_forward"][
+        "call_measurements"
+    ][0]
+    assert call["metadata"] == {
+        "timing_semantics": "host_enqueue_wall_v1",
+        "synchronizes_cuda": False,
+        "operation_kind": "model_forward",
+        "layer": 3,
+    }
 
 
 def test_selection_predictors_match_planned_pair_math() -> None:

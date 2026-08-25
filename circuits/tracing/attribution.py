@@ -26,6 +26,7 @@ from circuits.tracing.grad import (
 from circuits.tracing.instrumentation import (
     TraceInstrumentation,
     cuda_memory_instrumentation_stage,
+    cuda_memory_observation_stage,
 )
 from circuits.tracing.utils import NeuronIdx
 
@@ -534,44 +535,68 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         if not pairs:  # skip empty layers
             continue
 
-        # stop gradient on MLPs
-        model = layerwise_stop_nonlinear_grad(
-            model,
-            -1,
-            lid,
-            use_relp_grad=use_relp_grad,
-            use_stop_grad_on_mlps=True,
-            attention_backend=attention_backend,
-        )
-
-        cache = {}
-
-        def _hook(lid, layer_cache):
-            def fn(_, input, output):
-                layer_cache[lid] = input[0]
-
-            return fn
-
-        if hasattr(model.model.layers[lid].mlp, "mlp"):
-            model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(
-                _hook(lid, cache)
+        with cuda_memory_observation_stage(
+            instrumentation,
+            "stop_grad_selected_layer_forward",
+            metadata={
+                "operation_kind": "model_forward",
+                "layer": lid,
+                "selected_neuron_count": len(pairs),
+                "planned_chunk_count": (len(pairs) + neuron_chunk_size - 1)
+                // neuron_chunk_size,
+                "neuron_chunk_size": neuron_chunk_size,
+                "source_token_count": len(src_tokens),
+                "retained_layer_count_before": len(attr_list),
+                "retained_attribution_numel_before": sum(
+                    tensor.numel() for tensor in attr_list
+                ),
+                "retained_neuron_activation_numel_before": sum(
+                    tensor.numel() for tensor in neuron_acts_list
+                ),
+            },
+        ) as forward_measurement:
+            # stop gradient on MLPs
+            model = layerwise_stop_nonlinear_grad(
+                model,
+                -1,
+                lid,
+                use_relp_grad=use_relp_grad,
+                use_stop_grad_on_mlps=True,
+                attention_backend=attention_backend,
             )
-        else:
-            model.model.layers[lid].mlp.down_proj.register_forward_hook(
-                _hook(lid, cache)
-            )
 
-        # differentiable embeds
-        # shape: (batch, seq, d)
-        embeds = model.model.embed_tokens(input_ids).detach().requires_grad_()
+            cache = {}
 
-        # forward pass
-        out = model(inputs_embeds=embeds, attention_mask=attention_masks)
-        logits = out.logits
-        if center_logits:
-            logits -= logits.mean(dim=-1)
+            def _hook(lid, layer_cache):
+                def fn(_, input, output):
+                    layer_cache[lid] = input[0]
 
-        act = cache[lid]  # (batch, seq, d)
+                return fn
+
+            if hasattr(model.model.layers[lid].mlp, "mlp"):
+                model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(
+                    _hook(lid, cache)
+                )
+            else:
+                model.model.layers[lid].mlp.down_proj.register_forward_hook(
+                    _hook(lid, cache)
+                )
+
+            # differentiable embeds
+            # shape: (batch, seq, d)
+            embeds = model.model.embed_tokens(input_ids).detach().requires_grad_()
+
+            # forward pass
+            out = model(inputs_embeds=embeds, attention_mask=attention_masks)
+            logits = out.logits
+            if center_logits:
+                logits -= logits.mean(dim=-1)
+
+            act = cache[lid]  # (batch, seq, d)
+            if forward_measurement is not None:
+                forward_measurement.metadata["embedding_shape"] = list(embeds.shape)
+                forward_measurement.metadata["logit_shape"] = list(logits.shape)
+                forward_measurement.metadata["activation_shape"] = list(act.shape)
 
         # Process this layer's neurons in chunks
         all_pairs = list(pairs)
@@ -579,28 +604,51 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         layer_neuron_acts_chunks = []
 
         for chunk_start in range(0, len(all_pairs), neuron_chunk_size):
-            chunk_pairs = all_pairs[chunk_start : chunk_start + neuron_chunk_size]
+            with cuda_memory_observation_stage(
+                instrumentation,
+                "stop_grad_selected_chunk_prepare",
+                metadata={
+                    "operation_kind": "vjp_prepare",
+                    "layer": lid,
+                    "chunk_start": chunk_start,
+                    "planned_chunk_neuron_count": min(
+                        neuron_chunk_size, len(all_pairs) - chunk_start
+                    ),
+                },
+            ) as prepare_measurement:
+                chunk_pairs = all_pairs[chunk_start : chunk_start + neuron_chunk_size]
 
-            layer_neuron_acts = []
-            layer_neuron_tags = []
+                layer_neuron_acts = []
+                layer_neuron_tags = []
 
-            for pos, nid in chunk_pairs:
-                layer_neuron_acts.append(act[:, pos, nid])
-                layer_neuron_tags.append(NeuronIdx(layer=lid, token=pos, neuron=nid))
+                for pos, nid in chunk_pairs:
+                    layer_neuron_acts.append(act[:, pos, nid])
+                    layer_neuron_tags.append(
+                        NeuronIdx(layer=lid, token=pos, neuron=nid)
+                    )
 
-            if not layer_neuron_acts:  # skip if no neurons
-                continue
+                if not layer_neuron_acts:  # skip if no neurons
+                    continue
 
-            # get all activations
-            layer_neuron_acts = torch.stack(layer_neuron_acts)  # (n_chunk, batch)
-            batch = layer_neuron_acts.shape[1]
-            n_chunk = layer_neuron_acts.shape[0]
-            grad_outputs = torch.eye(
-                n_chunk * batch, device=device
-            )  # (n_chunk * batch, n_chunk * batch)
+                # get all activations
+                layer_neuron_acts = torch.stack(layer_neuron_acts)  # (n_chunk, batch)
+                batch = layer_neuron_acts.shape[1]
+                n_chunk = layer_neuron_acts.shape[0]
+                grad_outputs = torch.eye(
+                    n_chunk * batch, device=device
+                )  # (n_chunk * batch, n_chunk * batch)
 
-            # attribution to inputs for this layer chunk
-            embeds.grad = None
+                # attribution to inputs for this layer chunk
+                embeds.grad = None
+                if prepare_measurement is not None:
+                    prepare_measurement.metadata["chunk_neuron_count"] = n_chunk
+                    prepare_measurement.metadata["lane_count"] = n_chunk * batch
+                    prepare_measurement.metadata["selected_activation_shape"] = list(
+                        layer_neuron_acts.shape
+                    )
+                    prepare_measurement.metadata["grad_outputs_shape"] = list(
+                        grad_outputs.shape
+                    )
             with cuda_memory_instrumentation_stage(
                 instrumentation,
                 "stop_grad_selected_attribution_vjp",
@@ -626,92 +674,167 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                     vjp_measurement.metadata["vjp_result_shape"] = list(
                         layer_grad_attr.shape
                     )
-            # shape: (n_chunk * batch, batch, seq, d)
-            # convert back to (n_chunk, batch, batch, seq, d)
-            layer_grad_attr = layer_grad_attr.reshape(
-                n_chunk,
-                batch,
-                batch,
-                layer_grad_attr.shape[-2],
-                layer_grad_attr.shape[-1],
-            )
-            # get only identity along batch, batch
-            layer_grad_attr = layer_grad_attr.diagonal(dim1=1, dim2=2).permute(
-                0, 3, 1, 2
-            )
-            # now (n_chunk, batch, seq, d)
-
-            layer_attr = (
-                (
-                    layer_grad_attr.to(torch.float32)
-                    * embeds[None, ...].to(torch.float32)
+            with cuda_memory_observation_stage(
+                instrumentation,
+                "stop_grad_selected_chunk_projection",
+                metadata={
+                    "operation_kind": "vjp_projection",
+                    "layer": lid,
+                    "chunk_start": chunk_start,
+                    "chunk_neuron_count": n_chunk,
+                    "source_token_count": len(src_tokens),
+                    "raw_vjp_result_shape": list(layer_grad_attr.shape),
+                    "retained_chunk_count_before": len(layer_attr_chunks),
+                },
+            ) as projection_measurement:
+                # shape: (n_chunk * batch, batch, seq, d)
+                # convert back to (n_chunk, batch, batch, seq, d)
+                layer_grad_attr = layer_grad_attr.reshape(
+                    n_chunk,
+                    batch,
+                    batch,
+                    layer_grad_attr.shape[-2],
+                    layer_grad_attr.shape[-1],
                 )
-                .sum(-1)
-                .to(embeds.dtype)
-            )  # (n_chunk, batch, seq)
-            layer_attr = layer_attr[:, :, src_tokens]  # (n_chunk, batch, src)
+                # get only identity along batch, batch
+                layer_grad_attr = layer_grad_attr.diagonal(dim1=1, dim2=2).permute(
+                    0, 3, 1, 2
+                )
+                # now (n_chunk, batch, seq, d)
 
-            layer_attr_chunks.append(layer_attr)
-            layer_neuron_acts_chunks.append(layer_neuron_acts.detach())
-            neuron_tags.extend(layer_neuron_tags)
+                layer_attr = (
+                    (
+                        layer_grad_attr.to(torch.float32)
+                        * embeds[None, ...].to(torch.float32)
+                    )
+                    .sum(-1)
+                    .to(embeds.dtype)
+                )  # (n_chunk, batch, seq)
+                layer_attr = layer_attr[:, :, src_tokens]  # (n_chunk, batch, src)
 
-            # Clean up memory after each chunk
-            del layer_grad_attr, layer_attr, grad_outputs
+                layer_attr_chunks.append(layer_attr)
+                layer_neuron_acts_chunks.append(layer_neuron_acts.detach())
+                neuron_tags.extend(layer_neuron_tags)
+                if projection_measurement is not None:
+                    projection_measurement.metadata["projected_shape"] = list(
+                        layer_attr.shape
+                    )
+                    projection_measurement.metadata["retained_chunk_count_after"] = len(
+                        layer_attr_chunks
+                    )
+
+                # Clean up memory after each chunk
+                del layer_grad_attr, layer_attr, grad_outputs
+                torch.cuda.empty_cache()
+
+        with cuda_memory_observation_stage(
+            instrumentation,
+            "stop_grad_selected_layer_release",
+            metadata={
+                "operation_kind": "layer_finalize_release",
+                "layer": lid,
+                "selected_neuron_count": len(pairs),
+                "retained_chunk_count": len(layer_attr_chunks),
+                "retained_layer_count_before": len(attr_list),
+            },
+        ) as release_measurement:
+            # Concatenate chunks for this layer
+            if layer_attr_chunks:
+                attr_list.append(torch.cat(layer_attr_chunks, dim=0))
+                neuron_acts_list.append(torch.cat(layer_neuron_acts_chunks, dim=0))
+
+            # revert stop grad for the next attribution
+            model = layerwise_revert_stop_nonlinear_grad(
+                model,
+                -1,
+                lid,
+            )
+            remove_forward_hooks(model.model.layers[lid].mlp.down_proj)
+
+            if release_measurement is not None:
+                release_measurement.metadata["retained_layer_count_after"] = len(
+                    attr_list
+                )
+                if layer_attr_chunks:
+                    release_measurement.metadata["retained_attribution_shape"] = list(
+                        attr_list[-1].shape
+                    )
+                release_measurement.metadata["retained_attribution_numel_after"] = sum(
+                    tensor.numel() for tensor in attr_list
+                )
+                release_measurement.metadata[
+                    "retained_neuron_activation_numel_after"
+                ] = sum(tensor.numel() for tensor in neuron_acts_list)
+
+            # clean up memory
+            del embeds, layer_attr_chunks, layer_neuron_acts_chunks
             torch.cuda.empty_cache()
 
-        # Concatenate chunks for this layer
-        if layer_attr_chunks:
-            attr_list.append(torch.cat(layer_attr_chunks, dim=0))
-            neuron_acts_list.append(torch.cat(layer_neuron_acts_chunks, dim=0))
+    with cuda_memory_observation_stage(
+        instrumentation,
+        "stop_grad_selected_phase_finalize",
+        metadata={
+            "operation_kind": "phase_finalize",
+            "retained_layer_count": len(attr_list),
+            "selected_neuron_count": len(neuron_tags),
+        },
+    ) as selected_finalize_measurement:
+        # concatenate results from all layers
+        attr = torch.cat(attr_list, dim=0)  # (neurons, batch, seq)
+        neuron_acts = torch.cat(neuron_acts_list, dim=0)  # (neurons, batch)
+        if selected_finalize_measurement is not None:
+            selected_finalize_measurement.metadata["attribution_shape"] = list(
+                attr.shape
+            )
+            selected_finalize_measurement.metadata["neuron_activation_shape"] = list(
+                neuron_acts.shape
+            )
 
-        # revert stop grad for the next attribution
-        model = layerwise_revert_stop_nonlinear_grad(
-            model,
-            -1,
-            lid,
-        )
-        remove_forward_hooks(model.model.layers[lid].mlp.down_proj)
-
-        # clean up memory
-        del embeds, layer_attr_chunks, layer_neuron_acts_chunks
+        # clean up layer-wise lists to free memory
+        del attr_list, neuron_acts_list
         torch.cuda.empty_cache()
 
-    # concatenate results from all layers
-    attr = torch.cat(attr_list, dim=0)  # (neurons, batch, seq)
-    neuron_acts = torch.cat(neuron_acts_list, dim=0)  # (neurons, batch)
+    with cuda_memory_observation_stage(
+        instrumentation,
+        "stop_grad_embed_forward",
+        metadata={
+            "operation_kind": "model_forward",
+            "source_token_count": len(src_tokens),
+            "target_token_count": len(tgt_tokens),
+        },
+    ) as embed_forward_measurement:
+        # contribution to tgt tokens
+        # stop gradient on MLPs
+        model = layerwise_stop_nonlinear_grad(
+            model,
+            -1,
+            len(model.model.layers),
+            use_relp_grad=use_relp_grad,
+            use_stop_grad_on_mlps=True,
+            attention_backend=attention_backend,
+        )
 
-    # clean up layer-wise lists to free memory
-    del attr_list, neuron_acts_list
-    torch.cuda.empty_cache()
+        # differentiable embeds
+        # shape: (batch, seq, d)
+        embeds = model.model.embed_tokens(input_ids).detach().requires_grad_()
 
-    # contribution to tgt tokens
-    # stop gradient on MLPs
-    model = layerwise_stop_nonlinear_grad(
-        model,
-        -1,
-        len(model.model.layers),
-        use_relp_grad=use_relp_grad,
-        use_stop_grad_on_mlps=True,
-        attention_backend=attention_backend,
-    )
+        # forward pass
+        out = model(inputs_embeds=embeds, attention_mask=attention_masks)
+        logits = out.logits
+        if center_logits:
+            logits -= logits.mean(dim=-1)
 
-    # differentiable embeds
-    # shape: (batch, seq, d)
-    embeds = model.model.embed_tokens(input_ids).detach().requires_grad_()
-
-    # forward pass
-    out = model(inputs_embeds=embeds, attention_mask=attention_masks)
-    logits = out.logits
-    if center_logits:
-        logits -= logits.mean(dim=-1)
-
-    tgt_nodes = []
-    for id, p in enumerate(focus_positions):
-        tid = [focus_logit[id] for focus_logit in focus_logits]
-        tgt_nodes.append(logits[torch.arange(logits.shape[0]), p, tid])
-    tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
-    t = tgt_vec.size(0)
-    grad_outputs = torch.eye(t * batch, device=device)  # (t * batch, t * batch)
+        tgt_nodes = []
+        for id, p in enumerate(focus_positions):
+            tid = [focus_logit[id] for focus_logit in focus_logits]
+            tgt_nodes.append(logits[torch.arange(logits.shape[0]), p, tid])
+        tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
+        t = tgt_vec.size(0)
+        grad_outputs = torch.eye(t * batch, device=device)  # (t * batch, t * batch)
+        if embed_forward_measurement is not None:
+            embed_forward_measurement.metadata["embedding_shape"] = list(embeds.shape)
+            embed_forward_measurement.metadata["logit_shape"] = list(logits.shape)
+            embed_forward_measurement.metadata["target_shape"] = list(tgt_vec.shape)
 
     # compute embed grad contribs
     embeds.grad = None
@@ -737,33 +860,51 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             vjp_measurement.metadata["vjp_result_shape"] = list(
                 embed_grad_contrib_full.shape
             )
-    # shape (t * batch, batch, seq, d)
-    # convert back to (t, batch, batch, seq, d)
-    embed_grad_contrib = embed_grad_contrib_full.reshape(
-        t,
-        batch,
-        batch,
-        embed_grad_contrib_full.shape[-2],
-        embed_grad_contrib_full.shape[-1],
-    )
-    del embed_grad_contrib_full  # Free immediately
+    with cuda_memory_observation_stage(
+        instrumentation,
+        "stop_grad_embed_projection_release",
+        metadata={
+            "operation_kind": "vjp_projection_release",
+            "source_token_count": len(src_tokens),
+            "target_token_count": t,
+            "raw_vjp_result_shape": list(embed_grad_contrib_full.shape),
+        },
+    ) as embed_projection_measurement:
+        # shape (t * batch, batch, seq, d)
+        # convert back to (t, batch, batch, seq, d)
+        embed_grad_contrib = embed_grad_contrib_full.reshape(
+            t,
+            batch,
+            batch,
+            embed_grad_contrib_full.shape[-2],
+            embed_grad_contrib_full.shape[-1],
+        )
+        del embed_grad_contrib_full  # Free immediately
 
-    # get only identity along batch, batch
-    embed_grad_contrib = embed_grad_contrib.diagonal(dim1=1, dim2=2).permute(0, 3, 1, 2)
-    # now (t, batch, seq, d)
-    embed_grad_contrib = (
-        embed_grad_contrib[:, :, src_tokens, :] * embeds[None, :, src_tokens, :]
-    )  # (t, batch, src, d)
-    embed_grad_contrib = embed_grad_contrib.sum(-1).permute(2, 1, 0)  # (src, batch, t)
+        # get only identity along batch, batch
+        embed_grad_contrib = embed_grad_contrib.diagonal(dim1=1, dim2=2).permute(
+            0, 3, 1, 2
+        )
+        # now (t, batch, seq, d)
+        embed_grad_contrib = (
+            embed_grad_contrib[:, :, src_tokens, :] * embeds[None, :, src_tokens, :]
+        )  # (t, batch, src, d)
+        embed_grad_contrib = embed_grad_contrib.sum(-1).permute(
+            2, 1, 0
+        )  # (src, batch, t)
 
-    # revert stop grad for the next attribution
-    model = layerwise_revert_stop_nonlinear_grad(
-        model,
-        -1,
-        len(model.model.layers),
-    )
-    del embeds, tgt_vec, grad_outputs
-    torch.cuda.empty_cache()
+        # revert stop grad for the next attribution
+        model = layerwise_revert_stop_nonlinear_grad(
+            model,
+            -1,
+            len(model.model.layers),
+        )
+        if embed_projection_measurement is not None:
+            embed_projection_measurement.metadata["projected_shape"] = list(
+                embed_grad_contrib.shape
+            )
+        del embeds, tgt_vec, grad_outputs
+        torch.cuda.empty_cache()
 
     # compute neuron grad contribs
     grad_contrib = []
@@ -772,34 +913,62 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         desc="Computing neuron contributions",
         disable=not verbose,
     ):
-        # stop gradient on MLPs
-        model = layerwise_stop_nonlinear_grad(
-            model,
-            lid,
-            len(model.model.layers),
-            use_relp_grad=use_relp_grad,
-            use_stop_grad_on_mlps=True,
-            attention_backend=attention_backend,
-        )
+        with cuda_memory_observation_stage(
+            instrumentation,
+            "stop_grad_neuron_layer_forward",
+            metadata={
+                "operation_kind": "model_forward",
+                "layer": lid,
+                "selected_neuron_count": len(pairs),
+                "target_token_count": len(tgt_tokens),
+                "contribution_execution": contribution_execution,
+                "retained_layer_count_before": len(grad_contrib),
+                "retained_contribution_numel_before": sum(
+                    tensor.numel() for tensor in grad_contrib
+                ),
+            },
+        ) as contribution_forward_measurement:
+            # stop gradient on MLPs
+            model = layerwise_stop_nonlinear_grad(
+                model,
+                lid,
+                len(model.model.layers),
+                use_relp_grad=use_relp_grad,
+                use_stop_grad_on_mlps=True,
+                attention_backend=attention_backend,
+            )
 
-        contribution_forward = run_stop_gradient_contribution_forward(
-            model,
-            input_ids,
-            attention_masks,
-            layer=lid,
-            execution=contribution_execution,
-            selected_coordinates=pairs,
-            instrumentation=instrumentation,
-        )
-        logits = contribution_forward.logits
-        if center_logits:
-            logits -= logits.mean(dim=-1)
+            contribution_forward = run_stop_gradient_contribution_forward(
+                model,
+                input_ids,
+                attention_masks,
+                layer=lid,
+                execution=contribution_execution,
+                selected_coordinates=pairs,
+                instrumentation=instrumentation,
+            )
+            logits = contribution_forward.logits
+            if center_logits:
+                logits -= logits.mean(dim=-1)
 
-        tgt_nodes = []
-        for id, p in enumerate(focus_positions):
-            tid = [focus_logit[id] for focus_logit in focus_logits]
-            tgt_nodes.append(logits[torch.arange(logits.shape[0]), p, tid])
-        tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
+            tgt_nodes = []
+            for id, p in enumerate(focus_positions):
+                tid = [focus_logit[id] for focus_logit in focus_logits]
+                tgt_nodes.append(logits[torch.arange(logits.shape[0]), p, tid])
+            tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
+            if contribution_forward_measurement is not None:
+                contribution_forward_measurement.metadata["logit_shape"] = list(
+                    logits.shape
+                )
+                contribution_forward_measurement.metadata["target_shape"] = list(
+                    tgt_vec.shape
+                )
+                contribution_forward_measurement.metadata[
+                    "differentiated_source_shape"
+                ] = list(contribution_forward.source_activation.shape)
+                contribution_forward_measurement.metadata["source_representation"] = (
+                    contribution_forward.source_representation
+                )
         grad_contrib.append(
             run_stop_gradient_contribution_vjp(
                 contribution_forward,
@@ -810,22 +979,55 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             )
         )
 
-        # revert stop grad for the next attribution
-        model = layerwise_revert_stop_nonlinear_grad(
-            model,
-            lid,
-            len(model.model.layers),
-        )
-        del contribution_forward, tgt_vec
+        with cuda_memory_observation_stage(
+            instrumentation,
+            "stop_grad_neuron_layer_release",
+            metadata={
+                "operation_kind": "layer_release",
+                "layer": lid,
+                "selected_neuron_count": len(pairs),
+                "retained_layer_count": len(grad_contrib),
+                "retained_contribution_shape": list(grad_contrib[-1].shape),
+            },
+        ) as contribution_release_measurement:
+            # revert stop grad for the next attribution
+            model = layerwise_revert_stop_nonlinear_grad(
+                model,
+                lid,
+                len(model.model.layers),
+            )
+            del contribution_forward, tgt_vec
+            torch.cuda.empty_cache()
+            if contribution_release_measurement is not None:
+                contribution_release_measurement.metadata[
+                    "retained_contribution_numel"
+                ] = sum(tensor.numel() for tensor in grad_contrib)
+
+    with cuda_memory_observation_stage(
+        instrumentation,
+        "stop_grad_neuron_phase_finalize",
+        metadata={
+            "operation_kind": "phase_finalize",
+            "retained_layer_count": len(grad_contrib),
+            "selected_neuron_count": len(neuron_tags),
+        },
+    ) as neuron_finalize_measurement:
+        # multiple by acts to get contributions
+        grad_contrib = torch.cat(grad_contrib, dim=0)  # (neurons, batch, tgt)
+        contrib = (
+            grad_contrib * neuron_acts.detach()[:, :, None]
+        )  # (neurons, batch, tgt)
+        if neuron_finalize_measurement is not None:
+            neuron_finalize_measurement.metadata["gradient_contribution_shape"] = list(
+                grad_contrib.shape
+            )
+            neuron_finalize_measurement.metadata["contribution_shape"] = list(
+                contrib.shape
+            )
+
+        # Clean up
+        del grad_contrib
         torch.cuda.empty_cache()
-
-    # multiple by acts to get contributions
-    grad_contrib = torch.cat(grad_contrib, dim=0)  # (neurons, batch, tgt)
-    contrib = grad_contrib * neuron_acts.detach()[:, :, None]  # (neurons, batch, tgt)
-
-    # Clean up
-    del grad_contrib
-    torch.cuda.empty_cache()
 
     # assert shapes
     if verbose:
