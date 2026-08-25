@@ -1297,6 +1297,36 @@ input:disabled {
   font-size: 9px;
 }
 
+.label-role-details {
+  margin-top: 7px;
+  color: var(--secondary);
+}
+
+.label-role-details summary {
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.label-role-details dl {
+  display: grid;
+  gap: 2px 5px;
+  grid-template-columns: minmax(58px, auto) 1fr;
+  margin: 6px 0 0;
+}
+
+.label-role-details dt {
+  color: var(--quiet);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.label-role-details dd {
+  margin: 0;
+  font-size: 9px;
+  line-height: 13px;
+}
+
 .pin-control {
   display: inline-flex;
   align-items: center;

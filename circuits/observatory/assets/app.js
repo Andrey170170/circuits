@@ -1,4 +1,5 @@
 import { GraphView } from "./graph-view.js";
+import { findLabelRecord } from "./label-data.js";
 import { profileDisplay } from "./profile-data.js";
 
 const TRACE_SCHEMA = "adag.observatory.trace-graph.v1";
@@ -1058,24 +1059,6 @@ async function loadOverlay(id) {
   return overlay;
 }
 
-function findLabelRecord(overlay, node) {
-  if (!overlay) return null;
-  const source = firstDefined(overlay.labels, overlay.nodes, overlay.entries, overlay.annotations, overlay);
-  if (Array.isArray(source)) {
-    return (
-      source.find((entry) =>
-        [entry.occurrence_id, entry.node_id, entry.id, entry.basis_id]
-          .filter(Boolean)
-          .some((id) => [node.id, node.occurrenceId, node.basisId].includes(String(id))),
-      ) ?? null
-    );
-  }
-  if (source && typeof source === "object") {
-    return source[node.id] ?? source[node.occurrenceId] ?? source[node.basisId] ?? null;
-  }
-  return null;
-}
-
 function renderLabelValue(container, record, descriptor, node) {
   if (descriptor?.id === "raw") {
     const sign = node.polarity === "negative" ? "-" : node.polarity === "positive" ? "+" : node.polarity;
@@ -1094,6 +1077,14 @@ function renderLabelValue(container, record, descriptor, node) {
     return;
   }
   const status = String(firstDefined(record.status, record.state, "")).toLowerCase();
+  if (status === "not_selected") {
+    container.innerHTML = '<span class="label-status">Not selected in this labeling run</span>';
+    return;
+  }
+  if (status === "insufficient_evidence") {
+    container.innerHTML = '<span class="label-status">Insufficient evidence</span>';
+    return;
+  }
   if (record.abstained || status === "abstained" || status === "abstain") {
     container.innerHTML = '<span class="label-status">Abstained</span>';
     return;
@@ -1104,7 +1095,23 @@ function renderLabelValue(container, record, descriptor, node) {
     return;
   }
   const confidence = finiteNumber(firstDefined(record.confidence, record.score));
-  container.innerHTML = `${escapeHtml(value)}${confidence !== null ? `<span class="label-confidence">confidence ${formatNumber(confidence)}</span>` : ""}`;
+  const role = record.role && typeof record.role === "object" ? record.role : record;
+  const detailRows = [
+    ["Reads from", role.reads_from],
+    ["Apparent role", role.apparent_role],
+    ["Target effect", role.target_effect],
+    ["Rationale", role.rationale],
+    ["Alternative", role.alternative_hypothesis],
+    ["Limitations", role.limitations],
+  ]
+    .map(([label, detail]) => {
+      const normalized = Array.isArray(detail) ? detail.join(" · ") : detail;
+      if (normalized === undefined || normalized === null || normalized === "") return "";
+      return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(normalized)}</dd>`;
+    })
+    .filter(Boolean)
+    .join("");
+  container.innerHTML = `${escapeHtml(value)}${confidence !== null ? `<span class="label-confidence">self-reported confidence ${formatNumber(confidence)}</span>` : ""}${detailRows ? `<details class="label-role-details"><summary>Role evidence</summary><dl>${detailRows}</dl></details>` : ""}`;
 }
 
 async function renderLabels(node) {

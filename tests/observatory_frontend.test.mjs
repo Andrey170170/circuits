@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { buildLayeredLayout } from "../circuits/observatory/assets/graph-layout.js";
+import { findLabelRecord } from "../circuits/observatory/assets/label-data.js";
 import { profileDisplay, profileRows } from "../circuits/observatory/assets/profile-data.js";
 
 const output = { id: "out", kind: "target_logit", token_text: "45" };
@@ -164,4 +165,31 @@ test("input visibility choices explain nodes and profiles accessibly", async () 
   assert.match(html, /<option value="show">Shown<\/option>/);
   assert.match(html, /aria-describedby="input-token-help"/);
   assert.match(html, /id="input-token-help"[^>]*>Hiding input nodes affects only the graph display\./);
+});
+
+test("occurrence-local labels take precedence over a shared basis fallback", () => {
+  const overlay = {
+    labels: [
+      { occurrence_id: "occ-earlier", basis_id: "basis-shared", status: "not_selected" },
+      { occurrence_id: "occ-selected", basis_id: "basis-shared", label: "local role" },
+    ],
+  };
+
+  assert.equal(
+    findLabelRecord(overlay, {
+      id: "occ-selected",
+      occurrenceId: "occ-selected",
+      basisId: "basis-shared",
+    }).label,
+    "local role",
+  );
+});
+
+test("viewer distinguishes labeling coverage states and exposes role details", async () => {
+  const source = await readFile(new URL("../circuits/observatory/assets/app.js", import.meta.url), "utf8");
+
+  assert.match(source, /Not selected in this labeling run/);
+  assert.match(source, /Insufficient evidence/);
+  assert.match(source, /Role evidence/);
+  assert.match(source, /self-reported confidence/);
 });
