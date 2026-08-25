@@ -140,7 +140,9 @@ input proxy charges each UTF-8 request-body byte at the larger of uncached-input
 rates and combines that with the full configured output ceiling. Submission refuses a guard below
 this ceiling. Collection applies the same conservative policy to actual usage: every inclusive
 input token is charged at `max(input_rate, cache_write_rate)`, then output is added. It also
-requires the Batch aggregate usage to equal the sum of typed per-response usage before promotion.
+requires every usage field exposed by both Batch and per-response usage to reconcile before
+promotion. Batch usage does not expose the per-response cache-write breakdown, so its derived
+uncached-input and cache-write buckets remain unknown; inclusive input still reconciles exactly.
 
 Live commands read `OPENAI_API_KEY` from the process environment only. They never write or print
 it. Submission uses one cross-process lifecycle gate, disables SDK retries, and separately records

@@ -203,6 +203,23 @@ def _strict_cost(
     }
 
 
+def _openai_batch_aggregate_usage(raw: Any) -> Usage:
+    """Normalize BatchUsage without inventing unavailable cache-write detail."""
+
+    usage = openai_usage(raw)
+    input_details = (
+        raw.get("input_tokens_details") if isinstance(raw, Mapping) else None
+    )
+    if (
+        not isinstance(input_details, Mapping)
+        or "cache_write_tokens" not in input_details
+    ):
+        return usage.model_copy(
+            update={"uncached_input_tokens": None, "cache_write_tokens": None}
+        )
+    return usage
+
+
 def _output_schema() -> dict[str, Any]:
     nullable_string = {"type": ["string", "null"]}
     return {
@@ -1263,7 +1280,7 @@ def _collect_openai_batch_unlocked(
     ):
         raise ValueError("OpenAI Batch is partial, failed, or contains request errors")
     external, usage = _parse_output(output, requests)
-    aggregate_usage = openai_usage(snapshot.get("usage"))
+    aggregate_usage = _openai_batch_aggregate_usage(snapshot.get("usage"))
     if aggregate_usage.input_tokens is None or aggregate_usage.output_tokens is None:
         raise ValueError("OpenAI Batch aggregate usage is incomplete")
     per_request_usage = [Usage.model_validate(item["usage"]) for item in usage.values()]

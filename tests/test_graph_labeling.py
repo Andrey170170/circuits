@@ -913,6 +913,39 @@ def test_openai_batch_adapter_is_cost_guarded_idempotent_and_collects(
     assert status(run)["methods"]["structured-llm-graph-role-v1"]["label_count"] == 1
 
 
+def test_openai_batch_collection_accepts_response_only_cache_write_usage(
+    tmp_path: Path,
+) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "batch-cache-write-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    fake = _FakeOpenAIBatchTransport()
+    submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    output = json.loads(_batch_output(run))
+    output["response"]["body"]["usage"]["input_tokens_details"] = {
+        "cached_tokens": 0,
+        "cache_write_tokens": 100,
+    }
+    fake.output = _bytes(output) + b"\n"
+
+    collection = collect_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        transport=fake,
+    )
+
+    assert collection["batch_usage"]["input_tokens"] == 100
+    assert collection["batch_usage"]["uncached_input_tokens"] is None
+    assert collection["batch_usage"]["cache_write_tokens"] is None
+    per_request = next(iter(collection["per_request_remote_metadata"].values()))
+    assert per_request["usage"]["cache_write_tokens"] == 100
+
+
 def test_openai_batch_adapter_rejects_missing_custom_id(tmp_path: Path) -> None:
     site, hashes = _site(tmp_path)
     run = tmp_path / "missing-run"
