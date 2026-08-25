@@ -1209,6 +1209,7 @@ def _selected_embed_bf16_scope_contract(
     reference_edges: Mapping[Any, pd.Series],
     candidate_edges: Mapping[Any, pd.Series],
     candidate_count: int,
+    source_attribution_tolerance: NumericTolerance,
     candidate_profile_tolerance: NumericTolerance,
     edge_tolerance: NumericTolerance,
 ) -> dict[str, Any]:
@@ -1236,6 +1237,26 @@ def _selected_embed_bf16_scope_contract(
     reference_dtype = dtype(reference_identity)
     candidate_dtype = dtype(candidate_identity)
     dtype_exact_bf16 = reference_dtype == candidate_dtype == "bfloat16"
+    node_topology_exact = set(reference_nodes) == set(candidate_nodes)
+    node_layers = {key[0] for key in reference_nodes}
+    logit_layer = max(node_layers) if node_layers else None
+    expected_logit_neurons = {
+        int(candidate.token_id)
+        for candidate in reference_trace.candidate_selection.candidates
+    }
+    reference_logit_keys = {key for key in reference_nodes if key[0] == logit_layer}
+    candidate_logit_keys = {key for key in candidate_nodes if key[0] == logit_layer}
+
+    logit_scope_classified = (
+        node_topology_exact
+        and logit_layer is not None
+        and logit_layer >= 0
+        and len(expected_logit_neurons) == candidate_count
+        and len(reference_logit_keys) == candidate_count
+        and reference_logit_keys == candidate_logit_keys
+        and {key[2] for key in reference_logit_keys} == expected_logit_neurons
+        and len({key[1] for key in reference_logit_keys}) == 1
+    )
 
     embedding_reference_nodes = {
         key: row for key, row in reference_nodes.items() if key[0] == -1
@@ -1248,6 +1269,18 @@ def _selected_embed_bf16_scope_contract(
     }
     non_embedding_candidate_nodes = {
         key: row for key, row in candidate_nodes.items() if key[0] != -1
+    }
+    logit_reference_nodes = {
+        key: row for key, row in reference_nodes.items() if key[0] == logit_layer
+    }
+    logit_candidate_nodes = {
+        key: row for key, row in candidate_nodes.items() if key[0] == logit_layer
+    }
+    non_logit_reference_nodes = {
+        key: row for key, row in reference_nodes.items() if key[0] != logit_layer
+    }
+    non_logit_candidate_nodes = {
+        key: row for key, row in candidate_nodes.items() if key[0] != logit_layer
     }
     exact = NumericTolerance(absolute=0.0, relative=0.0)
     target_base_values = {
@@ -1285,8 +1318,19 @@ def _selected_embed_bf16_scope_contract(
         "activation": _scalar_field_summary(
             reference_nodes, candidate_nodes, "activation", exact
         ),
-        "source_attribution_profile": _vector_field_summary(
-            reference_nodes, candidate_nodes, "attr_map", exact
+    }
+    source_attribution_profiles = {
+        "target_logit": _vector_field_summary(
+            logit_reference_nodes,
+            logit_candidate_nodes,
+            "attr_map",
+            source_attribution_tolerance,
+        ),
+        "non_logit": _vector_field_summary(
+            non_logit_reference_nodes,
+            non_logit_candidate_nodes,
+            "attr_map",
+            exact,
         ),
     }
     embedding_profiles = _candidate_profile_summary(
@@ -1333,9 +1377,7 @@ def _selected_embed_bf16_scope_contract(
         if stop_gradient_logit_edges:
             edge_scope_reason = "stop-gradient logit edges isolate ordinary embed VJP"
         else:
-            node_layers = {key[0] for key in reference_nodes}
-            if node_layers:
-                logit_layer = max(node_layers)
+            if logit_scope_classified:
                 affected_edge_keys = {
                     key
                     for key in reference_edges
@@ -1344,7 +1386,7 @@ def _selected_embed_bf16_scope_contract(
                 edge_scope_reason = "embedding-source to logit edges"
             else:
                 flags_proven = False
-                edge_scope_reason = "cannot derive logit layer from empty node topology"
+                edge_scope_reason = "cannot prove logit layer from topology and config"
 
     unaffected_edge_keys = set(reference_edges) - affected_edge_keys
     edge_scope_classified = (
@@ -1379,10 +1421,19 @@ def _selected_embed_bf16_scope_contract(
     )
     checks = {
         "exact_bf16_dtype_identity": dtype_exact_bf16,
-        "node_topology_exact": set(reference_nodes) == set(candidate_nodes),
+        "node_topology_exact": node_topology_exact,
         "edge_topology_exact": set(reference_edges) == set(candidate_edges),
         "target_base_values_exact": _group_within_tolerance(target_base_values),
         "node_base_values_exact": _group_within_tolerance(node_base_values),
+        "logit_node_scope_classified": logit_scope_classified,
+        "target_logit_source_attribution_profiles_within_bf16_tolerance": (
+            logit_scope_classified
+            and _group_within_tolerance(source_attribution_profiles["target_logit"])
+        ),
+        "non_logit_source_attribution_profiles_exact": (
+            logit_scope_classified
+            and _group_within_tolerance(source_attribution_profiles["non_logit"])
+        ),
         "candidate_profile_scope_classified": profile_scope_classified,
         "embedding_source_profiles_within_bf16_tolerance": (
             profile_scope_classified and _group_within_tolerance(embedding_profiles)
@@ -1400,8 +1451,10 @@ def _selected_embed_bf16_scope_contract(
     }
     return {
         "dtype": {"reference": reference_dtype, "candidate": candidate_dtype},
+        "logit_layer": logit_layer,
         "target_base_values": target_base_values,
         "node_base_values": node_base_values,
+        "source_attribution_profiles": source_attribution_profiles,
         "candidate_profiles": {
             "embedding_source": embedding_profiles,
             "non_embedding": non_embedding_profiles,
@@ -1761,6 +1814,9 @@ def compare_execution_artifacts(
                 reference_edges=reference_edges,
                 candidate_edges=candidate_edges,
                 candidate_count=reference_trace.candidate_count,
+                source_attribution_tolerance=NumericTolerance(
+                    absolute=0.125, relative=1e-2
+                ),
                 candidate_profile_tolerance=NumericTolerance(
                     absolute=0.125, relative=1e-2
                 ),

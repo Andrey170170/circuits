@@ -222,7 +222,10 @@ def _save_pair(
     reference_dtype: str = "bfloat16",
     candidate_dtype: str = "bfloat16",
     candidate_mlp_profile_delta: float = 0.0,
+    candidate_non_logit_attr_map_delta: float = 0.0,
+    candidate_logit_attr_map_delta: float = 0.0,
     candidate_unaffected_edge_delta: float = 0.0,
+    extra_logit_node: bool = False,
 ):
     reference = _topk_trace()
     candidate = deepcopy(reference)
@@ -233,17 +236,39 @@ def _save_pair(
         or candidate_selected_embed_receipts is not None
     ):
         for trace in (reference, candidate):
+            logit_rows = pd.concat(
+                [trace.circuit_data.df_node.iloc[[0]].copy() for _ in range(5)],
+                ignore_index=True,
+            )
+            logit_rows.loc[:, "layer"] = 1
+            logit_rows.loc[:, "neuron"] = [40, 101, 102, 103, 104]
+            if extra_logit_node:
+                extra_logit = logit_rows.iloc[[0]].copy()
+                extra_logit.loc[:, "neuron"] = 105
+                logit_rows = pd.concat([logit_rows, extra_logit], ignore_index=True)
             embedding_row = trace.circuit_data.df_node.iloc[[0]].copy()
             embedding_row.loc[:, "layer"] = -1
             embedding_row.loc[:, "token"] = 2
             embedding_row.loc[:, "neuron"] = 42
             trace.circuit_data.df_node = pd.concat(
-                [trace.circuit_data.df_node, embedding_row], ignore_index=True
+                [trace.circuit_data.df_node, logit_rows, embedding_row],
+                ignore_index=True,
             )
         if candidate_mlp_profile_delta:
             profile = list(candidate.circuit_data.df_node.iloc[0].contrib_map)
             profile[0] += candidate_mlp_profile_delta
             candidate.circuit_data.df_node.at[0, "contrib_map"] = profile
+        if candidate_non_logit_attr_map_delta:
+            profile = list(candidate.circuit_data.df_node.iloc[0].attr_map)
+            profile[0] += candidate_non_logit_attr_map_delta
+            candidate.circuit_data.df_node.at[0, "attr_map"] = profile
+        if candidate_logit_attr_map_delta:
+            row_index = candidate.circuit_data.df_node.index[
+                candidate.circuit_data.df_node["layer"] == 1
+            ][0]
+            profile = list(candidate.circuit_data.df_node.at[row_index, "attr_map"])
+            profile[0] += candidate_logit_attr_map_delta
+            candidate.circuit_data.df_node.at[row_index, "attr_map"] = profile
         if candidate_unaffected_edge_delta:
             candidate.circuit_data.df_edge.loc[0, "attribution"] += (
                 candidate_unaffected_edge_delta
@@ -717,6 +742,7 @@ def test_selected_embed_chunk_profile_rejects_unproven_runtime_width(
     ("mutation", "value"),
     [
         ("candidate_mlp_profile_delta", 0.01),
+        ("candidate_non_logit_attr_map_delta", 0.01),
         ("candidate_unaffected_edge_delta", 0.0001),
         ("candidate_dtype", "float32"),
     ],
@@ -742,7 +768,7 @@ def test_selected_embed_width_one_bf16_scope_rejects_unrelated_drift(
         ),
         tolerances={
             "target": NumericTolerance(absolute=0.0, relative=0.0),
-            "node": NumericTolerance(absolute=0.0, relative=0.0),
+            "node": NumericTolerance(absolute=0.125, relative=1e-2),
             "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
             "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
         },
@@ -759,10 +785,95 @@ def test_selected_embed_width_one_bf16_scope_rejects_unrelated_drift(
     assert scope["passed"] is False
     if mutation == "candidate_mlp_profile_delta":
         assert scope["checks"]["non_embedding_profiles_exact"] is False
+    elif mutation == "candidate_non_logit_attr_map_delta":
+        assert scope["checks"]["non_logit_source_attribution_profiles_exact"] is False
     elif mutation == "candidate_unaffected_edge_delta":
         assert scope["checks"]["unaffected_edges_exact"] is False
     else:
         assert scope["checks"]["exact_bf16_dtype_identity"] is False
+
+
+def test_selected_embed_width_one_allows_only_logit_attr_map_bf16_drift(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_embed_chunk_size=5,
+        candidate_selected_embed_chunk_size=1,
+        reference_selected_embed_receipts=_selected_embed_receipt("1", 5),
+        candidate_selected_embed_receipts=_selected_embed_receipt("a", 1),
+        candidate_logit_attr_map_delta=0.01,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            "target": NumericTolerance(absolute=0.0, relative=0.0),
+            "node": NumericTolerance(absolute=0.125, relative=1e-2),
+            "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
+            "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        selected_embed_contribution_target_lane_chunk_ab_profile="width_one_bf16_v1",
+    )
+
+    assert report["validation_passed"] is True
+    scope = report["selected_embed_contribution_target_lane_chunk_ab_contract"][
+        "bf16_scope"
+    ]
+    assert scope["passed"] is True
+    assert scope["logit_layer"] == 1
+    assert scope["source_attribution_profiles"]["target_logit"][
+        "max_absolute_error"
+    ] == pytest.approx(0.01)
+
+
+def test_selected_embed_width_one_rejects_unclassified_max_layer_nodes(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_embed_chunk_size=5,
+        candidate_selected_embed_chunk_size=1,
+        reference_selected_embed_receipts=_selected_embed_receipt("1", 5),
+        candidate_selected_embed_receipts=_selected_embed_receipt("a", 1),
+        extra_logit_node=True,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            "target": NumericTolerance(absolute=0.0, relative=0.0),
+            "node": NumericTolerance(absolute=0.125, relative=1e-2),
+            "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
+            "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        selected_embed_contribution_target_lane_chunk_ab_profile="width_one_bf16_v1",
+    )
+
+    scope = report["selected_embed_contribution_target_lane_chunk_ab_contract"][
+        "bf16_scope"
+    ]
+    assert report["validation_passed"] is False
+    assert scope["checks"]["logit_node_scope_classified"] is False
+    assert (
+        scope["source_attribution_profiles"]["non_logit"]["max_absolute_error"] == 0.0
+    )
 
 
 @pytest.mark.parametrize(
@@ -781,7 +892,7 @@ def test_selected_embed_width_one_bf16_scope_rejects_unrelated_drift(
             "width_one_bf16_v1",
             {
                 "target": NumericTolerance(absolute=0.0, relative=0.0),
-                "node": NumericTolerance(absolute=0.0, relative=0.0),
+                "node": NumericTolerance(absolute=0.125, relative=1e-2),
                 "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
                 "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
             },

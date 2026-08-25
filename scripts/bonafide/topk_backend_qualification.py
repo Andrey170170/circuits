@@ -23,7 +23,7 @@ from circuits.tracing.backend_qualification import (
 
 SELECTED_EMBED_WIDTH_ONE_BF16_TOLERANCES = {
     "target": NumericTolerance(absolute=0.0, relative=0.0),
-    "node": NumericTolerance(absolute=0.0, relative=0.0),
+    "node": NumericTolerance(absolute=0.125, relative=1e-2),
     "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
     "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
 }
