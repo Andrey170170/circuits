@@ -147,6 +147,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--stop-gradient-embed-contribution-target-lane-width-one-exact-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed stop-gradient embedding contribution width-one "
+            "profile: explicit width-five reference and width-one candidate, "
+            "same GPU model, exact topology and projected-VJP receipts, and "
+            "zero numerical tolerances."
+        ),
+    )
+    parser.add_argument(
         "--allow-identity-difference",
         action="append",
         default=[],
@@ -203,6 +213,10 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
                 args.stop_gradient_embed_contribution_target_lane_full_width_ab,
                 "--stop-gradient-embed-contribution-target-lane-full-width-ab",
             ),
+            (
+                args.stop_gradient_embed_contribution_target_lane_width_one_exact_ab,
+                "--stop-gradient-embed-contribution-target-lane-width-one-exact-ab",
+            ),
         )
         if enabled
     ]
@@ -248,11 +262,12 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             selected_embed_profile = "full_width_exact_v1"
         elif args.selected_embed_contribution_target_lane_width_one_bf16_ab:
             selected_embed_profile = "width_one_bf16_v1"
-        stop_gradient_embed_profile = (
-            "full_width_exact_v1"
-            if args.stop_gradient_embed_contribution_target_lane_full_width_ab
-            else None
-        )
+        if args.stop_gradient_embed_contribution_target_lane_full_width_ab:
+            stop_gradient_embed_profile = "full_width_exact_v1"
+        elif args.stop_gradient_embed_contribution_target_lane_width_one_exact_ab:
+            stop_gradient_embed_profile = "width_one_exact_v1"
+        else:
+            stop_gradient_embed_profile = None
         fixed_tolerances = (
             SELECTED_EMBED_WIDTH_ONE_BF16_TOLERANCES
             if selected_embed_profile == "width_one_bf16_v1"

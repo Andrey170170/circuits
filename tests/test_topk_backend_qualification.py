@@ -728,17 +728,21 @@ def test_selected_embed_chunk_profiles_validate_strategy_and_receipts(
         assert contract["bf16_scope"]["passed"] is True
 
 
-def test_stop_gradient_embed_full_width_profile_is_exact_and_namespace_bound(
-    tmp_path,
+@pytest.mark.parametrize(
+    ("profile", "reference_width", "candidate_width"),
+    [("full_width_exact_v1", None, 5), ("width_one_exact_v1", 5, 1)],
+)
+def test_stop_gradient_embed_profiles_are_exact_and_namespace_bound(
+    tmp_path, profile: str, reference_width: int | None, candidate_width: int
 ) -> None:
-    receipts = _stop_gradient_embed_receipt("1", None)
-    candidate_receipts = _stop_gradient_embed_receipt("1", 5)
+    receipts = _stop_gradient_embed_receipt("1", reference_width)
+    candidate_receipts = _stop_gradient_embed_receipt("1", candidate_width)
     reference, candidate = _save_pair(
         tmp_path,
         reference_backend="eager",
         candidate_backend="eager",
-        reference_stop_gradient_embed_chunk_size=None,
-        candidate_stop_gradient_embed_chunk_size=5,
+        reference_stop_gradient_embed_chunk_size=reference_width,
+        candidate_stop_gradient_embed_chunk_size=candidate_width,
         reference_stop_gradient_embed_receipts=receipts,
         candidate_stop_gradient_embed_receipts=candidate_receipts,
     )
@@ -755,9 +759,7 @@ def test_stop_gradient_embed_full_width_profile_is_exact_and_namespace_bound(
         require_same_gpu_model=True,
         require_exact_node_topology=True,
         require_exact_edge_topology=True,
-        stop_gradient_embed_contribution_target_lane_chunk_ab_profile=(
-            "full_width_exact_v1"
-        ),
+        stop_gradient_embed_contribution_target_lane_chunk_ab_profile=(profile),
     )
 
     assert report["qualification_passed"] is True
@@ -1086,6 +1088,37 @@ def test_stop_gradient_embed_full_width_cli_profile_is_canonical(tmp_path) -> No
         == "full_width_exact_v1"
     )
     assert options["selected_embed_contribution_target_lane_chunk_ab_profile"] is None
+    assert all(
+        tolerance == NumericTolerance(absolute=0.0, relative=0.0)
+        for tolerance in options["tolerances"].values()
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+
+
+def test_stop_gradient_embed_width_one_exact_cli_profile_is_canonical(
+    tmp_path,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--reference",
+            str(tmp_path / "reference"),
+            "--candidate",
+            str(tmp_path / "candidate"),
+            "--output",
+            str(tmp_path / "report.json"),
+            "--stop-gradient-embed-contribution-target-lane-width-one-exact-ab",
+        ]
+    )
+    options = comparison_options(args)
+    assert options["allowed_identity_difference_paths"] == (
+        STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+    )
+    assert (
+        options["stop_gradient_embed_contribution_target_lane_chunk_ab_profile"]
+        == "width_one_exact_v1"
+    )
     assert all(
         tolerance == NumericTolerance(absolute=0.0, relative=0.0)
         for tolerance in options["tolerances"].values()

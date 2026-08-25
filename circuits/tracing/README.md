@@ -105,3 +105,20 @@ and edges were exact. Width one is accepted only as an opt-in BF16 capacity
 primitive on that calibration target. `None` remains the compatibility
 default, and this evidence does not establish bitwise equivalence, scientific
 parity, or broader hardware/workload qualification.
+
+`ADAGConfig.stop_gradient_embed_contribution_target_lane_chunk_size` is the
+independent counterpart for the stop-gradient embedding contribution VJP. It
+uses the shared dense target-lane lifecycle but releases the embedding forward
+graph after its final chunk because later stop-gradient neuron contributions
+use fresh forwards. Commit `032e0c6bd83b0297382125e1ef74ce0c41956dc8`
+qualified both the migration and width one exactly on the frozen 2,951-token
+A100 target. The previous accepted artifact and the new `None` adapter were
+bit-exact; `None` and explicit width five had exact projected receipts and
+compact artifacts; and width five and width one were also bit-exact, including
+targets, nodes, edges, candidate profiles, and topology. Width one reduced the
+local VJP workspace from 13,451,054,080 to 2,750,620,672 bytes and the run-wide
+allocated peak from 37,124,255,232 to 36,359,686,656 bytes without a measured
+runtime penalty. The newly exposed owner is `important_mask_selection`;
+reserved CUDA memory remains unchanged. Width one is accepted only as an
+opt-in exact capacity primitive on this calibration target, and `None` remains
+the compatibility default.

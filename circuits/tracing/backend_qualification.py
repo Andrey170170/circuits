@@ -67,6 +67,7 @@ STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
 )
 STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES = {
     "full_width_exact_v1": (None, 5),
+    "width_one_exact_v1": (5, 1),
 }
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",

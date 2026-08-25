@@ -3,8 +3,9 @@
 Status: active under explicit user authorization. The Level 1a sparse-source and Level 1b bounded
 target-lane stop-gradient contribution slices are implemented and measured. The Level 1e ordinary
 selected-neuron and Level 1f ordinary embedding contribution slices are accepted as numerically
-equivalent BF16 capacity primitives. None completes Level 1 or authorizes broader tracing runs by
-itself.
+equivalent BF16 capacity primitives. The Level 1g stop-gradient embedding contribution slice is an
+exact capacity primitive on the frozen calibration target. None completes Level 1 or authorizes
+broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -47,32 +48,32 @@ The frozen 2,951-token A100 qualification target has 139 selected neurons across
 allocator.
 
 The latest accepted calibration profile additionally uses width-one target-lane chunks for the
-stop-gradient, ordinary selected-neuron, and ordinary embedding contribution VJPs. Current
-top-level runtime from the Level 1f width-one artifact is:
+stop-gradient neuron, stop-gradient embedding, ordinary selected-neuron, and ordinary embedding
+contribution VJPs. Current top-level runtime from the Level 1g width-one artifact is:
 
-| Stage | Seconds | Share of 136.80 seconds |
+| Stage | Seconds | Share of 136.11 seconds |
 | --- | ---: | ---: |
-| Graph expansion | 86.84 | 63 percent |
-| Cross-layer expansion, nested above | 81.47 | 60 percent |
-| Selected attribution/contribution | 26.61 | 19 percent |
-| Stop-gradient attribution/contribution | 21.42 | 16 percent |
+| Graph expansion | 86.10 | 63 percent |
+| Cross-layer expansion, nested above | 80.80 | 59 percent |
+| Selected attribution/contribution | 26.23 | 19 percent |
+| Stop-gradient attribution/contribution | 21.06 | 15 percent |
 
 Current stage allocation peaks:
 
 | Stage | Peak allocated CUDA memory |
 | --- | ---: |
-| Stop-gradient attribution/contribution | 37.11 GB |
 | Important-neuron mask selection | 36.36 GB |
 | Selected attribution/contribution | 36.08 GB |
+| Stop-gradient attribution/contribution | 30.70 GB |
 | Cached-range cross-layer expansion | 26.90 GB |
 | Model and input baseline | about 8.04 GB |
 
 Width-one target-lane execution reduced the measured dense contribution-VJP workspaces from about
 13.45 GB to 2.69-2.75 GB without changing target selection or compact topology. The current
-37,109,122,560-byte allocated owner is again in the stop-gradient phase, while the reserved peak
-remains 51,661,242,368 bytes. Continue Level 1 only against a measured owner; move genuinely
-reusable sequence state to host RAM under Level 2 when local lifetime and projection changes no
-longer provide enough capacity.
+36,359,686,656-byte allocated owner is `important_mask_selection`, while the reserved peak remains
+51,661,242,368 bytes. Continue Level 1 only against a measured owner; move genuinely reusable
+sequence state to host RAM under Level 2 when local lifetime and projection changes no longer
+provide enough capacity.
 
 ## Intended memory model
 
@@ -476,6 +477,63 @@ Width one is therefore accepted as a numerically equivalent BF16 capacity primit
 frozen calibration target. It remains opt-in, `None` remains the compatibility default, and the
 result does not claim bitwise equivalence, scientific parity, other widths/dtypes/GPU families, or
 promotion-panel validation. No broader trace run was launched during this checkpoint.
+
+### Level 1g measured checkpoint: stop-gradient embedding target-lane chunks
+
+Execution commit `032e0c6bd83b0297382125e1ef74ce0c41956dc8` adds the independent
+`stop_gradient_embed_contribution_target_lane_chunk_size` adapter. It shares the dense target-lane
+execution module used by ordinary contribution paths, but owns a separate public interface,
+configuration field, telemetry namespace, and receipt contract. Intermediate chunks retain the
+embedding forward graph; the final chunk releases it because every later stop-gradient neuron
+contribution starts a fresh forward. Ordinary paths preserve their prior final-retain behavior and
+telemetry key.
+
+The focused algebra, lifecycle, provenance, launcher, and negative-test gate passed 158 tests,
+Ruff check and format, shell syntax, JSON parsing, and diff hygiene. The immutable execution
+worktree is
+`/scratch/general/vast/u1653998/circuits/run-worktrees/stop-gradient-embed-target-lane-chunk-qual-032e0c6`.
+One initial job, `15119232`, failed closed during preflight because the submitted width-one source
+receipt referred to an older smoke manifest; it loaded no model and produced no artifact. The
+corrected jobs `15119245` (`None`), `15119292` (explicit width five), and `15119432` (width one)
+then ran strictly sequentially on the same `notch370` A100 and exited zero in 3:31, 3:06, and 3:18.
+Their artifacts are `topk-trace-03563a72446c0d6d283fef95`,
+`topk-trace-d01b18e983c4bd3b1dd25e90`, and `topk-trace-316172902659e9da51d59ddb`.
+
+The migration comparison from the prior accepted Level 1f artifact to the new `None` adapter is
+bit-exact. Its report is `.../qualification-reports/prior-width1-vs-new-none-zero-v1.json`, SHA-256
+`6476768e7ad2165233d3d8e24ead13be619ac50fb668dbfb51dd28da78fbe178`. The canonical `None`
+versus explicit-width-five report also passes exact targets, nodes, edges, candidate profiles,
+topology, execution shapes, and projected raw-dtype receipt:
+`.../qualification-reports/none-vs-5-exact-v1.json`, SHA-256
+`27984770f0cf85e344f4ed66bdc766537812df0e97499a7fdfa9cc456e7baa1c`.
+
+| Measurement | Width five | Width one | Difference |
+| --- | ---: | ---: | ---: |
+| Trace wall seconds | 135.704180726083 | 136.11017425195314 | +0.40599352587014 (+0.30 percent) |
+| Global peak allocated bytes | 37,124,255,232 | 36,359,686,656 | -764,568,576 (-2.06 percent) |
+| Global peak reserved bytes | 51,661,242,368 | 51,661,242,368 | unchanged |
+| Stop-gradient phase peak allocated bytes | 37,124,255,232 | 30,699,176,448 | -6,425,078,784 |
+| Embedding contribution-VJP peak allocated bytes | 37,124,255,232 | 26,423,821,824 | -10,700,433,408 |
+| Embedding contribution-VJP incremental workspace bytes | 13,451,054,080 | 2,750,620,672 | -10,700,433,408 (-79.55 percent) |
+| Embedding contribution-VJP wall seconds | 0.46693867398425937 | 0.4629479080904275 | -0.00399076589383185 |
+| Embedding contribution-VJP executions | 1 | 5 | 5x |
+
+Unlike the ordinary embedding analogue, the five-lane and width-one stop-gradient executions are
+bit-exact. The projected receipt is the same
+`acde4279e54ca423754c9a209e7bd64ed2b50c4625d9b5a4fd0b9282e695f391` on both sides. The
+canonical width-one report is `.../qualification-reports/5-vs-1-exact-v1.json`, SHA-256
+`c1cf9f0cd12868e3c58feb0cea19305b0acfcfa853d2526145f4c00e709a5686`; it proves the requested
+and resolved widths, five ordered raw chunks of `[1, 1, 2951, 2560]`, exact projected receipt,
+same GPU model, exact topology, and zero numerical tolerance.
+
+Width one therefore retires the stop-gradient embedding VJP as the allocated-memory owner and is
+accepted as an exact opt-in capacity primitive on this frozen calibration target. It has no
+measured runtime penalty. The global peak now lands exactly on `important_mask_selection` at
+36,359,686,656 bytes; `selected_attribution_contribution` is close behind at 36,083,632,640 bytes.
+Reserved memory remains unchanged, so this is a live-allocation improvement rather than additional
+reservation-based headroom. The next Level 1 checkpoint should remove the mask-selection boolean
+compaction used only for the all-zero test, then separately qualify immediate detach of terminal
+attribution projections. No broader trace run was launched during this checkpoint.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 
