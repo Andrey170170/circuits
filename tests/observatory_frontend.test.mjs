@@ -185,6 +185,31 @@ test("occurrence-local labels take precedence over a shared basis fallback", () 
   );
 });
 
+test("inspection-only invalid results remain occurrence-local viewer records", () => {
+  const overlay = {
+    inspection_only: true,
+    canonical_finalized: false,
+    labels: [
+      {
+        occurrence_id: "occ-invalid",
+        basis_id: "basis-invalid",
+        status: "invalid_result",
+        label: "invalid_result",
+        inspection: { validation_errors: ["unknown evidence ID"] },
+      },
+    ],
+  };
+
+  const record = findLabelRecord(overlay, {
+    id: "occ-invalid",
+    occurrenceId: "occ-invalid",
+    basisId: "basis-invalid",
+  });
+  assert.equal(record.status, "invalid_result");
+  assert.equal(record.label, "invalid_result");
+  assert.deepEqual(record.inspection.validation_errors, ["unknown evidence ID"]);
+});
+
 test("viewer distinguishes labeling coverage states and exposes role details", async () => {
   const source = await readFile(new URL("../circuits/observatory/assets/app.js", import.meta.url), "utf8");
 

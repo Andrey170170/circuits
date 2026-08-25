@@ -16,6 +16,9 @@ from circuits.graph_labeling.openai_batch import (
     recover_openai_upload,
     submit_openai_batch,
 )
+from circuits.graph_labeling.partial_inspection import (
+    export_openai_batch_partial_overlay,
+)
 from circuits.graph_labeling.runtime import (
     execute,
     export_overlay,
@@ -91,6 +94,13 @@ def _parser() -> argparse.ArgumentParser:
     batch_collect.add_argument("--run-root", type=Path, required=True)
     batch_collect.add_argument("--method-id", required=True)
     batch_collect.add_argument("--finalize", action="store_true")
+
+    partial_export = commands.add_parser("export-openai-batch-partial-overlay")
+    partial_export.add_argument("--run-root", type=Path, required=True)
+    partial_export.add_argument("--method-id", required=True)
+    partial_export.add_argument("--attempt-id", required=True)
+    partial_export.add_argument("--site-root", type=Path, required=True)
+    partial_export.add_argument("--destination", type=Path, required=True)
     return parser
 
 
@@ -138,6 +148,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.command == "collect-openai-batch":
         value = collect_openai_batch(
             args.run_root, args.method_id, finalize=args.finalize
+        )
+    elif args.command == "export-openai-batch-partial-overlay":
+        value = export_openai_batch_partial_overlay(
+            args.run_root,
+            args.method_id,
+            args.attempt_id,
+            args.site_root,
+            args.destination,
         )
     else:
         value = status(args.run_root)

@@ -22,6 +22,10 @@ from circuits.graph_labeling.openai_batch import (
     recover_openai_upload,
     submit_openai_batch,
 )
+from circuits.graph_labeling.partial_inspection import (
+    PARTIAL_NORMALIZATION_POLICY,
+    export_openai_batch_partial_overlay,
+)
 from circuits.graph_labeling.runtime import (
     execute,
     export_overlay,
@@ -43,6 +47,8 @@ from circuits.observatory import (
     MANIFEST_SCHEMA,
     TRACE_GRAPH_SCHEMA,
 )
+from circuits.observatory.external_labels import install_label_set
+from circuits.observatory.server import validate_site_bundle
 
 
 def _bytes(value: object) -> bytes:
@@ -911,6 +917,187 @@ def test_openai_batch_adapter_is_cost_guarded_idempotent_and_collects(
     assert repeated == collection
     assert len(list((batch_root / "collection-attempts").iterdir())) == 1
     assert status(run)["methods"]["structured-llm-graph-role-v1"]["label_count"] == 1
+
+
+def test_partial_batch_overlay_normalizes_redundant_top_level_citations(
+    tmp_path: Path,
+) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "partial-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    fake = _FakeOpenAIBatchTransport()
+    submission = submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    output = json.loads(_batch_output(run))
+    payload = json.loads(output["response"]["body"]["output"][0]["content"][0]["text"])
+    packet = EvidencePacket.model_validate(
+        json.loads((run / "evidence/occ-selected.json").read_text())
+    )
+    source_id = payload["cited_evidence_ids"][0]
+    target_id = packet.direct_target_edges[0]["evidence_id"]
+    payload["claim_citations"]["label"] = [target_id, source_id]
+    payload["claim_citations"]["target_effect"] = [target_id]
+    output["response"]["body"]["output"][0]["content"][0]["text"] = json.dumps(payload)
+    fake.output = _bytes(output) + b"\n"
+
+    with pytest.raises(ValueError, match="subsets of cited evidence"):
+        collect_openai_batch(
+            run, "structured-llm-graph-role-v1", transport=fake, finalize=True
+        )
+    label_set_id = submission["remote"]["metadata"]["graph_label_set"]
+    attempts = list(
+        (run / "openai-batches" / label_set_id / "collection-attempts").iterdir()
+    )
+    assert len(attempts) == 1
+
+    destination = tmp_path / "partial-overlay.json"
+    receipt = export_openai_batch_partial_overlay(
+        run,
+        "structured-llm-graph-role-v1",
+        attempts[0].name,
+        site,
+        destination,
+    )
+
+    overlay = json.loads(destination.read_text())
+    assert receipt["valid_count"] == 1
+    assert receipt["valid_unchanged_count"] == 0
+    assert receipt["valid_normalized_count"] == 1
+    assert receipt["invalid_count"] == 0
+    assert receipt["invalid_provider_row_count"] == 0
+    assert receipt["unexpected_provider_row_count"] == 0
+    assert overlay["inspection_only"] is True
+    assert overlay["canonical_finalized"] is False
+    provenance = overlay["partial_inspection"]
+    assert provenance["normalization_policy_id"] == PARTIAL_NORMALIZATION_POLICY
+    assert (
+        provenance["provider_output_sha256"] == hashlib.sha256(fake.output).hexdigest()
+    )
+    assert provenance["batch_id"] == submission["batch_id"]
+    assert provenance["submission_sha256"] == submission["content_hash"]
+    assert provenance["method_sha256"] == submission["method_sha256"]
+    assert provenance["study_sha256"] == submission["study_sha256"]
+    assert provenance["source_viewer_manifest_sha256"] == hashes["viewer"]
+    [outcome] = provenance["row_outcomes"]
+    assert outcome["validation_outcome"] == "valid_normalized"
+    assert outcome["appended_evidence_ids"] == [target_id]
+    assert outcome["raw_payload_sha256"] != outcome["normalized_payload_sha256"]
+    records = {
+        item["occurrence_id"]: item for item in overlay["labels_by_trace"]["trace-test"]
+    }
+    assert records["occ-selected"]["status"] == "provisional_label"
+    assert records["occ-selected"]["role"]["cited_evidence_ids"] == [
+        source_id,
+        target_id,
+    ]
+    assert (
+        records["occ-selected"]["role"]["result_sha256"]
+        == outcome["raw_payload_sha256"]
+    )
+    assert records["occ-unselected"]["status"] == "not_selected"
+
+
+def test_partial_batch_overlay_keeps_invented_citations_invalid_and_installs(
+    tmp_path: Path,
+) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "invalid-partial-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    fake = _FakeOpenAIBatchTransport()
+    submission = submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    output = json.loads(_batch_output(run))
+    payload = json.loads(output["response"]["body"]["output"][0]["content"][0]["text"])
+    payload["claim_citations"]["label"] = ["ev-invented"]
+    output["response"]["body"]["output"][0]["content"][0]["text"] = json.dumps(payload)
+    fake.output = _bytes(output) + b"\n"
+    with pytest.raises(ValueError, match="unknown evidence"):
+        collect_openai_batch(run, "structured-llm-graph-role-v1", transport=fake)
+    label_set_id = submission["remote"]["metadata"]["graph_label_set"]
+    [attempt] = list(
+        (run / "openai-batches" / label_set_id / "collection-attempts").iterdir()
+    )
+
+    destination = tmp_path / "invalid-partial-overlay.json"
+    receipt = export_openai_batch_partial_overlay(
+        run,
+        "structured-llm-graph-role-v1",
+        attempt.name,
+        site,
+        destination,
+    )
+
+    overlay = json.loads(destination.read_text())
+    assert receipt["valid_count"] == 0
+    assert receipt["valid_unchanged_count"] == 0
+    assert receipt["valid_normalized_count"] == 0
+    assert receipt["invalid_count"] == 1
+    assert receipt["invalid_provider_row_count"] == 1
+    assert receipt["unexpected_provider_row_count"] == 0
+    [outcome] = overlay["partial_inspection"]["row_outcomes"]
+    assert outcome["appended_evidence_ids"] == []
+    assert outcome["validation_outcome"] == "invalid"
+    assert "ev-invented" in " ".join(outcome["validation_errors"])
+    records = {
+        item["occurrence_id"]: item for item in overlay["labels_by_trace"]["trace-test"]
+    }
+    assert records["occ-selected"]["status"] == "invalid_result"
+    assert records["occ-selected"]["label"] == "invalid_result"
+    assert "ev-invented" in " ".join(
+        records["occ-selected"]["inspection"]["validation_errors"]
+    )
+    derived = tmp_path / "derived-site"
+    install_label_set(site, destination, derived)
+    validate_site_bundle(derived)
+
+
+def test_partial_batch_overlay_rejects_incomplete_provider_envelope(
+    tmp_path: Path,
+) -> None:
+    site, hashes = _site(tmp_path)
+    run = tmp_path / "envelope-partial-run"
+    prepare(_openai_batch_spec(site, hashes), run)
+    fake = _FakeOpenAIBatchTransport()
+    submission = submit_openai_batch(
+        run,
+        "structured-llm-graph-role-v1",
+        max_cost_usd=10.0,
+        transport=fake,
+    )
+    output = json.loads(_batch_output(run))
+    del output["response"]["body"]["id"]
+    fake.output = _bytes(output) + b"\n"
+    with pytest.raises(ValueError, match="lacks response id"):
+        collect_openai_batch(run, "structured-llm-graph-role-v1", transport=fake)
+    label_set_id = submission["remote"]["metadata"]["graph_label_set"]
+    [attempt] = list(
+        (run / "openai-batches" / label_set_id / "collection-attempts").iterdir()
+    )
+
+    destination = tmp_path / "envelope-partial-overlay.json"
+    receipt = export_openai_batch_partial_overlay(
+        run,
+        "structured-llm-graph-role-v1",
+        attempt.name,
+        site,
+        destination,
+    )
+
+    assert receipt["valid_count"] == 0
+    assert receipt["invalid_count"] == 1
+    assert receipt["invalid_provider_row_count"] == 1
+    overlay = json.loads(destination.read_text())
+    [outcome] = overlay["partial_inspection"]["row_outcomes"]
+    assert outcome["validation_outcome"] == "invalid"
+    assert outcome["validation_errors"] == ["Responses result lacks response id"]
 
 
 def test_openai_batch_collection_accepts_response_only_cache_write_usage(

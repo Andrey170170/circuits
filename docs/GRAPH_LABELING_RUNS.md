@@ -178,6 +178,42 @@ usage, and cost. The finalization receipt then binds that collection to the immu
 manifest, labels file, and label-set finalization receipt. No command polls in a tight loop; rerun
 status when desired.
 
+### Partial inspection of a saved Batch output
+
+A completed Batch can contain useful rows even when one or more structured labels fail canonical
+validation. Canonical collection and finalization remain fail-closed. For human inspection only,
+export one exact saved collection attempt as a standard observatory overlay:
+
+```bash
+python -m circuits.graph_labeling export-openai-batch-partial-overlay \
+  --run-root RUN_ROOT --method-id METHOD_ID --attempt-id ATTEMPT_ID \
+  --site-root SOURCE_VIEWER --destination PARTIAL_OVERLAY.json
+python -m circuits.graph_labeling install-overlay \
+  --source-site SOURCE_VIEWER --label-set PARTIAL_OVERLAY.json \
+  --destination-site DERIVED_VIEWER
+```
+
+The exporter makes no provider calls and requires a locally saved, receipt-bound collection
+attempt whose snapshot says the Batch completed with zero request failures. It validates every
+response row independently. Its only normalization policy is
+`append-first-seen-valid-claim-citations-to-top-level.v1`: provider order in the redundant
+top-level `cited_evidence_ids` list is preserved, then first-seen claim-level IDs already present
+in the frozen evidence packet are appended. Unknown IDs are never corrected or dropped, so they
+still invalidate the row. Each row records the raw exact-text hash, raw canonical-payload hash,
+normalized payload hash, appended IDs, and validation outcome.
+
+The export receipt reports valid rows separately as unchanged versus normalized, plus selected
+invalid results, invalid provider rows, and unexpected provider rows. These counts are distinct so
+an extra or unbound output row cannot disappear inside the selected-node summary.
+
+Valid selected occurrences display their provisional label; rejected selected occurrences display
+`invalid_result` with validation errors; every unselected node remains `not_selected`. The overlay
+is explicitly marked `inspection_only=true` and `canonical_finalized=false`, and binds the exact
+provider-output SHA, Batch/input/output IDs, submission/plan/attempt receipts, run, study, method,
+and source-viewer/catalog/trace hashes. It is site-compatible for comparison in the existing
+viewer, but it is not a canonical or finalized scientific label set and must not be analyzed as
+one.
+
 The v2 prompt uses `adag.graph-labeling.labeler-evidence-projection.v2`: selection-group,
 trace-provenance, sampling, path-search, and audit/coverage fields remain in frozen local evidence
 but are excluded from provider messages. V1 prompt requests are unchanged.
