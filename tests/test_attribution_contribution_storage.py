@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import weakref
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -87,11 +88,46 @@ class _ToyModel(nn.Module):
         super().__init__()
         self.model = _ToyBackbone()
         self.lm_head = nn.Linear(3, 5, bias=False)
+        self.logit_refs = []
 
     def forward(self, *, inputs_embeds, attention_mask):
         del attention_mask
         hidden = self.model.layers[0].mlp.down_proj(inputs_embeds)
-        return SimpleNamespace(logits=self.lm_head(hidden))
+        logits = self.lm_head(hidden)
+        self.logit_refs.append(weakref.ref(logits))
+        return SimpleNamespace(logits=logits)
+
+
+def test_selected_capture_hook_is_removed_when_forward_fails(monkeypatch) -> None:
+    model = _ToyModel()
+    monkeypatch.setattr(
+        attribution_module, "revert_stop_nonlinear_grad", lambda current: current
+    )
+    monkeypatch.setattr(
+        attribution_module,
+        "layerwise_stop_nonlinear_grad",
+        lambda current, *_args, **_kwargs: current,
+    )
+
+    def fail_after_capture(*, inputs_embeds, attention_mask):
+        del attention_mask
+        model.model.layers[0].mlp.down_proj(inputs_embeds)
+        raise RuntimeError("forced selected forward failure")
+
+    monkeypatch.setattr(model, "forward", fail_after_capture)
+    with pytest.raises(RuntimeError, match="forced selected forward failure"):
+        _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
+            model,
+            neuron_cfg={0: [[0, 0]]},
+            input_ids=torch.tensor([[1, 2]]),
+            src_tokens=[0],
+            tgt_tokens=[1],
+            focus_positions=[1],
+            focus_logits=[[2]],
+            attention_masks=torch.ones(1, 2),
+        )
+
+    assert len(model.model.layers[0].mlp.down_proj._forward_hooks) == 0
 
 
 def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
@@ -99,7 +135,10 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
 ) -> None:
     calls: list[tuple[str, dict]] = []
     retain_graph_calls: list[bool | None] = []
+    selected_hook_counts: list[int] = []
+    output_liveness: list[bool] = []
     original_autograd_grad = torch.autograd.grad
+    active_model = None
 
     @contextmanager
     def capture_stage(_instrumentation, name, *, metadata):
@@ -178,11 +217,17 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
 
     def capture_autograd_grad(*args, **kwargs):
         retain_graph_calls.append(kwargs.get("retain_graph"))
+        selected_hook_counts.append(
+            len(active_model.model.layers[0].mlp.down_proj._forward_hooks)
+        )
+        output_liveness.append(active_model.logit_refs[-1]() is not None)
         return original_autograd_grad(*args, **kwargs)
 
     monkeypatch.setattr(torch.autograd, "grad", capture_autograd_grad)
 
     def run(model, instrumentation):
+        nonlocal active_model
+        active_model = model
         return _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             model,
             neuron_cfg={0: [[0, 0], [1, 1]]},
@@ -238,3 +283,5 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
     assert selected_forward["activation_shape"] == [1, 2, 3]
     assert calls[-1][1]["contribution_shape"] == [2, 1, 1]
     assert retain_graph_calls == [True, False, True, True, False, True]
+    assert selected_hook_counts == [0, 0, 0, 0, 0, 0]
+    assert output_liveness == [False, False, True, False, False, True]

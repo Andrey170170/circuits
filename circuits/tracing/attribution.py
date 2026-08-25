@@ -573,21 +573,24 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
 
                 return fn
 
-            if hasattr(model.model.layers[lid].mlp, "mlp"):
-                model.model.layers[lid].mlp.mlp.down_proj.register_forward_hook(
-                    _hook(lid, cache)
-                )
-            else:
-                model.model.layers[lid].mlp.down_proj.register_forward_hook(
-                    _hook(lid, cache)
-                )
-
             # differentiable embeds
             # shape: (batch, seq, d)
             embeds = model.model.embed_tokens(input_ids).detach().requires_grad_()
 
+            if hasattr(model.model.layers[lid].mlp, "mlp"):
+                hook_handle = model.model.layers[
+                    lid
+                ].mlp.mlp.down_proj.register_forward_hook(_hook(lid, cache))
+            else:
+                hook_handle = model.model.layers[
+                    lid
+                ].mlp.down_proj.register_forward_hook(_hook(lid, cache))
+
             # forward pass
-            out = model(inputs_embeds=embeds, attention_mask=attention_masks)
+            try:
+                out = model(inputs_embeds=embeds, attention_mask=attention_masks)
+            finally:
+                hook_handle.remove()
             logits = out.logits
             if center_logits:
                 logits -= logits.mean(dim=-1)
@@ -597,6 +600,12 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                 forward_measurement.metadata["embedding_shape"] = list(embeds.shape)
                 forward_measurement.metadata["logit_shape"] = list(logits.shape)
                 forward_measurement.metadata["activation_shape"] = list(act.shape)
+                forward_measurement.metadata["capture_hook_removed"] = True
+                forward_measurement.metadata["downstream_graph_released"] = True
+            # The selected activation depends only on the prefix through this
+            # layer. The logits and downstream suffix graph are never consumed
+            # by the selected-attribution VJPs.
+            del out, logits, cache, hook_handle
 
         # Process this layer's neurons in chunks
         all_pairs = list(pairs)
