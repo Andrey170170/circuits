@@ -1,8 +1,8 @@
 # ADAG bounded-memory tracing execution plan
 
-Status: active under explicit user authorization. The Level 1a sparse-source and Level 1b bounded
-target-lane stop-gradient contribution slices are implemented and measured; neither completes
-Level 1 or authorizes broader tracing runs by itself.
+Status: active under explicit user authorization. The Level 1a sparse-source, Level 1b bounded
+target-lane stop-gradient contribution, and Level 1e ordinary-contribution slices are implemented
+and measured; none completes Level 1 or authorizes broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -335,6 +335,65 @@ generalize the already-qualified target-lane chunk/project pattern to this ordin
 contribution VJP, with a separate exact receipt and artifact qualification. Reserved peak remains
 unchanged, so the current result establishes lower live allocation, not yet lower reservation-based
 headroom.
+
+### Level 1e measured checkpoint: ordinary contribution target-lane chunks
+
+Commit `a73834ce257933bee2bb7a6b8b10ddb6c17989ab` adds an independent
+`selected_neuron_contribution_target_lane_chunk_size` execution option for the ordinary selected
+attribution/contribution path. The default remains `None`, which reuses the historical full target
+identity. Positive widths preserve every batch lane, traverse contiguous target chunks against the
+shared forward graph, project each dense result immediately into canonical
+`(coordinate, batch, target)` order, and release that dense chunk before the next backward. This is
+separate from the already-qualified stop-gradient option and does not change its lifecycle policy.
+
+The focused CPU, provenance, launcher, and negative-test gate passed 111 tests, Ruff check and
+format, shell syntax, and diff hygiene. The immutable execution worktree is
+`/scratch/general/vast/u1653998/circuits/run-worktrees/selected-neuron-target-lane-chunk-qual-a73834c`.
+Jobs `15118022` (`None`, `notch370`) and `15118070` (width one, `notch369`) ran sequentially on the
+same frozen 2,951-token A100 target. Their artifacts are respectively
+`topk-trace-2b70c50d011cd49dd27a7835` and `topk-trace-69d94f9ba37aa27401ad2a2f`.
+
+| Measurement | All targets | Width one | Difference |
+| --- | ---: | ---: | ---: |
+| Trace wall seconds | 137.97593464702368 | 137.08704141899943 | -0.88889322802425 (-0.64 percent) |
+| Global peak allocated bytes | 42,720,715,776 | 42,645,131,776 | -75,584,000 |
+| Global peak reserved bytes | 51,661,242,368 | 51,661,242,368 | unchanged |
+| Ordinary contribution-VJP peak allocated bytes | 42,720,715,776 | 31,960,002,560 | -10,760,713,216 |
+| Maximum incremental ordinary VJP workspace bytes | 13,450,895,872 | 2,690,183,168 | -10,760,712,704 (-80 percent) |
+| Ordinary contribution-VJP wall seconds | 8.828284760937095 | 8.989955821307376 | +0.161671060370281 (+1.83 percent) |
+| Ordinary contribution-VJP executions | 20 | 100 | 5x |
+
+Both runs completed with zero OOMs and allocator retries. The width-one run bounded the maximum
+materialized target and autograd lanes at one. It retires the ordinary selected-neuron VJP as the
+allocated-memory owner; the unchanged ordinary `selected_embed_contribution_vjp` becomes the new
+owner at 42,645,131,776 bytes. This explains why a 10.76 GB local reduction lowers the run-wide peak
+by only 75.584 MB. Reserved memory is unchanged, so this is lower live allocation rather than new
+reservation-based headroom. The one-pair timing result does not demonstrate a runtime penalty at
+whole-trace scale.
+
+The first strict report is deliberately retained as a failed calibration:
+`/scratch/general/vast/u1653998/circuits/results/process_witness/selected-neuron-target-lane-chunk-qualification-v1/a73834c/qualification-reports/all-targets-vs-width1-zero-v1.json`,
+SHA-256 `8b31ec9c7bd46634efcf267b890739ba9427e260a8a263a10510528d344b8e1f`.
+Target values, all 3,094 node values, node and edge topology, and all identities except the declared
+chunk-width field are exact. The execution-shape change alters CUDA floating-point accumulation:
+19 of 20 projected raw-dtype VJP hashes differ, 325 of 2,366 edge attributions differ with maximum
+absolute error `2.644103648863083e-4` and cosine `0.9999969217694802`, and 181 of 15,470 candidate
+profile values differ with maximum absolute error `0.125`, RMSE `0.00123554639726896`, and cosine
+`0.9999977997927378`. Of the changed profile values, 116 are within one BF16 ULP, 154 within two,
+and 172 within four. One near-zero value changes sign from `-0.00274658203125` to
+`0.00299072265625`; graph topology remains exact. The jobs used different physical A100 nodes, so
+the pair also retains a run- or hardware-level nondeterminism confound.
+
+These diagnostics are consistent with the batched-five-lane versus repeated-single-lane backward
+kernel shape, but they do not satisfy the plan's zero-tolerance gate. No tolerance will be widened
+on this inspected target. Width one therefore remains an opt-in, memory-qualified calibration
+adapter rather than a correctness-qualified or promoted default. If promotion is needed, first run
+`None`, explicit width five, and width one sequentially on one physical A100. Require `None` versus
+width five to remain bit-exact, and freeze a dtype-aware per-layer numerical policy from this
+calibration before inspecting the fresh width-one confirmation. Then validate that unchanged gate
+on a separate holdout target. The next memory-owner optimization is the ordinary
+embedding-contribution VJP; apply the same chunk/project design at that deep execution seam before
+considering broader streaming.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 
