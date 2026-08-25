@@ -84,3 +84,17 @@ the next traversal, and leaves the embedding contribution VJP unchunked.
 a positive integer opts into bounded target-axis chunks. Treat this option as
 an engineering candidate until a frozen same-code `None` versus width-one A100
 qualification passes exact projected-receipt and compact-artifact gates.
+
+`ADAGConfig.selected_embed_contribution_target_lane_chunk_size` independently
+bounds the ordinary embedding contribution VJP. Direct execution projects each
+raw chunk immediately into canonical `(source, batch, target)` contributions;
+integrated gradients projects into `(target, batch, source, hidden)` gradients.
+Both forms preserve source-token order and duplicates and retain the shared
+forward graph for subsequent selected-neuron traversals. The caller creates a
+full identity only when this adapter or the ordinary selected-neuron adapter
+uses its `None` compatibility width, and shares that identity between both
+unchunked adapters. Explicit widths are opt-in and provenance-bearing. Qualify
+the full-width adapter (`None` versus width five for the frozen five-target
+item) under exact gates before comparing width five against width one under the
+declared BF16 numerical-equivalence gates; neither comparison establishes
+scientific parity.

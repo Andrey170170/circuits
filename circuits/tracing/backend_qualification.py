@@ -54,6 +54,13 @@ SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
     "artifact_identity.adag_config.selected_neuron_contribution_target_lane_chunk_size",
 )
 SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_STRATEGIES = (None, 1)
+SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.selected_embed_contribution_target_lane_chunk_size",
+)
+SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES = {
+    "full_width_exact_v1": (None, 5),
+    "width_one_bf16_v1": (5, 1),
+}
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",
     "selected_target_activations",
@@ -65,6 +72,7 @@ _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config.stop_gradient_contribution_execution",
     "artifact_identity.adag_config.stop_gradient_contribution_target_lane_chunk_size",
     "artifact_identity.adag_config.selected_neuron_contribution_target_lane_chunk_size",
+    "artifact_identity.adag_config.selected_embed_contribution_target_lane_chunk_size",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -1037,6 +1045,379 @@ def _selected_neuron_contribution_receipt_contract(
     }
 
 
+def _selected_embed_contribution_receipt_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+    *,
+    expected_reference_width: int | None,
+    expected_candidate_width: int | None,
+    require_exact_hashes: bool,
+) -> dict[str, Any]:
+    """Prove each side executed its claimed direct embedding-VJP width."""
+
+    def instrumentation(artifact: TopKCompactTraceArtifact) -> Any:
+        return artifact.topk_trace.circuit_data.trace_metadata.get("instrumentation")
+
+    def validate(raw: Any, expected_width: int | None) -> tuple[bool, dict[str, Any]]:
+        if not isinstance(raw, Mapping):
+            return False, {}
+        execution_records = raw.get("execution_records")
+        records = (
+            execution_records.get("selected_embed_contribution_vjp")
+            if isinstance(execution_records, Mapping)
+            else None
+        )
+        if not isinstance(records, list) or len(records) != 1:
+            return False, {}
+        record = records[0]
+        if not isinstance(record, Mapping):
+            return False, {}
+        receipt = record.get("projected_vjp_sha256")
+        projected_shape = record.get("projected_vjp_shape")
+        source_tokens = record.get("source_tokens")
+        target_count = record.get("target_lane_count")
+        requested_width = record.get("target_lane_chunk_size_requested")
+        resolved_width = record.get("target_lane_chunk_size_resolved")
+        chunk_count = record.get("target_lane_chunk_count")
+        max_target_lanes = record.get("max_materialized_target_lanes")
+        max_autograd_lanes = record.get("max_materialized_autograd_lanes")
+        raw_shapes = record.get("raw_vjp_chunk_shapes")
+        grad_shapes = record.get("grad_outputs_chunk_shapes")
+        batch = (
+            projected_shape[1]
+            if isinstance(projected_shape, list) and len(projected_shape) == 3
+            else None
+        )
+        expected_resolved = (
+            min(expected_width or target_count, target_count)
+            if type(target_count) is int and target_count > 0
+            else None
+        )
+        expected_chunk_widths = (
+            [
+                min(expected_resolved, target_count - start)
+                for start in range(0, target_count, expected_resolved)
+            ]
+            if type(expected_resolved) is int and expected_resolved > 0
+            else []
+        )
+        expected_autograd_lanes = (
+            expected_resolved * batch
+            if type(expected_resolved) is int and type(batch) is int
+            else None
+        )
+        shape_consistent = (
+            type(batch) is int
+            and batch > 0
+            and isinstance(raw_shapes, list)
+            and isinstance(grad_shapes, list)
+            and len(raw_shapes) == len(grad_shapes) == len(expected_chunk_widths)
+            and all(
+                isinstance(raw_shape, list)
+                and len(raw_shape) == 4
+                and all(type(extent) is int and extent > 0 for extent in raw_shape)
+                and raw_shape[0] == width * batch
+                and raw_shape[1] == batch
+                and isinstance(grad_shape, list)
+                and grad_shape == [width * batch, width * batch]
+                for raw_shape, grad_shape, width in zip(
+                    raw_shapes, grad_shapes, expected_chunk_widths, strict=True
+                )
+            )
+            and len({tuple(shape[2:]) for shape in raw_shapes}) == 1
+            and record.get("raw_vjp_shape")
+            == (raw_shapes[0] if len(raw_shapes) == 1 else None)
+            and record.get("grad_outputs_shape")
+            == (grad_shapes[0] if len(grad_shapes) == 1 else None)
+        )
+        valid = (
+            isinstance(receipt, str)
+            and len(receipt) == 64
+            and all(character in "0123456789abcdef" for character in receipt)
+            and record.get("execution_index") is None
+            and record.get("receipt_mode") == "singular"
+            and record.get("return_gradient_only") is False
+            and record.get("canonical_result_order") == "source_batch_target"
+            and isinstance(source_tokens, list)
+            and bool(source_tokens)
+            and all(type(token) is int for token in source_tokens)
+            and projected_shape == [len(source_tokens), batch, target_count]
+            and requested_width == expected_width
+            and resolved_width == expected_resolved
+            and chunk_count == len(expected_chunk_widths)
+            and max_target_lanes == expected_resolved
+            and max_autograd_lanes == expected_autograd_lanes
+            and record.get("max_grad_outputs_shape")
+            == [expected_autograd_lanes, expected_autograd_lanes]
+            and record.get("dense_vjp_result_materialized") is True
+            and record.get("retain_graph") is True
+            and shape_consistent
+        )
+        return valid, dict(record)
+
+    reference_valid, reference_record = validate(
+        instrumentation(reference), expected_reference_width
+    )
+    candidate_valid, candidate_record = validate(
+        instrumentation(candidate), expected_candidate_width
+    )
+    cross_side_structure_equal = (
+        reference_valid
+        and candidate_valid
+        and reference_record["source_tokens"] == candidate_record["source_tokens"]
+        and reference_record["projected_vjp_shape"]
+        == candidate_record["projected_vjp_shape"]
+        and reference_record["target_lane_count"]
+        == candidate_record["target_lane_count"]
+        and reference_record["raw_vjp_chunk_shapes"][0][1:]
+        == candidate_record["raw_vjp_chunk_shapes"][0][1:]
+    )
+    hashes_exact = (
+        reference_valid
+        and candidate_valid
+        and reference_record["projected_vjp_sha256"]
+        == candidate_record["projected_vjp_sha256"]
+    )
+    checks = {
+        "reference_runtime_width_proven": reference_valid,
+        "candidate_runtime_width_proven": candidate_valid,
+        "cross_side_source_and_dense_shape_equal": cross_side_structure_equal,
+        "receipt_hashes_exact": hashes_exact,
+    }
+    required_checks = [
+        reference_valid,
+        candidate_valid,
+        cross_side_structure_equal,
+    ]
+    if require_exact_hashes:
+        required_checks.append(hashes_exact)
+    return {
+        "reference_execution": reference_record,
+        "candidate_execution": candidate_record,
+        "require_exact_hashes": require_exact_hashes,
+        "checks": checks,
+        "passed": all(required_checks),
+    }
+
+
+def _selected_embed_bf16_scope_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+    *,
+    reference_nodes: Mapping[Any, pd.Series],
+    candidate_nodes: Mapping[Any, pd.Series],
+    reference_edges: Mapping[Any, pd.Series],
+    candidate_edges: Mapping[Any, pd.Series],
+    candidate_count: int,
+    candidate_profile_tolerance: NumericTolerance,
+    edge_tolerance: NumericTolerance,
+) -> dict[str, Any]:
+    """Confine BF16 drift to values fed by the selected embedding VJP."""
+
+    def identity_and_adag(
+        artifact: TopKCompactTraceArtifact,
+    ) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+        identity = artifact.manifest.get("artifact_identity")
+        if not isinstance(identity, Mapping):
+            return None, None
+        adag = identity.get("adag_config")
+        return identity, adag if isinstance(adag, Mapping) else None
+
+    def dtype(identity: Mapping[str, Any] | None) -> Any:
+        model = identity.get("model") if isinstance(identity, Mapping) else None
+        return model.get("dtype") if isinstance(model, Mapping) else None
+
+    reference_identity, reference_adag = identity_and_adag(reference)
+    candidate_identity, candidate_adag = identity_and_adag(candidate)
+    reference_trace = reference.topk_trace
+    candidate_trace = candidate.topk_trace
+    reference_data = reference_trace.circuit_data
+    candidate_data = candidate_trace.circuit_data
+    reference_dtype = dtype(reference_identity)
+    candidate_dtype = dtype(candidate_identity)
+    dtype_exact_bf16 = reference_dtype == candidate_dtype == "bfloat16"
+
+    embedding_reference_nodes = {
+        key: row for key, row in reference_nodes.items() if key[0] == -1
+    }
+    embedding_candidate_nodes = {
+        key: row for key, row in candidate_nodes.items() if key[0] == -1
+    }
+    non_embedding_reference_nodes = {
+        key: row for key, row in reference_nodes.items() if key[0] != -1
+    }
+    non_embedding_candidate_nodes = {
+        key: row for key, row in candidate_nodes.items() if key[0] != -1
+    }
+    exact = NumericTolerance(absolute=0.0, relative=0.0)
+    target_base_values = {
+        "observed_logit": _numeric_summary(
+            reference_data.target_logit_values[0],
+            candidate_data.target_logit_values[0],
+            exact,
+        ),
+        "observed_probability": _numeric_summary(
+            reference_data.target_logit_probs[0],
+            candidate_data.target_logit_probs[0],
+            exact,
+        ),
+        "candidate_logits": _numeric_summary(
+            [item.logit for item in reference_trace.candidate_selection.candidates],
+            [item.logit for item in candidate_trace.candidate_selection.candidates],
+            exact,
+        ),
+        "candidate_probabilities": _numeric_summary(
+            [
+                item.probability
+                for item in reference_trace.candidate_selection.candidates
+            ],
+            [
+                item.probability
+                for item in candidate_trace.candidate_selection.candidates
+            ],
+            exact,
+        ),
+    }
+    node_base_values = {
+        "attribution": _scalar_field_summary(
+            reference_nodes, candidate_nodes, "attribution", exact
+        ),
+        "activation": _scalar_field_summary(
+            reference_nodes, candidate_nodes, "activation", exact
+        ),
+        "source_attribution_profile": _vector_field_summary(
+            reference_nodes, candidate_nodes, "attr_map", exact
+        ),
+    }
+    embedding_profiles = _candidate_profile_summary(
+        embedding_reference_nodes,
+        embedding_candidate_nodes,
+        candidate_count=candidate_count,
+        tolerance=candidate_profile_tolerance,
+    )
+    non_embedding_profiles = _candidate_profile_summary(
+        non_embedding_reference_nodes,
+        non_embedding_candidate_nodes,
+        candidate_count=candidate_count,
+        tolerance=exact,
+    )
+    profile_scope_classified = (
+        bool(embedding_reference_nodes)
+        and set(embedding_reference_nodes) == set(embedding_candidate_nodes)
+        and set(non_embedding_reference_nodes) == set(non_embedding_candidate_nodes)
+    )
+
+    flag_names = ("disable_stop_grad", "use_stop_grad_on_mlps")
+    reference_flags = (
+        {name: reference_adag.get(name) for name in flag_names}
+        if isinstance(reference_adag, Mapping)
+        else None
+    )
+    candidate_flags = (
+        {name: candidate_adag.get(name) for name in flag_names}
+        if isinstance(candidate_adag, Mapping)
+        else None
+    )
+    flags_proven = (
+        reference_flags == candidate_flags
+        and isinstance(reference_flags, Mapping)
+        and all(type(reference_flags[name]) is bool for name in flag_names)
+    )
+    affected_edge_keys: set[Any] = set()
+    edge_scope_reason = "configuration flags missing or malformed"
+    if flags_proven:
+        stop_gradient_logit_edges = (
+            reference_flags["use_stop_grad_on_mlps"]
+            and not reference_flags["disable_stop_grad"]
+        )
+        if stop_gradient_logit_edges:
+            edge_scope_reason = "stop-gradient logit edges isolate ordinary embed VJP"
+        else:
+            node_layers = {key[0] for key in reference_nodes}
+            if node_layers:
+                logit_layer = max(node_layers)
+                affected_edge_keys = {
+                    key
+                    for key in reference_edges
+                    if key[0][0] == -1 and key[1][0] == logit_layer
+                }
+                edge_scope_reason = "embedding-source to logit edges"
+            else:
+                flags_proven = False
+                edge_scope_reason = "cannot derive logit layer from empty node topology"
+
+    unaffected_edge_keys = set(reference_edges) - affected_edge_keys
+    edge_scope_classified = (
+        flags_proven
+        and set(reference_edges) == set(candidate_edges)
+        and affected_edge_keys | unaffected_edge_keys == set(reference_edges)
+        and not (affected_edge_keys & unaffected_edge_keys)
+    )
+
+    def subset(rows: Mapping[Any, pd.Series], keys: set[Any]) -> dict[Any, pd.Series]:
+        return {key: rows[key] for key in keys if key in rows}
+
+    def edge_summary(
+        left: Mapping[Any, pd.Series],
+        right: Mapping[Any, pd.Series],
+        tolerance: NumericTolerance,
+    ) -> dict[str, Any]:
+        return {
+            "attribution": _scalar_field_summary(left, right, "attribution", tolerance),
+            "weight": _scalar_field_summary(left, right, "weight", tolerance),
+        }
+
+    affected_edges = edge_summary(
+        subset(reference_edges, affected_edge_keys),
+        subset(candidate_edges, affected_edge_keys),
+        edge_tolerance,
+    )
+    unaffected_edges = edge_summary(
+        subset(reference_edges, unaffected_edge_keys),
+        subset(candidate_edges, unaffected_edge_keys),
+        exact,
+    )
+    checks = {
+        "exact_bf16_dtype_identity": dtype_exact_bf16,
+        "node_topology_exact": set(reference_nodes) == set(candidate_nodes),
+        "edge_topology_exact": set(reference_edges) == set(candidate_edges),
+        "target_base_values_exact": _group_within_tolerance(target_base_values),
+        "node_base_values_exact": _group_within_tolerance(node_base_values),
+        "candidate_profile_scope_classified": profile_scope_classified,
+        "embedding_source_profiles_within_bf16_tolerance": (
+            profile_scope_classified and _group_within_tolerance(embedding_profiles)
+        ),
+        "non_embedding_profiles_exact": (
+            profile_scope_classified and _group_within_tolerance(non_embedding_profiles)
+        ),
+        "edge_scope_classified": edge_scope_classified,
+        "embedding_derived_edges_within_bf16_tolerance": (
+            edge_scope_classified and _group_within_tolerance(affected_edges)
+        ),
+        "unaffected_edges_exact": (
+            edge_scope_classified and _group_within_tolerance(unaffected_edges)
+        ),
+    }
+    return {
+        "dtype": {"reference": reference_dtype, "candidate": candidate_dtype},
+        "target_base_values": target_base_values,
+        "node_base_values": node_base_values,
+        "candidate_profiles": {
+            "embedding_source": embedding_profiles,
+            "non_embedding": non_embedding_profiles,
+        },
+        "edges": {
+            "classification_reason": edge_scope_reason,
+            "affected_count": len(affected_edge_keys),
+            "unaffected_count": len(unaffected_edge_keys),
+            "embedding_derived": affected_edges,
+            "unaffected": unaffected_edges,
+        },
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def compare_execution_artifacts(
     reference_path: str | Path,
     candidate_path: str | Path,
@@ -1051,6 +1432,7 @@ def compare_execution_artifacts(
     require_canonical_embedding_edge_ab: bool = False,
     require_canonical_cross_layer_jacobian_ab: bool = False,
     require_canonical_selected_neuron_contribution_target_lane_chunk_ab: bool = False,
+    selected_embed_contribution_target_lane_chunk_ab_profile: str | None = None,
 ) -> dict[str, Any]:
     """Compare two saved execution traces under explicit qualification gates.
 
@@ -1067,6 +1449,12 @@ def compare_execution_artifacts(
         raise ValueError(f"unknown tolerance groups: {unknown_groups}")
     if require_same_gpu_model and not require_same_gpu_family:
         require_same_gpu_family = True
+    if (
+        selected_embed_contribution_target_lane_chunk_ab_profile is not None
+        and selected_embed_contribution_target_lane_chunk_ab_profile
+        not in SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES
+    ):
+        raise ValueError("unknown selected-embed contribution chunk A/B profile")
 
     reference = load_topk_compact_trace(reference_path)
     candidate = load_topk_compact_trace(candidate_path)
@@ -1323,6 +1711,107 @@ def compare_execution_artifacts(
                 "passed": selected_neuron_contribution_chunk_contract["passed"],
             }
         )
+    selected_embed_contribution_chunk_contract = None
+    if selected_embed_contribution_target_lane_chunk_ab_profile is not None:
+        reference_identity = reference.manifest.get("artifact_identity")
+        candidate_identity = candidate.manifest.get("artifact_identity")
+        reference_adag = (
+            reference_identity.get("adag_config")
+            if isinstance(reference_identity, Mapping)
+            else None
+        )
+        candidate_adag = (
+            candidate_identity.get("adag_config")
+            if isinstance(candidate_identity, Mapping)
+            else None
+        )
+        field = "selected_embed_contribution_target_lane_chunk_size"
+        expected_reference, expected_candidate = (
+            SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES[
+                selected_embed_contribution_target_lane_chunk_ab_profile
+            ]
+        )
+        reference_strategy_valid = (
+            isinstance(reference_adag, Mapping)
+            and field in reference_adag
+            and reference_adag[field] == expected_reference
+        )
+        candidate_strategy_valid = (
+            isinstance(candidate_adag, Mapping)
+            and field in candidate_adag
+            and candidate_adag[field] == expected_candidate
+        )
+        require_exact_hashes = (
+            selected_embed_contribution_target_lane_chunk_ab_profile
+            == "full_width_exact_v1"
+        )
+        receipt_contract = _selected_embed_contribution_receipt_contract(
+            reference,
+            candidate,
+            expected_reference_width=expected_reference,
+            expected_candidate_width=expected_candidate,
+            require_exact_hashes=require_exact_hashes,
+        )
+        bf16_scope_contract = (
+            _selected_embed_bf16_scope_contract(
+                reference,
+                candidate,
+                reference_nodes=reference_nodes,
+                candidate_nodes=candidate_nodes,
+                reference_edges=reference_edges,
+                candidate_edges=candidate_edges,
+                candidate_count=reference_trace.candidate_count,
+                candidate_profile_tolerance=NumericTolerance(
+                    absolute=0.125, relative=1e-2
+                ),
+                edge_tolerance=NumericTolerance(absolute=5e-4, relative=1e-2),
+            )
+            if selected_embed_contribution_target_lane_chunk_ab_profile
+            == "width_one_bf16_v1"
+            else None
+        )
+        selected_embed_contribution_chunk_contract = {
+            "profile": selected_embed_contribution_target_lane_chunk_ab_profile,
+            "reference_strategy": {
+                "expected": expected_reference,
+                "observed": (
+                    reference_adag.get(field)
+                    if isinstance(reference_adag, Mapping)
+                    else None
+                ),
+                "field_present": (
+                    isinstance(reference_adag, Mapping) and field in reference_adag
+                ),
+                "passed": reference_strategy_valid,
+            },
+            "candidate_strategy": {
+                "expected": expected_candidate,
+                "observed": (
+                    candidate_adag.get(field)
+                    if isinstance(candidate_adag, Mapping)
+                    else None
+                ),
+                "field_present": (
+                    isinstance(candidate_adag, Mapping) and field in candidate_adag
+                ),
+                "passed": candidate_strategy_valid,
+            },
+            "projected_receipts": receipt_contract,
+            "bf16_scope": bf16_scope_contract,
+            "passed": (
+                reference_strategy_valid
+                and candidate_strategy_valid
+                and receipt_contract["passed"]
+                and (bf16_scope_contract is None or bf16_scope_contract["passed"])
+            ),
+        }
+        gates.append(
+            {
+                "gate": "canonical_selected_embed_contribution_target_lane_chunk_ab_pair",
+                "required": True,
+                "passed": selected_embed_contribution_chunk_contract["passed"],
+            }
+        )
     if require_same_gpu_family:
         gates.append(
             {
@@ -1387,6 +1876,8 @@ def compare_execution_artifacts(
             "stop_gradient_contribution_target_lane_chunk_size",
             "artifact_identity.adag_config."
             "selected_neuron_contribution_target_lane_chunk_size",
+            "artifact_identity.adag_config."
+            "selected_embed_contribution_target_lane_chunk_size",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -1439,6 +1930,9 @@ def compare_execution_artifacts(
         "cross_layer_jacobian_ab_contract": cross_layer_jacobian_contract,
         "selected_neuron_contribution_target_lane_chunk_ab_contract": (
             selected_neuron_contribution_chunk_contract
+        ),
+        "selected_embed_contribution_target_lane_chunk_ab_contract": (
+            selected_embed_contribution_chunk_contract
         ),
         "counts": {
             "reference": {

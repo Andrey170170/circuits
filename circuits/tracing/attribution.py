@@ -13,6 +13,7 @@ from circuits.tracing.contribution_execution import (
     DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION,
     SelectedNeuronContributionSource,
     StopGradientContributionExecution,
+    run_selected_embed_contribution_vjp,
     run_selected_neuron_contribution_vjps,
     run_stop_gradient_contribution_forward,
     run_stop_gradient_contribution_vjp,
@@ -1079,6 +1080,7 @@ def _get_neuron_attr_and_contrib(
     verbose: bool = False,
     instrumentation: TraceInstrumentation | None = None,
     contribution_target_lane_chunk_size: int | None = None,
+    embed_contribution_target_lane_chunk_size: int | None = None,
     contribution_execution_index: int | None = None,
 ) -> (
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx]]
@@ -1278,60 +1280,25 @@ def _get_neuron_attr_and_contrib(
         tgt_nodes.append(logits[torch.arange(logits.shape[0]), p, tid])
     tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
     t = tgt_vec.size(0)
-    grad_outputs = torch.eye(t * batch, device=device)  # (t * batch, t * batch)
-
-    # compute embed grad contribs
-    embeds.grad = None
-    with cuda_memory_instrumentation_stage(
-        instrumentation,
-        "selected_embed_contribution_vjp",
-        metadata={
-            "operation_kind": "batched_vjp",
-            "lane_count": t * batch,
-            "differentiated_output_shape": list(tgt_vec.shape),
-            "differentiated_input_shape": list(embeds.shape),
-            "grad_outputs_shape": list(grad_outputs.shape),
-        },
-    ) as vjp_measurement:
-        embed_grad_contrib_full = torch.autograd.grad(
-            tgt_vec.flatten(),
-            embeds,
-            grad_outputs=grad_outputs,
-            is_grads_batched=True,
-            retain_graph=True,
-        )[0]
-        if vjp_measurement is not None:
-            vjp_measurement.metadata["vjp_result_shape"] = list(
-                embed_grad_contrib_full.shape
-            )
-    # shape (t * batch, batch, seq, d)
-    # convert back to (t, batch, batch, seq, d)
-    embed_grad_contrib = embed_grad_contrib_full.reshape(
-        t,
-        batch,
-        batch,
-        embed_grad_contrib_full.shape[-2],
-        embed_grad_contrib_full.shape[-1],
+    needs_full_grad_outputs = (
+        embed_contribution_target_lane_chunk_size is None
+        or contribution_target_lane_chunk_size is None
     )
-    del embed_grad_contrib_full  # Free memory immediately
-
-    # get only identity along batch, batch
-    embed_grad_contrib = embed_grad_contrib.diagonal(dim1=1, dim2=2).permute(0, 3, 1, 2)
-    # now (t, batch, seq, d)
-
-    if alpha is not None:
-        # For IG: return gradient only, multiply by activation later
-        embed_grad_contrib = embed_grad_contrib[
-            :, :, src_tokens, :
-        ]  # (t, batch, src, d)
-    else:
-        # For regular contribution: gradient * activation
-        embed_grad_contrib = (
-            embed_grad_contrib[:, :, src_tokens, :] * embeds[None, :, src_tokens, :]
-        )  # (t, batch, src, d)
-        embed_grad_contrib = embed_grad_contrib.sum(-1).permute(
-            2, 1, 0
-        )  # (src, batch, t)
+    grad_outputs = (
+        torch.eye(t * batch, device=device) if needs_full_grad_outputs else None
+    )
+    embed_grad_contrib = run_selected_embed_contribution_vjp(
+        embeds,
+        tgt_vec,
+        src_tokens,
+        return_gradient_only=alpha is not None,
+        target_lane_chunk_size=embed_contribution_target_lane_chunk_size,
+        full_grad_outputs=(
+            grad_outputs if embed_contribution_target_lane_chunk_size is None else None
+        ),
+        instrumentation=instrumentation,
+        execution_index=contribution_execution_index,
+    )
 
     torch.cuda.empty_cache()
 
@@ -1339,9 +1306,8 @@ def _get_neuron_attr_and_contrib(
         grad_outputs if contribution_target_lane_chunk_size is None else None
     )
     if ordinary_full_grad_outputs is None:
-        # The embedding VJP is intentionally unchunked, but its full identity
-        # matrix is no longer needed once an explicit ordinary chunk width is
-        # selected.
+        # The embedding compatibility path is finished. Do not retain its full
+        # identity while the independently chunked neuron VJPs execute.
         del grad_outputs
         grad_outputs = None
 
@@ -1426,6 +1392,7 @@ def _get_neuron_attr_and_contrib_ig(
     verbose: bool = False,
     instrumentation: TraceInstrumentation | None = None,
     contribution_target_lane_chunk_size: int | None = None,
+    embed_contribution_target_lane_chunk_size: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions and contributions using Integrated Gradients.
@@ -1479,6 +1446,9 @@ def _get_neuron_attr_and_contrib_ig(
                 instrumentation=instrumentation,
                 contribution_target_lane_chunk_size=(
                     contribution_target_lane_chunk_size
+                ),
+                embed_contribution_target_lane_chunk_size=(
+                    embed_contribution_target_lane_chunk_size
                 ),
                 contribution_execution_index=step,
             )

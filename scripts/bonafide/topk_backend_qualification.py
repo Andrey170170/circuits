@@ -14,11 +14,19 @@ from circuits.tracing.backend_qualification import (
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+    SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_execution_artifacts,
 )
+
+SELECTED_EMBED_WIDTH_ONE_BF16_TOLERANCES = {
+    "target": NumericTolerance(absolute=0.0, relative=0.0),
+    "node": NumericTolerance(absolute=0.0, relative=0.0),
+    "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
+    "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
+}
 
 
 def save_qualification_report(path: Path, report: Mapping[str, Any]) -> Path:
@@ -107,6 +115,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--selected-embed-contribution-target-lane-full-width-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed ordinary embedding contribution full-width "
+            "adapter profile: explicit None control and width-five candidate, "
+            "same GPU model, exact topology and projected-VJP receipts, and "
+            "zero numerical tolerances."
+        ),
+    )
+    parser.add_argument(
+        "--selected-embed-contribution-target-lane-width-one-bf16-ab",
+        action="store_true",
+        help=(
+            "Use the declared BF16 ordinary embedding contribution profile: "
+            "width-five reference and width-one candidate, same GPU model, "
+            "exact topology and ordered receipt presence, with fixed "
+            "dtype-scale numerical tolerances. Preserve a separate zero-"
+            "tolerance diagnostic report before applying this gate."
+        ),
+    )
+    parser.add_argument(
         "--allow-identity-difference",
         action="append",
         default=[],
@@ -151,6 +180,14 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
                 args.selected_neuron_contribution_target_lane_chunk_ab,
                 "--selected-neuron-contribution-target-lane-chunk-ab",
             ),
+            (
+                args.selected_embed_contribution_target_lane_full_width_ab,
+                "--selected-embed-contribution-target-lane-full-width-ab",
+            ),
+            (
+                args.selected_embed_contribution_target_lane_width_one_bf16_ab,
+                "--selected-embed-contribution-target-lane-width-one-bf16-ab",
+            ),
         )
         if enabled
     ]
@@ -167,7 +204,8 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             for absolute, relative in supplied_tolerances.values()
         ):
             raise ValueError(
-                f"{strict_profile} fixes every numerical tolerance at zero"
+                f"{strict_profile} fixes every numerical tolerance at zero "
+                "or its declared BF16 value"
             )
         if args.cuda_allocator_ab:
             identity_paths = CUDA_ALLOCATOR_AB_IDENTITY_PATHS
@@ -175,16 +213,30 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             identity_paths = EMBEDDING_EDGE_AB_IDENTITY_PATHS
         elif args.cross_layer_jacobian_ab:
             identity_paths = CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS
-        else:
+        elif args.selected_neuron_contribution_target_lane_chunk_ab:
             identity_paths = (
                 SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
             )
-        return {
-            "allowed_identity_difference_paths": identity_paths,
-            "tolerances": {
+        else:
+            identity_paths = (
+                SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+            )
+        selected_embed_profile = None
+        if args.selected_embed_contribution_target_lane_full_width_ab:
+            selected_embed_profile = "full_width_exact_v1"
+        elif args.selected_embed_contribution_target_lane_width_one_bf16_ab:
+            selected_embed_profile = "width_one_bf16_v1"
+        fixed_tolerances = (
+            SELECTED_EMBED_WIDTH_ONE_BF16_TOLERANCES
+            if selected_embed_profile == "width_one_bf16_v1"
+            else {
                 group: NumericTolerance(absolute=0.0, relative=0.0)
                 for group in TOLERANCE_GROUPS
-            },
+            }
+        )
+        return {
+            "allowed_identity_difference_paths": identity_paths,
+            "tolerances": fixed_tolerances,
             "require_same_gpu_model": True,
             "require_same_gpu_family": True,
             "require_exact_node_topology": True,
@@ -194,6 +246,9 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             "require_canonical_cross_layer_jacobian_ab": (args.cross_layer_jacobian_ab),
             "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": (
                 args.selected_neuron_contribution_target_lane_chunk_ab
+            ),
+            "selected_embed_contribution_target_lane_chunk_ab_profile": (
+                selected_embed_profile
             ),
         }
 
@@ -212,6 +267,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
         "require_canonical_embedding_edge_ab": False,
         "require_canonical_cross_layer_jacobian_ab": False,
         "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": False,
+        "selected_embed_contribution_target_lane_chunk_ab_profile": None,
     }
 
 

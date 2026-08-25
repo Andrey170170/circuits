@@ -4,6 +4,7 @@ import hashlib
 import json
 from copy import deepcopy
 
+import pandas as pd
 import pytest
 from circuits.tracing.artifact import save_topk_compact_trace
 from circuits.tracing.backend_qualification import (
@@ -11,6 +12,7 @@ from circuits.tracing.backend_qualification import (
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+    SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
@@ -30,6 +32,7 @@ _UNSET = object()
 def _manifest(
     backend: str,
     *,
+    dtype: str = "bfloat16",
     source_id: str = "source-width1",
     contribution_execution: str | None = "full_graph_v1",
     allocator_policy: str | None = None,
@@ -37,6 +40,7 @@ def _manifest(
     cross_layer_jacobian_execution: str | None = None,
     contribution_target_lane_chunk_size: object = _UNSET,
     selected_neuron_contribution_target_lane_chunk_size: object = _UNSET,
+    selected_embed_contribution_target_lane_chunk_size: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -67,11 +71,13 @@ def _manifest(
                 "model_id": "fake/model",
                 "revision": "revision-1",
                 "device": "cuda:0",
-                "dtype": "bfloat16",
+                "dtype": dtype,
             },
             "adag_config": {
                 "percentage_threshold": 0.05,
                 "stop_gradient_attention_backend": backend,
+                "disable_stop_grad": False,
+                "use_stop_grad_on_mlps": True,
             },
             "trace_warmup": {"enabled": False},
             "batch_size": 1,
@@ -99,6 +105,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "selected_neuron_contribution_target_lane_chunk_size"
         ] = selected_neuron_contribution_target_lane_chunk_size
+    if selected_embed_contribution_target_lane_chunk_size is not _UNSET:
+        manifest["artifact_identity"]["adag_config"][
+            "selected_embed_contribution_target_lane_chunk_size"
+        ] = selected_embed_contribution_target_lane_chunk_size
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -205,11 +215,39 @@ def _save_pair(
     candidate_selected_neuron_chunk_size: object = _UNSET,
     reference_selected_neuron_receipts: list[dict] | None = None,
     candidate_selected_neuron_receipts: list[dict] | None = None,
+    reference_selected_embed_chunk_size: object = _UNSET,
+    candidate_selected_embed_chunk_size: object = _UNSET,
+    reference_selected_embed_receipts: list[dict] | None = None,
+    candidate_selected_embed_receipts: list[dict] | None = None,
+    reference_dtype: str = "bfloat16",
+    candidate_dtype: str = "bfloat16",
+    candidate_mlp_profile_delta: float = 0.0,
+    candidate_unaffected_edge_delta: float = 0.0,
 ):
     reference = _topk_trace()
     candidate = deepcopy(reference)
     _complete_trace_metadata(reference)
     _complete_trace_metadata(candidate)
+    if (
+        reference_selected_embed_receipts is not None
+        or candidate_selected_embed_receipts is not None
+    ):
+        for trace in (reference, candidate):
+            embedding_row = trace.circuit_data.df_node.iloc[[0]].copy()
+            embedding_row.loc[:, "layer"] = -1
+            embedding_row.loc[:, "token"] = 2
+            embedding_row.loc[:, "neuron"] = 42
+            trace.circuit_data.df_node = pd.concat(
+                [trace.circuit_data.df_node, embedding_row], ignore_index=True
+            )
+        if candidate_mlp_profile_delta:
+            profile = list(candidate.circuit_data.df_node.iloc[0].contrib_map)
+            profile[0] += candidate_mlp_profile_delta
+            candidate.circuit_data.df_node.at[0, "contrib_map"] = profile
+        if candidate_unaffected_edge_delta:
+            candidate.circuit_data.df_edge.loc[0, "attribution"] += (
+                candidate_unaffected_edge_delta
+            )
     if reference_selected_neuron_receipts is not None:
         reference.circuit_data.trace_metadata["instrumentation"] = (
             _selected_neuron_receipt_instrumentation(reference_selected_neuron_receipts)
@@ -218,6 +256,20 @@ def _save_pair(
         candidate.circuit_data.trace_metadata["instrumentation"] = (
             _selected_neuron_receipt_instrumentation(candidate_selected_neuron_receipts)
         )
+    if reference_selected_embed_receipts is not None:
+        instrumentation = reference.circuit_data.trace_metadata.setdefault(
+            "instrumentation", {}
+        )
+        instrumentation.setdefault("execution_records", {})[
+            "selected_embed_contribution_vjp"
+        ] = reference_selected_embed_receipts
+    if candidate_selected_embed_receipts is not None:
+        instrumentation = candidate.circuit_data.trace_metadata.setdefault(
+            "instrumentation", {}
+        )
+        instrumentation.setdefault("execution_records", {})[
+            "selected_embed_contribution_vjp"
+        ] = candidate_selected_embed_receipts
     reference_path = tmp_path / "reference"
     candidate_path = tmp_path / "candidate"
     save_topk_compact_trace(
@@ -231,10 +283,14 @@ def _save_pair(
         },
         manifest=_manifest(
             reference_backend,
+            dtype=reference_dtype,
             contribution_execution=reference_execution,
             contribution_target_lane_chunk_size=reference_chunk_size,
             selected_neuron_contribution_target_lane_chunk_size=(
                 reference_selected_neuron_chunk_size
+            ),
+            selected_embed_contribution_target_lane_chunk_size=(
+                reference_selected_embed_chunk_size
             ),
         ),
     )
@@ -249,10 +305,14 @@ def _save_pair(
         },
         manifest=_manifest(
             candidate_backend,
+            dtype=candidate_dtype,
             contribution_execution=candidate_execution,
             contribution_target_lane_chunk_size=candidate_chunk_size,
             selected_neuron_contribution_target_lane_chunk_size=(
                 candidate_selected_neuron_chunk_size
+            ),
+            selected_embed_contribution_target_lane_chunk_size=(
+                candidate_selected_embed_chunk_size
             ),
         ),
     )
@@ -512,6 +572,250 @@ def test_selected_neuron_chunk_ab_cli_selects_fail_closed_profile(tmp_path) -> N
         tolerance == NumericTolerance(absolute=0.0, relative=0.0)
         for tolerance in options["tolerances"].values()
     )
+
+
+def _selected_embed_receipt(character: str, width: int | None) -> list[dict]:
+    target_count = 5
+    resolved_width = min(width or target_count, target_count)
+    chunk_widths = [
+        min(resolved_width, target_count - start)
+        for start in range(0, target_count, resolved_width)
+    ]
+    raw_shapes = [[chunk_width, 1, 7, 11] for chunk_width in chunk_widths]
+    grad_shapes = [[chunk_width, chunk_width] for chunk_width in chunk_widths]
+    return [
+        {
+            "execution_index": None,
+            "receipt_mode": "singular",
+            "return_gradient_only": False,
+            "canonical_result_order": "source_batch_target",
+            "source_tokens": [4, 1, 4],
+            "raw_vjp_shape": raw_shapes[0] if len(raw_shapes) == 1 else None,
+            "raw_vjp_chunk_shapes": raw_shapes,
+            "grad_outputs_shape": grad_shapes[0] if len(grad_shapes) == 1 else None,
+            "grad_outputs_chunk_shapes": grad_shapes,
+            "max_grad_outputs_shape": [resolved_width, resolved_width],
+            "projected_vjp_shape": [3, 1, 5],
+            "target_lane_count": target_count,
+            "projected_vjp_sha256": character * 64,
+            "target_lane_chunk_size_requested": width,
+            "target_lane_chunk_size_resolved": resolved_width,
+            "target_lane_chunk_count": len(chunk_widths),
+            "max_materialized_target_lanes": resolved_width,
+            "max_materialized_autograd_lanes": resolved_width,
+            "dense_vjp_result_materialized": True,
+            "retain_graph": True,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("profile", "reference_width", "candidate_width", "candidate_hash"),
+    [
+        ("full_width_exact_v1", None, 5, "1"),
+        ("width_one_bf16_v1", 5, 1, "a"),
+    ],
+)
+def test_selected_embed_chunk_profiles_validate_strategy_and_receipts(
+    tmp_path,
+    profile: str,
+    reference_width: int | None,
+    candidate_width: int,
+    candidate_hash: str,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_embed_chunk_size=reference_width,
+        candidate_selected_embed_chunk_size=candidate_width,
+        reference_selected_embed_receipts=_selected_embed_receipt("1", reference_width),
+        candidate_selected_embed_receipts=_selected_embed_receipt(
+            candidate_hash, candidate_width
+        ),
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        selected_embed_contribution_target_lane_chunk_ab_profile=profile,
+    )
+
+    assert report["qualification_passed"] is True
+    contract = report["selected_embed_contribution_target_lane_chunk_ab_contract"]
+    assert contract["profile"] == profile
+    assert contract["passed"] is True
+    assert contract["projected_receipts"]["checks"]["receipt_hashes_exact"] is (
+        profile == "full_width_exact_v1"
+    )
+    if profile == "width_one_bf16_v1":
+        assert contract["bf16_scope"]["passed"] is True
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["claimed_width_one_unbounded", "missing_chunks", "reordered_sources", "bad_shape"],
+)
+def test_selected_embed_chunk_profile_rejects_unproven_runtime_width(
+    tmp_path, defect: str
+) -> None:
+    reference_receipts = _selected_embed_receipt("1", 5)
+    candidate_receipts = _selected_embed_receipt("a", 1)
+    candidate_record = candidate_receipts[0]
+    if defect == "claimed_width_one_unbounded":
+        candidate_record.update(_selected_embed_receipt("a", 5)[0])
+        candidate_record["target_lane_chunk_size_requested"] = 1
+    elif defect == "missing_chunks":
+        candidate_record.pop("raw_vjp_chunk_shapes")
+    elif defect == "reordered_sources":
+        candidate_record["source_tokens"] = [1, 4, 4]
+    else:
+        candidate_record["grad_outputs_chunk_shapes"][2] = [2, 2]
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_embed_chunk_size=5,
+        candidate_selected_embed_chunk_size=1,
+        reference_selected_embed_receipts=reference_receipts,
+        candidate_selected_embed_receipts=candidate_receipts,
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            "target": NumericTolerance(absolute=0.0, relative=0.0),
+            "node": NumericTolerance(absolute=0.0, relative=0.0),
+            "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
+            "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        selected_embed_contribution_target_lane_chunk_ab_profile="width_one_bf16_v1",
+    )
+
+    assert report["validation_passed"] is False
+    contract = report["selected_embed_contribution_target_lane_chunk_ab_contract"]
+    assert contract["projected_receipts"]["passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("candidate_mlp_profile_delta", 0.01),
+        ("candidate_unaffected_edge_delta", 0.0001),
+        ("candidate_dtype", "float32"),
+    ],
+)
+def test_selected_embed_width_one_bf16_scope_rejects_unrelated_drift(
+    tmp_path, mutation: str, value: float | str
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_embed_chunk_size=5,
+        candidate_selected_embed_chunk_size=1,
+        reference_selected_embed_receipts=_selected_embed_receipt("1", 5),
+        candidate_selected_embed_receipts=_selected_embed_receipt("a", 1),
+        **{mutation: value},
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            "target": NumericTolerance(absolute=0.0, relative=0.0),
+            "node": NumericTolerance(absolute=0.0, relative=0.0),
+            "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
+            "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        selected_embed_contribution_target_lane_chunk_ab_profile="width_one_bf16_v1",
+    )
+
+    assert report["validation_passed"] is False
+    scope = report["selected_embed_contribution_target_lane_chunk_ab_contract"][
+        "bf16_scope"
+    ]
+    assert scope["passed"] is False
+    if mutation == "candidate_mlp_profile_delta":
+        assert scope["checks"]["non_embedding_profiles_exact"] is False
+    elif mutation == "candidate_unaffected_edge_delta":
+        assert scope["checks"]["unaffected_edges_exact"] is False
+    else:
+        assert scope["checks"]["exact_bf16_dtype_identity"] is False
+
+
+@pytest.mark.parametrize(
+    ("flag", "profile", "expected_tolerances"),
+    [
+        (
+            "--selected-embed-contribution-target-lane-full-width-ab",
+            "full_width_exact_v1",
+            {
+                group: NumericTolerance(absolute=0.0, relative=0.0)
+                for group in TOLERANCE_GROUPS
+            },
+        ),
+        (
+            "--selected-embed-contribution-target-lane-width-one-bf16-ab",
+            "width_one_bf16_v1",
+            {
+                "target": NumericTolerance(absolute=0.0, relative=0.0),
+                "node": NumericTolerance(absolute=0.0, relative=0.0),
+                "edge": NumericTolerance(absolute=5e-4, relative=1e-2),
+                "candidate_profile": NumericTolerance(absolute=0.125, relative=1e-2),
+            },
+        ),
+    ],
+)
+def test_selected_embed_chunk_cli_profiles_are_canonical(
+    tmp_path,
+    flag: str,
+    profile: str,
+    expected_tolerances: dict[str, NumericTolerance],
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--reference",
+            str(tmp_path / "reference"),
+            "--candidate",
+            str(tmp_path / "candidate"),
+            "--output",
+            str(tmp_path / "report.json"),
+            flag,
+        ]
+    )
+    options = comparison_options(args)
+    assert options["allowed_identity_difference_paths"] == (
+        SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+    )
+    assert (
+        options["selected_embed_contribution_target_lane_chunk_ab_profile"] == profile
+    )
+    assert options["tolerances"] == expected_tolerances
+    assert options["require_same_gpu_model"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
 
 
 @pytest.mark.parametrize(

@@ -75,6 +75,7 @@ class TraceInstrumentation:
         self._early_predictors: dict[str, Any] = {}
         self._layers: dict[int, dict[str, Any]] = {}
         self._layer_pairs: list[dict[str, Any]] = []
+        self._execution_records: dict[str, list[dict[str, Any]]] = {}
         self._measurement_stack: list[StageMeasurement] = []
         self._cuda_device: torch.device | None = None
         self._cuda_overall_start: dict[str, int | float] | None = None
@@ -376,6 +377,11 @@ class TraceInstrumentation:
             raise RuntimeError(f"layer field {name!r} is not an appendable record list")
         series.append(values)
 
+    def append_execution_record(self, name: str, **values: Any) -> None:
+        """Append one ordered run-level execution record."""
+
+        self._execution_records.setdefault(name, []).append(values)
+
     def record_layer_pair(self, src_layer: int, tgt_layer: int, **values: Any) -> None:
         record = {"src_layer": int(src_layer), "tgt_layer": int(tgt_layer), **values}
         self._layer_pairs.append(record)
@@ -430,6 +436,7 @@ class TraceInstrumentation:
                 "early_predictors": self._early_predictors,
                 "layers": [self._layers[layer] for layer in sorted(self._layers)],
                 "layer_pairs": self._layer_pairs,
+                "execution_records": self._execution_records,
                 **({"cuda_memory": cuda_memory} if cuda_memory is not None else {}),
             }
         )
