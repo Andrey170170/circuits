@@ -45,6 +45,7 @@ EXPECTED_EMBEDDING_EDGE_MATERIALIZATION="${EXPECTED_EMBEDDING_EDGE_MATERIALIZATI
 EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION="${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-}"
 EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE="${EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE:-legacy_unbound}"
 EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE="${EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE:-legacy_unbound}"
+EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE="${EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE:-legacy_unbound}"
 
 for path_name in CONFIG MANIFEST ARTIFACT_ROOT UV_PROJECT_ENVIRONMENT; do
     path_value="${!path_name}"
@@ -91,6 +92,12 @@ if [[ "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" != "legacy_
    [[ "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" != "none" ]] &&
    [[ ! "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" =~ ^[1-9][0-9]*$ ]]; then
     echo "EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE must be legacy_unbound, none, or a positive integer." >&2
+    exit 2
+fi
+if [[ "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" != "legacy_unbound" ]] &&
+   [[ "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" != "none" ]] &&
+   [[ ! "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE must be legacy_unbound, none, or a positive integer." >&2
     exit 2
 fi
 case "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" in
@@ -210,6 +217,12 @@ expected_selected_embed_chunk_size=(
     if expected_selected_embed_chunk_size_raw in {"legacy_unbound", "none"}
     else int(expected_selected_embed_chunk_size_raw)
 )
+expected_stop_gradient_embed_chunk_size_raw=sys.argv[16]
+expected_stop_gradient_embed_chunk_size=(
+    None
+    if expected_stop_gradient_embed_chunk_size_raw in {"legacy_unbound", "none"}
+    else int(expected_stop_gradient_embed_chunk_size_raw)
+)
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -236,6 +249,13 @@ if selected_embed_chunk_size_is_bound:
         raise SystemExit("run config selected-embed target-lane chunk size disagrees with EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE")
 elif selected_embed_chunk_size_field in adag:
     raise SystemExit("legacy-unbound qualification config unexpectedly declares selected-embed target-lane chunk size")
+stop_gradient_embed_chunk_size_field="stop_gradient_embed_contribution_target_lane_chunk_size"
+stop_gradient_embed_chunk_size_is_bound=expected_stop_gradient_embed_chunk_size_raw != "legacy_unbound"
+if stop_gradient_embed_chunk_size_is_bound:
+    if stop_gradient_embed_chunk_size_field not in adag or adag[stop_gradient_embed_chunk_size_field] != expected_stop_gradient_embed_chunk_size:
+        raise SystemExit("run config stop-gradient-embed target-lane chunk size disagrees with EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE")
+elif stop_gradient_embed_chunk_size_field in adag:
+    raise SystemExit("legacy-unbound qualification config unexpectedly declares stop-gradient-embed target-lane chunk size")
 declared_embedding_edge_materialization=adag.get("embedding_edge_materialization")
 if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
@@ -288,7 +308,8 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
         "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION" \
         "$EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
-        "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE"
+        "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
+        "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE"
 )"
 
 for target in "$EXPECTED_OUTPUT_DIR" "$SUMMARY_JSONL"; do
@@ -307,6 +328,7 @@ echo "stop_gradient_contribution_execution=${EXPECTED_STOP_GRADIENT_CONTRIBUTION
 echo "stop_gradient_contribution_target_lane_chunk_size=${EXPECTED_STOP_GRADIENT_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE}"
 echo "selected_neuron_contribution_target_lane_chunk_size=${EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE}"
 echo "selected_embed_contribution_target_lane_chunk_size=${EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE}"
+echo "stop_gradient_embed_contribution_target_lane_chunk_size=${EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
 echo "cross_layer_jacobian_execution=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-legacy_unbound}"
@@ -381,6 +403,12 @@ expected_selected_embed_chunk_size=(
     if expected_selected_embed_chunk_size_raw in {"legacy_unbound", "none"}
     else int(expected_selected_embed_chunk_size_raw)
 )
+expected_stop_gradient_embed_chunk_size_raw=sys.argv[13]
+expected_stop_gradient_embed_chunk_size=(
+    None
+    if expected_stop_gradient_embed_chunk_size_raw in {"legacy_unbound", "none"}
+    else int(expected_stop_gradient_embed_chunk_size_raw)
+)
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -422,6 +450,14 @@ if selected_embed_chunk_size_is_bound:
         raise SystemExit("saved artifact selected-embed target-lane chunk size identity disagrees with requested strategy")
 elif selected_embed_chunk_size_field in artifact_adag:
     raise SystemExit("legacy-unbound artifact unexpectedly declares selected-embed target-lane chunk size")
+stop_gradient_embed_chunk_size_field="stop_gradient_embed_contribution_target_lane_chunk_size"
+stop_gradient_embed_chunk_size_is_bound=expected_stop_gradient_embed_chunk_size_raw != "legacy_unbound"
+observed_stop_gradient_embed_chunk_size=artifact_adag.get(stop_gradient_embed_chunk_size_field)
+if stop_gradient_embed_chunk_size_is_bound:
+    if stop_gradient_embed_chunk_size_field not in artifact_adag or observed_stop_gradient_embed_chunk_size != expected_stop_gradient_embed_chunk_size:
+        raise SystemExit("saved artifact stop-gradient-embed target-lane chunk size identity disagrees with requested strategy")
+elif stop_gradient_embed_chunk_size_field in artifact_adag:
+    raise SystemExit("legacy-unbound artifact unexpectedly declares stop-gradient-embed target-lane chunk size")
 observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materialization")
 if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
@@ -459,4 +495,5 @@ if expected_allocator_policy is not None:
     "$EXPECTED_EMBEDDING_EDGE_MATERIALIZATION" \
     "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION" \
     "$EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
-    "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE"
+    "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
+    "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE"

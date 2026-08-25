@@ -61,6 +61,13 @@ SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES = {
     "full_width_exact_v1": (None, 5),
     "width_one_bf16_v1": (5, 1),
 }
+STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config."
+    "stop_gradient_embed_contribution_target_lane_chunk_size",
+)
+STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES = {
+    "full_width_exact_v1": (None, 5),
+}
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",
     "selected_target_activations",
@@ -73,6 +80,8 @@ _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config.stop_gradient_contribution_target_lane_chunk_size",
     "artifact_identity.adag_config.selected_neuron_contribution_target_lane_chunk_size",
     "artifact_identity.adag_config.selected_embed_contribution_target_lane_chunk_size",
+    "artifact_identity.adag_config."
+    "stop_gradient_embed_contribution_target_lane_chunk_size",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -1045,15 +1054,17 @@ def _selected_neuron_contribution_receipt_contract(
     }
 
 
-def _selected_embed_contribution_receipt_contract(
+def _embed_contribution_receipt_contract(
     reference: TopKCompactTraceArtifact,
     candidate: TopKCompactTraceArtifact,
     *,
+    execution_record_namespace: str,
+    execution_contract: str,
     expected_reference_width: int | None,
     expected_candidate_width: int | None,
     require_exact_hashes: bool,
 ) -> dict[str, Any]:
-    """Prove each side executed its claimed direct embedding-VJP width."""
+    """Prove each side executed its claimed dense embedding-VJP width."""
 
     def instrumentation(artifact: TopKCompactTraceArtifact) -> Any:
         return artifact.topk_trace.circuit_data.trace_metadata.get("instrumentation")
@@ -1063,7 +1074,7 @@ def _selected_embed_contribution_receipt_contract(
             return False, {}
         execution_records = raw.get("execution_records")
         records = (
-            execution_records.get("selected_embed_contribution_vjp")
+            execution_records.get(execution_record_namespace)
             if isinstance(execution_records, Mapping)
             else None
         )
@@ -1130,13 +1141,29 @@ def _selected_embed_contribution_receipt_contract(
             and record.get("grad_outputs_shape")
             == (grad_shapes[0] if len(grad_shapes) == 1 else None)
         )
+        if execution_contract == "ordinary_direct_v1":
+            execution_specific_valid = (
+                record.get("execution_index") is None
+                and record.get("receipt_mode") == "singular"
+                and record.get("return_gradient_only") is False
+                and record.get("retain_graph") is True
+                and "retain_graph_after_execution" not in record
+            )
+        elif execution_contract == "stop_gradient_direct_v1":
+            execution_specific_valid = (
+                "execution_index" not in record
+                and "receipt_mode" not in record
+                and "return_gradient_only" not in record
+                and "retain_graph" not in record
+                and record.get("retain_graph_after_execution") is False
+            )
+        else:
+            raise ValueError("unknown embedding contribution receipt contract")
         valid = (
             isinstance(receipt, str)
             and len(receipt) == 64
             and all(character in "0123456789abcdef" for character in receipt)
-            and record.get("execution_index") is None
-            and record.get("receipt_mode") == "singular"
-            and record.get("return_gradient_only") is False
+            and execution_specific_valid
             and record.get("canonical_result_order") == "source_batch_target"
             and isinstance(source_tokens, list)
             and bool(source_tokens)
@@ -1150,7 +1177,6 @@ def _selected_embed_contribution_receipt_contract(
             and record.get("max_grad_outputs_shape")
             == [expected_autograd_lanes, expected_autograd_lanes]
             and record.get("dense_vjp_result_materialized") is True
-            and record.get("retain_graph") is True
             and shape_consistent
         )
         return valid, dict(record)
@@ -1192,6 +1218,8 @@ def _selected_embed_contribution_receipt_contract(
     if require_exact_hashes:
         required_checks.append(hashes_exact)
     return {
+        "execution_record_namespace": execution_record_namespace,
+        "execution_contract": execution_contract,
         "reference_execution": reference_record,
         "candidate_execution": candidate_record,
         "require_exact_hashes": require_exact_hashes,
@@ -1486,6 +1514,7 @@ def compare_execution_artifacts(
     require_canonical_cross_layer_jacobian_ab: bool = False,
     require_canonical_selected_neuron_contribution_target_lane_chunk_ab: bool = False,
     selected_embed_contribution_target_lane_chunk_ab_profile: str | None = None,
+    stop_gradient_embed_contribution_target_lane_chunk_ab_profile: str | None = None,
 ) -> dict[str, Any]:
     """Compare two saved execution traces under explicit qualification gates.
 
@@ -1508,6 +1537,12 @@ def compare_execution_artifacts(
         not in SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES
     ):
         raise ValueError("unknown selected-embed contribution chunk A/B profile")
+    if (
+        stop_gradient_embed_contribution_target_lane_chunk_ab_profile is not None
+        and stop_gradient_embed_contribution_target_lane_chunk_ab_profile
+        not in STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES
+    ):
+        raise ValueError("unknown stop-gradient-embed contribution chunk A/B profile")
 
     reference = load_topk_compact_trace(reference_path)
     candidate = load_topk_compact_trace(candidate_path)
@@ -1798,9 +1833,11 @@ def compare_execution_artifacts(
             selected_embed_contribution_target_lane_chunk_ab_profile
             == "full_width_exact_v1"
         )
-        receipt_contract = _selected_embed_contribution_receipt_contract(
+        receipt_contract = _embed_contribution_receipt_contract(
             reference,
             candidate,
+            execution_record_namespace="selected_embed_contribution_vjp",
+            execution_contract="ordinary_direct_v1",
             expected_reference_width=expected_reference,
             expected_candidate_width=expected_candidate,
             require_exact_hashes=require_exact_hashes,
@@ -1866,6 +1903,88 @@ def compare_execution_artifacts(
                 "gate": "canonical_selected_embed_contribution_target_lane_chunk_ab_pair",
                 "required": True,
                 "passed": selected_embed_contribution_chunk_contract["passed"],
+            }
+        )
+    stop_gradient_embed_contribution_chunk_contract = None
+    if stop_gradient_embed_contribution_target_lane_chunk_ab_profile is not None:
+        reference_identity = reference.manifest.get("artifact_identity")
+        candidate_identity = candidate.manifest.get("artifact_identity")
+        reference_adag = (
+            reference_identity.get("adag_config")
+            if isinstance(reference_identity, Mapping)
+            else None
+        )
+        candidate_adag = (
+            candidate_identity.get("adag_config")
+            if isinstance(candidate_identity, Mapping)
+            else None
+        )
+        field = "stop_gradient_embed_contribution_target_lane_chunk_size"
+        expected_reference, expected_candidate = (
+            STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES[
+                stop_gradient_embed_contribution_target_lane_chunk_ab_profile
+            ]
+        )
+        reference_strategy_valid = (
+            isinstance(reference_adag, Mapping)
+            and field in reference_adag
+            and reference_adag[field] == expected_reference
+        )
+        candidate_strategy_valid = (
+            isinstance(candidate_adag, Mapping)
+            and field in candidate_adag
+            and candidate_adag[field] == expected_candidate
+        )
+        receipt_contract = _embed_contribution_receipt_contract(
+            reference,
+            candidate,
+            execution_record_namespace="stop_gradient_embed_contribution_vjp",
+            execution_contract="stop_gradient_direct_v1",
+            expected_reference_width=expected_reference,
+            expected_candidate_width=expected_candidate,
+            require_exact_hashes=True,
+        )
+        stop_gradient_embed_contribution_chunk_contract = {
+            "profile": stop_gradient_embed_contribution_target_lane_chunk_ab_profile,
+            "reference_strategy": {
+                "expected": expected_reference,
+                "observed": (
+                    reference_adag.get(field)
+                    if isinstance(reference_adag, Mapping)
+                    else None
+                ),
+                "field_present": (
+                    isinstance(reference_adag, Mapping) and field in reference_adag
+                ),
+                "passed": reference_strategy_valid,
+            },
+            "candidate_strategy": {
+                "expected": expected_candidate,
+                "observed": (
+                    candidate_adag.get(field)
+                    if isinstance(candidate_adag, Mapping)
+                    else None
+                ),
+                "field_present": (
+                    isinstance(candidate_adag, Mapping) and field in candidate_adag
+                ),
+                "passed": candidate_strategy_valid,
+            },
+            "projected_receipts": receipt_contract,
+            "passed": (
+                reference_strategy_valid
+                and candidate_strategy_valid
+                and receipt_contract["passed"]
+            ),
+        }
+        gates.append(
+            {
+                "gate": (
+                    "canonical_stop_gradient_embed_contribution_"
+                    "target_lane_chunk_ab_pair"
+                ),
+                "required": True,
+                "passed": stop_gradient_embed_contribution_chunk_contract["passed"],
             }
         )
     if require_same_gpu_family:
@@ -1934,6 +2053,8 @@ def compare_execution_artifacts(
             "selected_neuron_contribution_target_lane_chunk_size",
             "artifact_identity.adag_config."
             "selected_embed_contribution_target_lane_chunk_size",
+            "artifact_identity.adag_config."
+            "stop_gradient_embed_contribution_target_lane_chunk_size",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -1989,6 +2110,9 @@ def compare_execution_artifacts(
         ),
         "selected_embed_contribution_target_lane_chunk_ab_contract": (
             selected_embed_contribution_chunk_contract
+        ),
+        "stop_gradient_embed_contribution_target_lane_chunk_ab_contract": (
+            stop_gradient_embed_contribution_chunk_contract
         ),
         "counts": {
             "reference": {

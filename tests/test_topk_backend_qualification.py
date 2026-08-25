@@ -14,6 +14,7 @@ from circuits.tracing.backend_qualification import (
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
+    STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_attention_backend_artifacts,
@@ -41,6 +42,7 @@ def _manifest(
     contribution_target_lane_chunk_size: object = _UNSET,
     selected_neuron_contribution_target_lane_chunk_size: object = _UNSET,
     selected_embed_contribution_target_lane_chunk_size: object = _UNSET,
+    stop_gradient_embed_contribution_target_lane_chunk_size: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -109,6 +111,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "selected_embed_contribution_target_lane_chunk_size"
         ] = selected_embed_contribution_target_lane_chunk_size
+    if stop_gradient_embed_contribution_target_lane_chunk_size is not _UNSET:
+        manifest["artifact_identity"]["adag_config"][
+            "stop_gradient_embed_contribution_target_lane_chunk_size"
+        ] = stop_gradient_embed_contribution_target_lane_chunk_size
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -219,6 +225,10 @@ def _save_pair(
     candidate_selected_embed_chunk_size: object = _UNSET,
     reference_selected_embed_receipts: list[dict] | None = None,
     candidate_selected_embed_receipts: list[dict] | None = None,
+    reference_stop_gradient_embed_chunk_size: object = _UNSET,
+    candidate_stop_gradient_embed_chunk_size: object = _UNSET,
+    reference_stop_gradient_embed_receipts: list[dict] | None = None,
+    candidate_stop_gradient_embed_receipts: list[dict] | None = None,
     reference_dtype: str = "bfloat16",
     candidate_dtype: str = "bfloat16",
     candidate_mlp_profile_delta: float = 0.0,
@@ -234,6 +244,8 @@ def _save_pair(
     if (
         reference_selected_embed_receipts is not None
         or candidate_selected_embed_receipts is not None
+        or reference_stop_gradient_embed_receipts is not None
+        or candidate_stop_gradient_embed_receipts is not None
     ):
         for trace in (reference, candidate):
             logit_rows = pd.concat(
@@ -295,6 +307,20 @@ def _save_pair(
         instrumentation.setdefault("execution_records", {})[
             "selected_embed_contribution_vjp"
         ] = candidate_selected_embed_receipts
+    if reference_stop_gradient_embed_receipts is not None:
+        instrumentation = reference.circuit_data.trace_metadata.setdefault(
+            "instrumentation", {}
+        )
+        instrumentation.setdefault("execution_records", {})[
+            "stop_gradient_embed_contribution_vjp"
+        ] = reference_stop_gradient_embed_receipts
+    if candidate_stop_gradient_embed_receipts is not None:
+        instrumentation = candidate.circuit_data.trace_metadata.setdefault(
+            "instrumentation", {}
+        )
+        instrumentation.setdefault("execution_records", {})[
+            "stop_gradient_embed_contribution_vjp"
+        ] = candidate_stop_gradient_embed_receipts
     reference_path = tmp_path / "reference"
     candidate_path = tmp_path / "candidate"
     save_topk_compact_trace(
@@ -317,6 +343,9 @@ def _save_pair(
             selected_embed_contribution_target_lane_chunk_size=(
                 reference_selected_embed_chunk_size
             ),
+            stop_gradient_embed_contribution_target_lane_chunk_size=(
+                reference_stop_gradient_embed_chunk_size
+            ),
         ),
     )
     save_topk_compact_trace(
@@ -338,6 +367,9 @@ def _save_pair(
             ),
             selected_embed_contribution_target_lane_chunk_size=(
                 candidate_selected_embed_chunk_size
+            ),
+            stop_gradient_embed_contribution_target_lane_chunk_size=(
+                candidate_stop_gradient_embed_chunk_size
             ),
         ),
     )
@@ -634,6 +666,16 @@ def _selected_embed_receipt(character: str, width: int | None) -> list[dict]:
     ]
 
 
+def _stop_gradient_embed_receipt(character: str, width: int | None) -> list[dict]:
+    records = _selected_embed_receipt(character, width)
+    record = records[0]
+    for field in ("execution_index", "receipt_mode", "return_gradient_only"):
+        del record[field]
+    del record["retain_graph"]
+    record["retain_graph_after_execution"] = False
+    return records
+
+
 @pytest.mark.parametrize(
     ("profile", "reference_width", "candidate_width", "candidate_hash"),
     [
@@ -684,6 +726,100 @@ def test_selected_embed_chunk_profiles_validate_strategy_and_receipts(
     )
     if profile == "width_one_bf16_v1":
         assert contract["bf16_scope"]["passed"] is True
+
+
+def test_stop_gradient_embed_full_width_profile_is_exact_and_namespace_bound(
+    tmp_path,
+) -> None:
+    receipts = _stop_gradient_embed_receipt("1", None)
+    candidate_receipts = _stop_gradient_embed_receipt("1", 5)
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_stop_gradient_embed_chunk_size=None,
+        candidate_stop_gradient_embed_chunk_size=5,
+        reference_stop_gradient_embed_receipts=receipts,
+        candidate_stop_gradient_embed_receipts=candidate_receipts,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        stop_gradient_embed_contribution_target_lane_chunk_ab_profile=(
+            "full_width_exact_v1"
+        ),
+    )
+
+    assert report["qualification_passed"] is True
+    contract = report["stop_gradient_embed_contribution_target_lane_chunk_ab_contract"]
+    assert contract["passed"] is True
+    assert contract["projected_receipts"]["execution_record_namespace"] == (
+        "stop_gradient_embed_contribution_vjp"
+    )
+    assert contract["projected_receipts"]["execution_contract"] == (
+        "stop_gradient_direct_v1"
+    )
+    assert contract["projected_receipts"]["checks"]["receipt_hashes_exact"] is True
+
+
+@pytest.mark.parametrize(
+    "defect", ["wrong_namespace", "hash_mismatch", "retains_final_graph"]
+)
+def test_stop_gradient_embed_full_width_profile_fails_closed_on_receipts(
+    tmp_path, defect: str
+) -> None:
+    reference_receipts = _stop_gradient_embed_receipt("1", None)
+    candidate_receipts = _stop_gradient_embed_receipt(
+        "a" if defect == "hash_mismatch" else "1", 5
+    )
+    pair_args = {
+        "reference_stop_gradient_embed_chunk_size": None,
+        "candidate_stop_gradient_embed_chunk_size": 5,
+        "reference_stop_gradient_embed_receipts": reference_receipts,
+        "candidate_stop_gradient_embed_receipts": candidate_receipts,
+    }
+    if defect == "wrong_namespace":
+        pair_args.pop("candidate_stop_gradient_embed_receipts")
+        pair_args["candidate_selected_embed_receipts"] = candidate_receipts
+    elif defect == "retains_final_graph":
+        candidate_receipts[0]["retain_graph_after_execution"] = True
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        **pair_args,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        stop_gradient_embed_contribution_target_lane_chunk_ab_profile=(
+            "full_width_exact_v1"
+        ),
+    )
+
+    assert report["validation_passed"] is False
+    contract = report["stop_gradient_embed_contribution_target_lane_chunk_ab_contract"]
+    assert contract["projected_receipts"]["passed"] is False
 
 
 @pytest.mark.parametrize(
@@ -924,6 +1060,36 @@ def test_selected_embed_chunk_cli_profiles_are_canonical(
         options["selected_embed_contribution_target_lane_chunk_ab_profile"] == profile
     )
     assert options["tolerances"] == expected_tolerances
+    assert options["require_same_gpu_model"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+
+
+def test_stop_gradient_embed_full_width_cli_profile_is_canonical(tmp_path) -> None:
+    args = build_parser().parse_args(
+        [
+            "--reference",
+            str(tmp_path / "reference"),
+            "--candidate",
+            str(tmp_path / "candidate"),
+            "--output",
+            str(tmp_path / "report.json"),
+            "--stop-gradient-embed-contribution-target-lane-full-width-ab",
+        ]
+    )
+    options = comparison_options(args)
+    assert options["allowed_identity_difference_paths"] == (
+        STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+    )
+    assert (
+        options["stop_gradient_embed_contribution_target_lane_chunk_ab_profile"]
+        == "full_width_exact_v1"
+    )
+    assert options["selected_embed_contribution_target_lane_chunk_ab_profile"] is None
+    assert all(
+        tolerance == NumericTolerance(absolute=0.0, relative=0.0)
+        for tolerance in options["tolerances"].values()
+    )
     assert options["require_same_gpu_model"] is True
     assert options["require_exact_node_topology"] is True
     assert options["require_exact_edge_topology"] is True

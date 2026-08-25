@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import circuits.tracing.attribution as attribution_module
+import circuits.tracing.contribution_execution as contribution_execution_module
 import pytest
 import torch
 from circuits.tracing.attribution import (
@@ -156,6 +157,11 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
         attribution_module, "cuda_memory_observation_stage", capture_stage
     )
     monkeypatch.setattr(
+        contribution_execution_module,
+        "cuda_memory_instrumentation_stage",
+        capture_stage,
+    )
+    monkeypatch.setattr(
         attribution_module, "revert_stop_nonlinear_grad", lambda model: model
     )
     monkeypatch.setattr(
@@ -247,7 +253,13 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
     candidate_model.load_state_dict(baseline_model.state_dict())
     baseline = run(baseline_model, None)
     assert calls == []
-    result = run(candidate_model, object())
+    instrumentation = SimpleNamespace(
+        cuda_memory_telemetry=True,
+        append_execution_record=lambda *_args, **_kwargs: None,
+        increment_counter=lambda *_args, **_kwargs: None,
+        set_counter=lambda *_args, **_kwargs: None,
+    )
+    result = run(candidate_model, instrumentation)
 
     attr, contrib, embed_contrib, tags = result
     assert attr.shape == (2, 1, 2)
@@ -282,6 +294,6 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
     assert selected_forward["planned_chunk_count"] == 2
     assert selected_forward["activation_shape"] == [1, 2, 3]
     assert calls[-1][1]["contribution_shape"] == [2, 1, 1]
-    assert retain_graph_calls == [True, False, True, True, False, True]
+    assert retain_graph_calls == [True, False, False, True, False, False]
     assert selected_hook_counts == [0, 0, 0, 0, 0, 0]
     assert output_liveness == [False, False, True, False, False, True]

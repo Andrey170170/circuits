@@ -16,6 +16,7 @@ from circuits.tracing.backend_qualification import (
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
+    STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_execution_artifacts,
@@ -136,6 +137,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--stop-gradient-embed-contribution-target-lane-full-width-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed stop-gradient embedding contribution full-width "
+            "adapter profile: explicit None control and width-five candidate, "
+            "same GPU model, exact topology and projected-VJP receipts, and "
+            "zero numerical tolerances."
+        ),
+    )
+    parser.add_argument(
         "--allow-identity-difference",
         action="append",
         default=[],
@@ -188,6 +199,10 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
                 args.selected_embed_contribution_target_lane_width_one_bf16_ab,
                 "--selected-embed-contribution-target-lane-width-one-bf16-ab",
             ),
+            (
+                args.stop_gradient_embed_contribution_target_lane_full_width_ab,
+                "--stop-gradient-embed-contribution-target-lane-full-width-ab",
+            ),
         )
         if enabled
     ]
@@ -217,15 +232,27 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             identity_paths = (
                 SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
             )
-        else:
+        elif (
+            args.selected_embed_contribution_target_lane_full_width_ab
+            or args.selected_embed_contribution_target_lane_width_one_bf16_ab
+        ):
             identity_paths = (
                 SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
+            )
+        else:
+            identity_paths = (
+                STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
             )
         selected_embed_profile = None
         if args.selected_embed_contribution_target_lane_full_width_ab:
             selected_embed_profile = "full_width_exact_v1"
         elif args.selected_embed_contribution_target_lane_width_one_bf16_ab:
             selected_embed_profile = "width_one_bf16_v1"
+        stop_gradient_embed_profile = (
+            "full_width_exact_v1"
+            if args.stop_gradient_embed_contribution_target_lane_full_width_ab
+            else None
+        )
         fixed_tolerances = (
             SELECTED_EMBED_WIDTH_ONE_BF16_TOLERANCES
             if selected_embed_profile == "width_one_bf16_v1"
@@ -250,6 +277,9 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             "selected_embed_contribution_target_lane_chunk_ab_profile": (
                 selected_embed_profile
             ),
+            "stop_gradient_embed_contribution_target_lane_chunk_ab_profile": (
+                stop_gradient_embed_profile
+            ),
         }
 
     return {
@@ -268,6 +298,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
         "require_canonical_cross_layer_jacobian_ab": False,
         "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": False,
         "selected_embed_contribution_target_lane_chunk_ab_profile": None,
+        "stop_gradient_embed_contribution_target_lane_chunk_ab_profile": None,
     }
 
 

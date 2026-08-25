@@ -17,6 +17,7 @@ from circuits.tracing.contribution_execution import (
     run_selected_neuron_contribution_vjps,
     run_stop_gradient_contribution_forward,
     run_stop_gradient_contribution_vjp,
+    run_stop_gradient_embed_contribution_vjp,
 )
 from circuits.tracing.grad import (
     DEFAULT_STOP_GRADIENT_ATTENTION_BACKEND,
@@ -514,6 +515,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         DEFAULT_STOP_GRADIENT_CONTRIBUTION_EXECUTION
     ),
     contribution_target_lane_chunk_size: int | None = None,
+    embed_contribution_target_lane_chunk_size: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions from source tokens and contributions to target tokens
@@ -849,36 +851,19 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             tgt_nodes.append(logits[torch.arange(logits.shape[0]), p, tid])
         tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
         t = tgt_vec.size(0)
-        grad_outputs = torch.eye(t * batch, device=device)  # (t * batch, t * batch)
         if embed_forward_measurement is not None:
             embed_forward_measurement.metadata["embedding_shape"] = list(embeds.shape)
             embed_forward_measurement.metadata["logit_shape"] = list(logits.shape)
             embed_forward_measurement.metadata["target_shape"] = list(tgt_vec.shape)
 
     # compute embed grad contribs
-    embeds.grad = None
-    with cuda_memory_instrumentation_stage(
-        instrumentation,
-        "stop_grad_embed_contribution_vjp",
-        metadata={
-            "operation_kind": "batched_vjp",
-            "lane_count": t * batch,
-            "differentiated_output_shape": list(tgt_vec.shape),
-            "differentiated_input_shape": list(embeds.shape),
-            "grad_outputs_shape": list(grad_outputs.shape),
-        },
-    ) as vjp_measurement:
-        embed_grad_contrib_full = torch.autograd.grad(
-            tgt_vec.flatten(),
-            embeds,
-            grad_outputs=grad_outputs,
-            is_grads_batched=True,
-            retain_graph=True,
-        )[0]
-        if vjp_measurement is not None:
-            vjp_measurement.metadata["vjp_result_shape"] = list(
-                embed_grad_contrib_full.shape
-            )
+    embed_grad_contrib = run_stop_gradient_embed_contribution_vjp(
+        embeds,
+        tgt_vec,
+        src_tokens,
+        target_lane_chunk_size=embed_contribution_target_lane_chunk_size,
+        instrumentation=instrumentation,
+    )
     with cuda_memory_observation_stage(
         instrumentation,
         "stop_grad_embed_projection_release",
@@ -886,43 +871,16 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
             "operation_kind": "vjp_projection_release",
             "source_token_count": len(src_tokens),
             "target_token_count": t,
-            "raw_vjp_result_shape": list(embed_grad_contrib_full.shape),
+            "projected_shape": list(embed_grad_contrib.shape),
         },
-    ) as embed_projection_measurement:
-        # shape (t * batch, batch, seq, d)
-        # convert back to (t, batch, batch, seq, d)
-        embed_grad_contrib = embed_grad_contrib_full.reshape(
-            t,
-            batch,
-            batch,
-            embed_grad_contrib_full.shape[-2],
-            embed_grad_contrib_full.shape[-1],
-        )
-        del embed_grad_contrib_full  # Free immediately
-
-        # get only identity along batch, batch
-        embed_grad_contrib = embed_grad_contrib.diagonal(dim1=1, dim2=2).permute(
-            0, 3, 1, 2
-        )
-        # now (t, batch, seq, d)
-        embed_grad_contrib = (
-            embed_grad_contrib[:, :, src_tokens, :] * embeds[None, :, src_tokens, :]
-        )  # (t, batch, src, d)
-        embed_grad_contrib = embed_grad_contrib.sum(-1).permute(
-            2, 1, 0
-        )  # (src, batch, t)
-
+    ):
         # revert stop grad for the next attribution
         model = layerwise_revert_stop_nonlinear_grad(
             model,
             -1,
             len(model.model.layers),
         )
-        if embed_projection_measurement is not None:
-            embed_projection_measurement.metadata["projected_shape"] = list(
-                embed_grad_contrib.shape
-            )
-        del embeds, tgt_vec, grad_outputs
+        del embeds, tgt_vec
         torch.cuda.empty_cache()
 
     # compute neuron grad contribs

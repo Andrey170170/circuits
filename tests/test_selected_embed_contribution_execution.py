@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import gc
 import weakref
+from contextlib import contextmanager
 from dataclasses import asdict
 from types import SimpleNamespace
 
 import circuits.tracing.attribution as attribution_module
+import circuits.tracing.contribution_execution as contribution_execution_module
 import pytest
 import torch
 from circuits.tracing.attribution import (
@@ -160,9 +162,23 @@ def test_full_identity_is_reused_and_rejected_for_real_chunking(
         )
 
 
-def test_telemetry_receipts_are_top_level_and_execution_indexed() -> None:
+def test_telemetry_receipts_are_top_level_and_execution_indexed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     instrumentation = TraceInstrumentation(device="cpu")
     expected_receipts = []
+    stage_metadata: list[dict[str, object]] = []
+
+    @contextmanager
+    def capture_stage(_instrumentation, _name, *, metadata):
+        stage_metadata.append(metadata)
+        yield SimpleNamespace(metadata=metadata)
+
+    monkeypatch.setattr(
+        contribution_execution_module,
+        "cuda_memory_instrumentation_stage",
+        capture_stage,
+    )
     for execution_index in (0, 1):
         embeddings, targets = _embedding_graph()
         projected = run_selected_embed_contribution_vjp(
@@ -190,6 +206,11 @@ def test_telemetry_receipts_are_top_level_and_execution_indexed() -> None:
     )
     assert all(record["target_lane_chunk_size_requested"] == 2 for record in records)
     assert snapshot["counters"]["selected_embed_contribution_vjp_chunk_executions"] == 6
+    assert len(stage_metadata) == 2
+    assert all(metadata["retain_graph"] is True for metadata in stage_metadata)
+    assert all(
+        metadata["retain_graph_after_execution"] is True for metadata in stage_metadata
+    )
 
 
 class _ToyMlp(nn.Module):
