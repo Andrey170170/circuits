@@ -426,7 +426,13 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
 
     monkeypatch.setattr(torch.autograd, "grad", capture_autograd_grad)
 
-    def run(model, instrumentation, *, selected_forward_execution="full_model_v1"):
+    def run(
+        model,
+        instrumentation,
+        *,
+        selected_forward_execution="full_model_v1",
+        selected_storage="graph_retaining_v1",
+    ):
         nonlocal active_model
         active_model = model
         return _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
@@ -441,12 +447,15 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
             neuron_chunk_size=1,
             instrumentation=instrumentation,
             selected_attribution_forward_execution=selected_forward_execution,
+            selected_attribution_storage=selected_storage,
         )
 
     torch.manual_seed(7)
     baseline_model = _ToyModel()
     candidate_model = _ToyModel()
     candidate_model.load_state_dict(baseline_model.state_dict())
+    detached_model = _ToyModel()
+    detached_model.load_state_dict(baseline_model.state_dict())
     baseline = run(baseline_model, None)
     assert calls == []
     instrumentation = SimpleNamespace(
@@ -460,7 +469,6 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
         instrumentation,
         selected_forward_execution="prefix_stop_v1",
     )
-
     attr, contrib, embed_contrib, tags = result
     assert attr.shape == (2, 1, 2)
     assert contrib.shape == (2, 1, 1)
@@ -505,7 +513,32 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
     assert selected_forward["down_projection_materialized"] is False
     assert selected_forward["decoder_suffix_materialized"] is False
     assert selected_forward["logits_materialized"] is False
+    projection_calls = [
+        metadata
+        for name, metadata in calls
+        if name == "stop_grad_selected_chunk_projection"
+    ]
+    assert len(projection_calls) == 2
+    assert all(
+        metadata["selected_attribution_storage"] == "graph_retaining_v1"
+        and metadata["input_grad_fn_retained"] is True
+        and metadata["stored_grad_fn_retained"] is True
+        and metadata["terminal_detached"] is False
+        for metadata in projection_calls
+    )
     assert calls[-1][1]["contribution_shape"] == [2, 1, 1]
     assert retain_graph_calls == [True, False, False, True, False, False]
     assert selected_hook_counts == [0, 0, 0, 0, 0, 0]
     assert output_liveness == [False, False, True, False, False, True]
+
+    detached_result = run(
+        detached_model,
+        None,
+        selected_forward_execution="prefix_stop_v1",
+        selected_storage="terminal_detached_v1",
+    )
+    for historical_tensor, detached_tensor in zip(
+        result[:3], detached_result[:3], strict=True
+    ):
+        assert torch.equal(historical_tensor, detached_tensor)
+    assert detached_result[3] == tags

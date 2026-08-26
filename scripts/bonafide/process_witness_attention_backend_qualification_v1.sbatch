@@ -48,6 +48,7 @@ EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE="${EXPECTED_SELECTED
 EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE="${EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE:-legacy_unbound}"
 EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE="${EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE:-legacy_unbound}"
 EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION="${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION:-legacy_unbound}"
+EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE="${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE:-legacy_unbound}"
 
 for path_name in CONFIG MANIFEST ARTIFACT_ROOT UV_PROJECT_ENVIRONMENT; do
     path_value="${!path_name}"
@@ -112,6 +113,13 @@ case "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" in
     legacy_unbound|full_model_v1|prefix_stop_v1) ;;
     *)
         echo "Unsupported EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION}." >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE" in
+    legacy_unbound|graph_retaining_v1|terminal_detached_v1) ;;
+    *)
+        echo "Unsupported EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE}." >&2
         exit 2
         ;;
 esac
@@ -245,6 +253,7 @@ expected_selected_attribution_chunk_size=(
     else int(expected_selected_attribution_chunk_size_raw)
 )
 expected_selected_forward_execution=sys.argv[18]
+expected_selected_storage=sys.argv[19]
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -294,6 +303,13 @@ if selected_forward_is_bound:
         raise SystemExit("run config stop-gradient selected-attribution forward execution disagrees with EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION")
 elif selected_forward_field in adag:
     raise SystemExit("legacy-unbound qualification config unexpectedly declares stop-gradient selected-attribution forward execution")
+selected_storage_field="stop_gradient_selected_attribution_storage"
+selected_storage_is_bound=expected_selected_storage != "legacy_unbound"
+if selected_storage_is_bound:
+    if selected_storage_field not in adag or adag[selected_storage_field] != expected_selected_storage:
+        raise SystemExit("run config stop-gradient selected-attribution storage disagrees with EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE")
+elif selected_storage_field in adag:
+    raise SystemExit("legacy-unbound qualification config unexpectedly declares stop-gradient selected-attribution storage")
 declared_embedding_edge_materialization=adag.get("embedding_edge_materialization")
 if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
@@ -349,7 +365,8 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
         "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
         "$EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE" \
-        "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION"
+        "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" \
+        "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE"
 )"
 
 for target in "$EXPECTED_OUTPUT_DIR" "$SUMMARY_JSONL"; do
@@ -371,6 +388,7 @@ echo "selected_embed_contribution_target_lane_chunk_size=${EXPECTED_SELECTED_EMB
 echo "stop_gradient_embed_contribution_target_lane_chunk_size=${EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE}"
 echo "selected_attribution_neuron_lane_chunk_size=${EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE}"
 echo "stop_gradient_selected_attribution_forward_execution=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION}"
+echo "stop_gradient_selected_attribution_storage=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
 echo "cross_layer_jacobian_execution=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-legacy_unbound}"
@@ -458,6 +476,7 @@ expected_selected_attribution_chunk_size=(
     else int(expected_selected_attribution_chunk_size_raw)
 )
 expected_selected_forward_execution=sys.argv[15]
+expected_selected_storage=sys.argv[16]
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -545,6 +564,27 @@ if selected_forward_is_bound:
         receipts_valid=(down_projection_count == decoder_suffix_count == logits_count == 0)
     if not receipts_valid:
         raise SystemExit("saved artifact materialization receipts disagree with requested selected-attribution forward execution")
+selected_storage_field="stop_gradient_selected_attribution_storage"
+selected_storage_is_bound=expected_selected_storage != "legacy_unbound"
+observed_selected_storage=artifact_adag.get(selected_storage_field)
+if selected_storage_is_bound:
+    if selected_storage_field not in artifact_adag or observed_selected_storage != expected_selected_storage:
+        raise SystemExit("saved artifact stop-gradient selected-attribution storage identity disagrees with requested strategy")
+elif selected_storage_field in artifact_adag:
+    raise SystemExit("legacy-unbound artifact unexpectedly declares stop-gradient selected-attribution storage")
+if selected_storage_is_bound:
+    counters=row.get("instrumentation", {}).get("counters", {})
+    storage_count=counters.get("stop_gradient_selected_attribution_storage_execution_count")
+    strategy_count=counters.get(f"stop_gradient_selected_attribution_{expected_selected_storage}_storage_count")
+    projected_graph_count=counters.get("stop_gradient_selected_attribution_projection_graph_retained_count")
+    stored_graph_count=counters.get("stop_gradient_selected_attribution_stored_graph_retained_count")
+    detached_count=counters.get("stop_gradient_selected_attribution_terminal_detached_count")
+    if not isinstance(storage_count, int) or storage_count <= 0 or strategy_count != storage_count or projected_graph_count != storage_count:
+        raise SystemExit("saved artifact lacks exact stop-gradient selected-attribution storage receipts")
+    expected_stored_graph_count=storage_count if expected_selected_storage == "graph_retaining_v1" else 0
+    expected_detached_count=storage_count if expected_selected_storage == "terminal_detached_v1" else 0
+    if stored_graph_count != expected_stored_graph_count or detached_count != expected_detached_count:
+        raise SystemExit("saved artifact graph-lifetime receipts disagree with requested selected-attribution storage")
 observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materialization")
 if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
@@ -585,4 +625,5 @@ if expected_allocator_policy is not None:
     "$EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
     "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
     "$EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE" \
-    "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION"
+    "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" \
+    "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE"

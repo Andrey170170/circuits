@@ -82,6 +82,13 @@ STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_STRATEGIES = (
     "full_model_v1",
     "prefix_stop_v1",
 )
+STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.stop_gradient_selected_attribution_storage",
+)
+STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_STRATEGIES = (
+    "graph_retaining_v1",
+    "terminal_detached_v1",
+)
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",
     "selected_target_activations",
@@ -99,6 +106,7 @@ _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
     "artifact_identity.adag_config."
     "stop_gradient_selected_attribution_forward_execution",
+    "artifact_identity.adag_config.stop_gradient_selected_attribution_storage",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -252,7 +260,7 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
             raise ValueError(
                 "identity difference may only allow the stop-gradient attention "
                 "backend, contribution execution, selected-attribution forward "
-                "execution or lane chunk size, CUDA "
+                "execution or storage, lane chunk size, CUDA "
                 "allocator policy, embedding-edge "
                 "materialization, cross-layer Jacobian execution, or fields under "
                 "code_revision/runtime_environment: "
@@ -1612,6 +1620,268 @@ def _stop_gradient_selected_attribution_forward_contract(
     }
 
 
+def _stop_gradient_selected_attribution_storage_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+) -> dict[str, Any]:
+    """Prove graph-retaining versus terminal-detached compact storage."""
+
+    namespace = "stop_gradient_selected_attribution_storage"
+    stage_name = "stop_grad_selected_chunk_projection"
+    receipt_fields = (
+        "layer",
+        "chunk_start",
+        "strategy",
+        "input_requires_grad",
+        "input_grad_fn_retained",
+        "stored_requires_grad",
+        "stored_grad_fn_retained",
+        "terminal_detached",
+        "shares_projection_storage",
+    )
+    stage_workload_fields = (
+        "chunk_neuron_count",
+        "source_token_count",
+        "raw_vjp_result_shape",
+        "projected_shape",
+        "retained_chunk_count_before",
+        "retained_chunk_count_after",
+    )
+
+    def instrumentation(artifact: TopKCompactTraceArtifact) -> Any:
+        return artifact.topk_trace.circuit_data.trace_metadata.get("instrumentation")
+
+    def identity_strategy(artifact: TopKCompactTraceArtifact) -> Any:
+        identity = artifact.manifest.get("artifact_identity")
+        adag = identity.get("adag_config") if isinstance(identity, Mapping) else None
+        return (
+            adag.get("stop_gradient_selected_attribution_storage")
+            if isinstance(adag, Mapping)
+            else None
+        )
+
+    def validate(
+        raw: Any,
+        *,
+        expected_strategy: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        if not isinstance(raw, Mapping):
+            return False, {}
+        execution_records = raw.get("execution_records")
+        counters = raw.get("counters")
+        stages = raw.get("stages")
+        records = (
+            execution_records.get(namespace)
+            if isinstance(execution_records, Mapping)
+            else None
+        )
+        stage = stages.get(stage_name) if isinstance(stages, Mapping) else None
+        calls = stage.get("call_measurements") if isinstance(stage, Mapping) else None
+        if (
+            not isinstance(records, list)
+            or not records
+            or not isinstance(counters, Mapping)
+            or not isinstance(calls, list)
+        ):
+            return False, {}
+
+        graph_retaining = expected_strategy == "graph_retaining_v1"
+        expected_graph_receipts = {
+            "input_requires_grad": True,
+            "input_grad_fn_retained": True,
+            "stored_requires_grad": graph_retaining,
+            "stored_grad_fn_retained": graph_retaining,
+            "terminal_detached": not graph_retaining,
+            "shares_projection_storage": True,
+        }
+        records_valid = len(records) == len(calls)
+        coordinates: list[tuple[int, int]] = []
+        workloads: list[dict[str, Any]] = []
+        summaries: list[dict[str, Any]] = []
+        expected_retained_index_by_layer: dict[int, int] = {}
+        for index, record in enumerate(records):
+            call = calls[index] if index < len(calls) else None
+            metadata = call.get("metadata") if isinstance(call, Mapping) else None
+            required_shape = isinstance(record, Mapping) and all(
+                field in record for field in receipt_fields
+            )
+            layer = record.get("layer") if isinstance(record, Mapping) else None
+            chunk_start = (
+                record.get("chunk_start") if isinstance(record, Mapping) else None
+            )
+            coordinate_valid = (
+                type(layer) is int
+                and layer >= 0
+                and type(chunk_start) is int
+                and chunk_start >= 0
+            )
+            if coordinate_valid:
+                coordinates.append((layer, chunk_start))
+            graph_receipts_valid = required_shape and all(
+                record.get(field) is expected
+                for field, expected in expected_graph_receipts.items()
+            )
+            workload = (
+                {field: metadata.get(field) for field in stage_workload_fields}
+                if isinstance(metadata, Mapping)
+                else {}
+            )
+            chunk_neuron_count = workload.get("chunk_neuron_count")
+            source_token_count = workload.get("source_token_count")
+            raw_shape = workload.get("raw_vjp_result_shape")
+            projected_shape = workload.get("projected_shape")
+            retained_before = workload.get("retained_chunk_count_before")
+            retained_after = workload.get("retained_chunk_count_after")
+            expected_retained_before = (
+                expected_retained_index_by_layer.get(layer, 0)
+                if coordinate_valid
+                else None
+            )
+            workload_valid = (
+                type(chunk_neuron_count) is int
+                and chunk_neuron_count > 0
+                and type(source_token_count) is int
+                and source_token_count > 0
+                and isinstance(raw_shape, list)
+                and len(raw_shape) == 4
+                and all(type(extent) is int and extent > 0 for extent in raw_shape)
+                and isinstance(projected_shape, list)
+                and len(projected_shape) == 3
+                and all(
+                    type(extent) is int and extent > 0 for extent in projected_shape
+                )
+                and projected_shape[0] == chunk_neuron_count
+                and projected_shape[2] == source_token_count
+                and raw_shape[0] == chunk_neuron_count * projected_shape[1]
+                and raw_shape[1] == projected_shape[1]
+                and type(retained_before) is int
+                and type(retained_after) is int
+                and retained_before == expected_retained_before
+                and retained_after == retained_before + 1
+            )
+            if coordinate_valid and workload_valid:
+                expected_retained_index_by_layer[layer] = retained_after
+            stage_valid = (
+                isinstance(call, Mapping)
+                and call.get("call_index") == index
+                and call.get("failed") is False
+                and isinstance(metadata, Mapping)
+                and isinstance(record, Mapping)
+                and metadata.get("operation_kind") == "vjp_projection"
+                and metadata.get("layer") == layer
+                and metadata.get("chunk_start") == chunk_start
+                and metadata.get("selected_attribution_storage") == expected_strategy
+                and all(
+                    metadata.get(field) == record.get(field)
+                    for field in receipt_fields
+                    if field not in {"layer", "chunk_start", "strategy"}
+                )
+                and workload_valid
+            )
+            record_valid = (
+                required_shape
+                and record.get("strategy") == expected_strategy
+                and coordinate_valid
+                and graph_receipts_valid
+                and stage_valid
+            )
+            records_valid = records_valid and record_valid
+            workloads.append({"layer": layer, "chunk_start": chunk_start, **workload})
+            summaries.append(
+                {
+                    "layer": layer,
+                    "chunk_start": chunk_start,
+                    "stage_receipt_matches": stage_valid,
+                    "valid": record_valid,
+                }
+            )
+
+        ordered_workload_valid = (
+            len(coordinates) == len(records)
+            and len(set(coordinates)) == len(coordinates)
+            and coordinates == sorted(coordinates)
+        )
+        stage_aggregate_valid = (
+            isinstance(stage, Mapping)
+            and stage.get("calls") == len(records)
+            and stage.get("failed_calls") == 0
+        )
+        counters_valid = (
+            counters.get("stop_gradient_selected_attribution_storage")
+            == expected_strategy
+            and counters.get(
+                "stop_gradient_selected_attribution_storage_execution_count"
+            )
+            == len(records)
+            and counters.get(
+                f"stop_gradient_selected_attribution_{expected_strategy}_storage_count"
+            )
+            == len(records)
+            and counters.get(
+                "stop_gradient_selected_attribution_projection_graph_retained_count"
+            )
+            == len(records)
+            and counters.get(
+                "stop_gradient_selected_attribution_stored_graph_retained_count"
+            )
+            == (len(records) if graph_retaining else 0)
+            and counters.get(
+                "stop_gradient_selected_attribution_terminal_detached_count"
+            )
+            == (0 if graph_retaining else len(records))
+        )
+        checks = {
+            "ordered_execution_and_stage_receipts": (
+                records_valid and ordered_workload_valid and stage_aggregate_valid
+            ),
+            "aggregate_counters": counters_valid,
+        }
+        return all(checks.values()), {
+            "strategy": expected_strategy,
+            "coordinates": [list(coordinate) for coordinate in coordinates],
+            "workloads": workloads,
+            "records": summaries,
+            "checks": checks,
+        }
+
+    reference_strategy = identity_strategy(reference)
+    candidate_strategy = identity_strategy(candidate)
+    reference_valid, reference_runtime = validate(
+        instrumentation(reference),
+        expected_strategy=STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_STRATEGIES[0],
+    )
+    candidate_valid, candidate_runtime = validate(
+        instrumentation(candidate),
+        expected_strategy=STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_STRATEGIES[1],
+    )
+    strategy_valid = (
+        reference_strategy
+        == STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_STRATEGIES[0]
+        and candidate_strategy
+        == STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_STRATEGIES[1]
+    )
+    workload_equal = (
+        reference_valid
+        and candidate_valid
+        and reference_runtime["coordinates"] == candidate_runtime["coordinates"]
+        and reference_runtime["workloads"] == candidate_runtime["workloads"]
+    )
+    checks = {
+        "canonical_identity_strategies": strategy_valid,
+        "reference_graph_retaining_receipts": reference_valid,
+        "candidate_terminal_detached_receipts": candidate_valid,
+        "cross_side_workload_equal": workload_equal,
+    }
+    return {
+        "reference_strategy": reference_strategy,
+        "candidate_strategy": candidate_strategy,
+        "reference_runtime": reference_runtime,
+        "candidate_runtime": candidate_runtime,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def _embed_contribution_receipt_contract(
     reference: TopKCompactTraceArtifact,
     candidate: TopKCompactTraceArtifact,
@@ -2071,6 +2341,7 @@ def compare_execution_artifacts(
     require_canonical_embedding_edge_ab: bool = False,
     require_canonical_cross_layer_jacobian_ab: bool = False,
     require_canonical_stop_gradient_selected_attribution_forward_ab: bool = False,
+    require_canonical_stop_gradient_selected_attribution_storage_ab: bool = False,
     require_canonical_selected_attribution_neuron_lane_chunk_ab: bool = False,
     require_canonical_selected_neuron_contribution_target_lane_chunk_ab: bool = False,
     selected_embed_contribution_target_lane_chunk_ab_profile: str | None = None,
@@ -2301,6 +2572,23 @@ def compare_execution_artifacts(
                 ),
                 "required": True,
                 "passed": stop_gradient_selected_attribution_forward_contract["passed"],
+            }
+        )
+    stop_gradient_selected_attribution_storage_contract = None
+    if require_canonical_stop_gradient_selected_attribution_storage_ab:
+        stop_gradient_selected_attribution_storage_contract = (
+            _stop_gradient_selected_attribution_storage_contract(
+                reference,
+                candidate,
+            )
+        )
+        gates.append(
+            {
+                "gate": (
+                    "canonical_stop_gradient_selected_attribution_storage_ab_pair"
+                ),
+                "required": True,
+                "passed": stop_gradient_selected_attribution_storage_contract["passed"],
             }
         )
     selected_neuron_contribution_chunk_contract = None
@@ -2704,6 +2992,7 @@ def compare_execution_artifacts(
             "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
             "artifact_identity.adag_config."
             "stop_gradient_selected_attribution_forward_execution",
+            "artifact_identity.adag_config.stop_gradient_selected_attribution_storage",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -2756,6 +3045,9 @@ def compare_execution_artifacts(
         "cross_layer_jacobian_ab_contract": cross_layer_jacobian_contract,
         "stop_gradient_selected_attribution_forward_ab_contract": (
             stop_gradient_selected_attribution_forward_contract
+        ),
+        "stop_gradient_selected_attribution_storage_ab_contract": (
+            stop_gradient_selected_attribution_storage_contract
         ),
         "selected_attribution_neuron_lane_chunk_ab_contract": (
             selected_attribution_neuron_lane_chunk_contract

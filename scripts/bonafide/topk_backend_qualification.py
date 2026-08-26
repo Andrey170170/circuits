@@ -19,6 +19,7 @@ from circuits.tracing.backend_qualification import (
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS,
+    STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_execution_artifacts,
@@ -128,6 +129,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--stop-gradient-selected-attribution-storage-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed stop-gradient selected-attribution storage A/B "
+            "profile: explicit graph-retaining reference and terminal-detached "
+            "candidate, same GPU model, exact topology and ordered graph-lifetime "
+            "receipts, zero numerical tolerances, and only the exact storage "
+            "strategy field may differ."
+        ),
+    )
+    parser.add_argument(
         "--selected-neuron-contribution-target-lane-chunk-ab",
         action="store_true",
         help=(
@@ -229,6 +241,10 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
                 "--stop-gradient-selected-attribution-forward-ab",
             ),
             (
+                args.stop_gradient_selected_attribution_storage_ab,
+                "--stop-gradient-selected-attribution-storage-ab",
+            ),
+            (
                 args.selected_neuron_contribution_target_lane_chunk_ab,
                 "--selected-neuron-contribution-target-lane-chunk-ab",
             ),
@@ -283,6 +299,10 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             identity_paths = (
                 STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS
             )
+        elif args.stop_gradient_selected_attribution_storage_ab:
+            identity_paths = (
+                STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS
+            )
         elif (
             args.selected_embed_contribution_target_lane_full_width_ab
             or args.selected_embed_contribution_target_lane_width_one_bf16_ab
@@ -329,6 +349,9 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             "require_canonical_stop_gradient_selected_attribution_forward_ab": (
                 args.stop_gradient_selected_attribution_forward_ab
             ),
+            "require_canonical_stop_gradient_selected_attribution_storage_ab": (
+                args.stop_gradient_selected_attribution_storage_ab
+            ),
             "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": (
                 args.selected_neuron_contribution_target_lane_chunk_ab
             ),
@@ -356,6 +379,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
         "require_canonical_cross_layer_jacobian_ab": False,
         "require_canonical_selected_attribution_neuron_lane_chunk_ab": False,
         "require_canonical_stop_gradient_selected_attribution_forward_ab": False,
+        "require_canonical_stop_gradient_selected_attribution_storage_ab": False,
         "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": False,
         "selected_embed_contribution_target_lane_chunk_ab_profile": None,
         "stop_gradient_embed_contribution_target_lane_chunk_ab_profile": None,

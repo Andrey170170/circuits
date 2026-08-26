@@ -66,6 +66,7 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE",
         "EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE",
         "EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION",
+        "EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
         "EXPECTED_EMBEDDING_EDGE_MATERIALIZATION",
         "EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION",
@@ -81,6 +82,8 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "legacy-unbound qualification config unexpectedly declares selected-attribution neuron-lane chunk size",
         "run config stop-gradient selected-attribution forward execution disagrees",
         "legacy-unbound qualification config unexpectedly declares stop-gradient selected-attribution forward execution",
+        "run config stop-gradient selected-attribution storage disagrees",
+        "legacy-unbound qualification config unexpectedly declares stop-gradient selected-attribution storage",
         "saved artifact allocator identity disagrees",
         "saved artifact contribution execution identity disagrees",
         "saved artifact target-lane chunk size identity disagrees",
@@ -91,6 +94,9 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "legacy-unbound artifact unexpectedly declares selected-attribution neuron-lane chunk size",
         "saved artifact stop-gradient selected-attribution forward execution identity disagrees",
         "saved artifact lacks exact stop-gradient selected-attribution forward execution receipts",
+        "saved artifact stop-gradient selected-attribution storage identity disagrees",
+        "saved artifact lacks exact stop-gradient selected-attribution storage receipts",
+        "saved artifact graph-lifetime receipts disagree",
         "chunk_size_field not in artifact_adag",
         "saved artifact lacks the exact requested allocator runtime receipt",
         "run config embedding-edge materialization disagrees",
@@ -403,6 +409,50 @@ def test_stop_gradient_selected_attribution_forward_configs_are_exact_pair() -> 
             config["artifact_root"]
             == "results/bonafide/process-witness-stop-gradient-selected-"
             "attribution-forward-qualification-v1"
+        )
+        normalized_source_clone = json.loads(json.dumps(config))
+        del normalized_source_clone["adag_config"][field]
+        normalized_source_clone["artifact_root"] = source["artifact_root"]
+        assert normalized_source_clone == source
+        configs.append(config)
+
+    normalized = []
+    for config in configs:
+        copied = json.loads(json.dumps(config))
+        del copied["adag_config"][field]
+        normalized.append(copied)
+    assert normalized[0] == normalized[1]
+
+
+def test_stop_gradient_selected_attribution_storage_configs_are_exact_pair() -> None:
+    field = "stop_gradient_selected_attribution_storage"
+    source = json.loads(
+        (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_stop_gradient_selected_attribution_forward_"
+            "qualification_prefix_stop_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    configs = []
+    for strategy in ("graph_retaining_v1", "terminal_detached_v1"):
+        path = (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_stop_gradient_selected_attribution_storage_"
+            f"qualification_{strategy}.json"
+        )
+        config = json.loads(path.read_text(encoding="utf-8"))
+        assert config["adag_config"][field] == strategy
+        assert (
+            config["adag_config"][
+                "stop_gradient_selected_attribution_forward_execution"
+            ]
+            == "prefix_stop_v1"
+        )
+        assert config["adag_config"]["selected_attribution_neuron_lane_chunk_size"] == 1
+        assert (
+            config["artifact_root"]
+            == "results/bonafide/process-witness-stop-gradient-selected-"
+            "attribution-storage-qualification-v1"
         )
         normalized_source_clone = json.loads(json.dumps(config))
         del normalized_source_clone["adag_config"][field]

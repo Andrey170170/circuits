@@ -17,6 +17,7 @@ from circuits.tracing.backend_qualification import (
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS,
+    STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_attention_backend_artifacts,
@@ -47,6 +48,7 @@ def _manifest(
     stop_gradient_embed_contribution_target_lane_chunk_size: object = _UNSET,
     selected_attribution_neuron_lane_chunk_size: object = _UNSET,
     stop_gradient_selected_attribution_forward_execution: object = _UNSET,
+    stop_gradient_selected_attribution_storage: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -127,6 +129,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "stop_gradient_selected_attribution_forward_execution"
         ] = stop_gradient_selected_attribution_forward_execution
+    if stop_gradient_selected_attribution_storage is not _UNSET:
+        manifest["artifact_identity"]["adag_config"][
+            "stop_gradient_selected_attribution_storage"
+        ] = stop_gradient_selected_attribution_storage
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -247,6 +253,10 @@ def _save_pair(
     candidate_selected_attribution_forward_execution: object = _UNSET,
     reference_selected_attribution_forward_instrumentation: dict | None = None,
     candidate_selected_attribution_forward_instrumentation: dict | None = None,
+    reference_selected_attribution_storage: object = _UNSET,
+    candidate_selected_attribution_storage: object = _UNSET,
+    reference_selected_attribution_storage_instrumentation: dict | None = None,
+    candidate_selected_attribution_storage_instrumentation: dict | None = None,
     reference_stop_gradient_embed_receipts: list[dict] | None = None,
     candidate_stop_gradient_embed_receipts: list[dict] | None = None,
     reference_dtype: str = "bfloat16",
@@ -357,6 +367,14 @@ def _save_pair(
         candidate.circuit_data.trace_metadata["instrumentation"] = (
             candidate_selected_attribution_forward_instrumentation
         )
+    if reference_selected_attribution_storage_instrumentation is not None:
+        reference.circuit_data.trace_metadata["instrumentation"] = (
+            reference_selected_attribution_storage_instrumentation
+        )
+    if candidate_selected_attribution_storage_instrumentation is not None:
+        candidate.circuit_data.trace_metadata["instrumentation"] = (
+            candidate_selected_attribution_storage_instrumentation
+        )
     reference_path = tmp_path / "reference"
     candidate_path = tmp_path / "candidate"
     save_topk_compact_trace(
@@ -388,6 +406,9 @@ def _save_pair(
             stop_gradient_selected_attribution_forward_execution=(
                 reference_selected_attribution_forward_execution
             ),
+            stop_gradient_selected_attribution_storage=(
+                reference_selected_attribution_storage
+            ),
         ),
     )
     save_topk_compact_trace(
@@ -418,6 +439,9 @@ def _save_pair(
             ),
             stop_gradient_selected_attribution_forward_execution=(
                 candidate_selected_attribution_forward_execution
+            ),
+            stop_gradient_selected_attribution_storage=(
+                candidate_selected_attribution_storage
             ),
         ),
     )
@@ -1254,6 +1278,332 @@ def test_selected_attribution_forward_ab_cli_is_strict_and_non_overridable(
         comparison_options(args)
     args.edge_atol = None
     args.cross_layer_jacobian_ab = True
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        comparison_options(args)
+
+
+def _selected_attribution_storage_instrumentation(strategy: str) -> dict:
+    graph_retaining = strategy == "graph_retaining_v1"
+    chunk_specs = [(0, 0, 2, 0), (0, 2, 1, 1), (3, 0, 3, 0)]
+    records = []
+    calls = []
+    for index, (layer, chunk_start, chunk_count, retained_before) in enumerate(
+        chunk_specs
+    ):
+        record = {
+            "layer": layer,
+            "chunk_start": chunk_start,
+            "strategy": strategy,
+            "input_requires_grad": True,
+            "input_grad_fn_retained": True,
+            "stored_requires_grad": graph_retaining,
+            "stored_grad_fn_retained": graph_retaining,
+            "terminal_detached": not graph_retaining,
+            "shares_projection_storage": True,
+        }
+        records.append(record)
+        calls.append(
+            {
+                "call_index": index,
+                "failed": False,
+                "wall_seconds": 0.1,
+                "metadata": {
+                    "operation_kind": "vjp_projection",
+                    "layer": layer,
+                    "chunk_start": chunk_start,
+                    "chunk_neuron_count": chunk_count,
+                    "source_token_count": 3,
+                    "raw_vjp_result_shape": [chunk_count, 1, 7, 11],
+                    "projected_shape": [chunk_count, 1, 3],
+                    "retained_chunk_count_before": retained_before,
+                    "retained_chunk_count_after": retained_before + 1,
+                    "selected_attribution_storage": strategy,
+                    **{
+                        field: value
+                        for field, value in record.items()
+                        if field
+                        not in {
+                            "layer",
+                            "chunk_start",
+                            "strategy",
+                        }
+                    },
+                },
+                "cuda_memory": {},
+            }
+        )
+    return {
+        "execution_records": {
+            "stop_gradient_selected_attribution_storage": records,
+        },
+        "counters": {
+            "stop_gradient_selected_attribution_storage": strategy,
+            "stop_gradient_selected_attribution_storage_execution_count": len(records),
+            f"stop_gradient_selected_attribution_{strategy}_storage_count": len(
+                records
+            ),
+            "stop_gradient_selected_attribution_projection_graph_retained_count": len(
+                records
+            ),
+            "stop_gradient_selected_attribution_stored_graph_retained_count": (
+                len(records) if graph_retaining else 0
+            ),
+            "stop_gradient_selected_attribution_terminal_detached_count": (
+                0 if graph_retaining else len(records)
+            ),
+        },
+        "stages": {
+            "stop_grad_selected_chunk_projection": {
+                "calls": len(calls),
+                "failed_calls": 0,
+                "call_measurements": calls,
+            }
+        },
+    }
+
+
+def _selected_attribution_storage_pair(tmp_path, *, reference=None, candidate=None):
+    return _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_attribution_storage="graph_retaining_v1",
+        candidate_selected_attribution_storage="terminal_detached_v1",
+        reference_selected_attribution_storage_instrumentation=(
+            reference
+            if reference is not None
+            else _selected_attribution_storage_instrumentation("graph_retaining_v1")
+        ),
+        candidate_selected_attribution_storage_instrumentation=(
+            candidate
+            if candidate is not None
+            else _selected_attribution_storage_instrumentation("terminal_detached_v1")
+        ),
+    )
+
+
+def test_selected_attribution_storage_ab_requires_graph_lifetime_receipts(
+    tmp_path,
+) -> None:
+    reference, candidate = _selected_attribution_storage_pair(tmp_path)
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        require_canonical_stop_gradient_selected_attribution_storage_ab=True,
+    )
+
+    assert report["qualification_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    contract = report["stop_gradient_selected_attribution_storage_ab_contract"]
+    assert contract["passed"] is True
+    assert contract["checks"] == {
+        "canonical_identity_strategies": True,
+        "reference_graph_retaining_receipts": True,
+        "candidate_terminal_detached_receipts": True,
+        "cross_side_workload_equal": True,
+    }
+    assert contract["reference_runtime"]["coordinates"] == [
+        [0, 0],
+        [0, 2],
+        [3, 0],
+    ]
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing_execution_records",
+        "malformed_record",
+        "input_graph_missing",
+        "reference_stored_graph_missing",
+        "candidate_stored_graph_retained",
+        "candidate_not_terminal_detached",
+        "storage_not_shared",
+        "stage_receipt_mismatch",
+        "aggregate_counter_mismatch",
+        "noncanonical_order",
+        "cross_side_workload_mismatch",
+    ],
+)
+def test_selected_attribution_storage_ab_fails_closed_on_receipt_defects(
+    tmp_path,
+    defect: str,
+) -> None:
+    reference_runtime = _selected_attribution_storage_instrumentation(
+        "graph_retaining_v1"
+    )
+    candidate_runtime = _selected_attribution_storage_instrumentation(
+        "terminal_detached_v1"
+    )
+    reference_records = reference_runtime["execution_records"][
+        "stop_gradient_selected_attribution_storage"
+    ]
+    candidate_records = candidate_runtime["execution_records"][
+        "stop_gradient_selected_attribution_storage"
+    ]
+    reference_calls = reference_runtime["stages"][
+        "stop_grad_selected_chunk_projection"
+    ]["call_measurements"]
+    candidate_calls = candidate_runtime["stages"][
+        "stop_grad_selected_chunk_projection"
+    ]["call_measurements"]
+    if defect == "missing_execution_records":
+        candidate_runtime.pop("execution_records")
+    elif defect == "malformed_record":
+        candidate_records[0] = None
+    elif defect == "input_graph_missing":
+        candidate_records[0]["input_grad_fn_retained"] = False
+        candidate_calls[0]["metadata"]["input_grad_fn_retained"] = False
+    elif defect == "reference_stored_graph_missing":
+        reference_records[0]["stored_grad_fn_retained"] = False
+        reference_calls[0]["metadata"]["stored_grad_fn_retained"] = False
+    elif defect == "candidate_stored_graph_retained":
+        candidate_records[0]["stored_requires_grad"] = True
+        candidate_calls[0]["metadata"]["stored_requires_grad"] = True
+    elif defect == "candidate_not_terminal_detached":
+        candidate_records[0]["terminal_detached"] = False
+        candidate_calls[0]["metadata"]["terminal_detached"] = False
+    elif defect == "storage_not_shared":
+        candidate_records[0]["shares_projection_storage"] = False
+        candidate_calls[0]["metadata"]["shares_projection_storage"] = False
+    elif defect == "stage_receipt_mismatch":
+        candidate_calls[0]["metadata"]["stored_grad_fn_retained"] = True
+    elif defect == "aggregate_counter_mismatch":
+        candidate_runtime["counters"][
+            "stop_gradient_selected_attribution_storage_execution_count"
+        ] = 2
+    elif defect == "noncanonical_order":
+        candidate_records[0], candidate_records[1] = (
+            candidate_records[1],
+            candidate_records[0],
+        )
+        candidate_calls[0]["metadata"], candidate_calls[1]["metadata"] = (
+            candidate_calls[1]["metadata"],
+            candidate_calls[0]["metadata"],
+        )
+    else:
+        candidate_calls[0]["metadata"]["source_token_count"] = 4
+        candidate_calls[0]["metadata"]["projected_shape"] = [2, 1, 4]
+
+    reference, candidate = _selected_attribution_storage_pair(
+        tmp_path,
+        reference=reference_runtime,
+        candidate=candidate_runtime,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS
+        ),
+        require_canonical_stop_gradient_selected_attribution_storage_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    assert (
+        report["stop_gradient_selected_attribution_storage_ab_contract"]["passed"]
+        is False
+    )
+
+
+@pytest.mark.parametrize("candidate_strategy", [_UNSET, "graph_retaining_v1"])
+def test_selected_attribution_storage_ab_rejects_missing_or_wrong_identity_strategy(
+    tmp_path,
+    candidate_strategy: object,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_attribution_storage="graph_retaining_v1",
+        candidate_selected_attribution_storage=candidate_strategy,
+        reference_selected_attribution_storage_instrumentation=(
+            _selected_attribution_storage_instrumentation("graph_retaining_v1")
+        ),
+        candidate_selected_attribution_storage_instrumentation=(
+            _selected_attribution_storage_instrumentation("terminal_detached_v1")
+        ),
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS
+        ),
+        require_canonical_stop_gradient_selected_attribution_storage_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    contract = report["stop_gradient_selected_attribution_storage_ab_contract"]
+    assert contract["checks"]["canonical_identity_strategies"] is False
+
+
+def test_selected_attribution_storage_strategy_is_scalar_allowlist_only(
+    tmp_path,
+) -> None:
+    reference, candidate = _selected_attribution_storage_pair(tmp_path)
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config."
+                "stop_gradient_selected_attribution_storage.*"
+            ],
+        )
+
+
+def test_selected_attribution_storage_ab_cli_is_strict_and_non_overridable(
+    tmp_path,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--reference",
+            str(tmp_path / "reference"),
+            "--candidate",
+            str(tmp_path / "candidate"),
+            "--output",
+            str(tmp_path / "report.json"),
+            "--stop-gradient-selected-attribution-storage-ab",
+        ]
+    )
+
+    options = comparison_options(args)
+    assert options["allowed_identity_difference_paths"] == (
+        STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_same_gpu_family"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+    assert options["require_canonical_stop_gradient_selected_attribution_storage_ab"]
+    assert options["tolerances"] == {
+        group: NumericTolerance(absolute=0.0, relative=0.0)
+        for group in TOLERANCE_GROUPS
+    }
+
+    args.allow_identity_difference = ["artifact_identity.code_revision.*"]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        comparison_options(args)
+    args.allow_identity_difference = []
+    args.target_atol = 1e-6
+    with pytest.raises(ValueError, match="fixes every numerical tolerance at zero"):
+        comparison_options(args)
+    args.target_atol = None
+    args.stop_gradient_selected_attribution_forward_ab = True
     with pytest.raises(ValueError, match="mutually exclusive"):
         comparison_options(args)
 

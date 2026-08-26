@@ -74,6 +74,11 @@ from circuits.tracing.stop_gradient_selected_attribution_execution import (
     StopGradientSelectedAttributionForwardExecution,
     resolve_stop_gradient_selected_attribution_forward_execution,
 )
+from circuits.tracing.stop_gradient_selected_attribution_storage import (
+    DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE,
+    StopGradientSelectedAttributionStorage,
+    resolve_stop_gradient_selected_attribution_storage,
+)
 from circuits.tracing.utils import Edge, NeuronIdx, Node, collect_neuron_acts
 
 BLACKLISTED_NEURONS: dict[str, list[NeuronIdx]] = {
@@ -163,6 +168,8 @@ class ADAGConfig:
     selected_attribution_neuron_lane_chunk_size: int | None = None
     # Stop-gradient selected-attribution forward loop only.
     stop_gradient_selected_attribution_forward_execution: StopGradientSelectedAttributionForwardExecution = DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION
+    # Compact stop-gradient selected-attribution projection lifetime only.
+    stop_gradient_selected_attribution_storage: StopGradientSelectedAttributionStorage = DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
@@ -188,6 +195,9 @@ class ADAGConfig:
         )
         resolve_stop_gradient_selected_attribution_forward_execution(
             self.stop_gradient_selected_attribution_forward_execution
+        )
+        resolve_stop_gradient_selected_attribution_storage(
+            self.stop_gradient_selected_attribution_storage
         )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -220,6 +230,10 @@ class ADAGConfig:
             self.stop_gradient_selected_attribution_forward_execution = (
                 DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION
             )
+        if "stop_gradient_selected_attribution_storage" not in state:
+            self.stop_gradient_selected_attribution_storage = (
+                DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE
+            )
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
@@ -243,6 +257,9 @@ class ADAGConfig:
         )
         resolve_stop_gradient_selected_attribution_forward_execution(
             self.stop_gradient_selected_attribution_forward_execution
+        )
+        resolve_stop_gradient_selected_attribution_storage(
+            self.stop_gradient_selected_attribution_storage
         )
 
 
@@ -387,6 +404,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     stop_gradient_selected_attribution_forward_execution = (
         config.stop_gradient_selected_attribution_forward_execution
     )
+    stop_gradient_selected_attribution_storage = (
+        config.stop_gradient_selected_attribution_storage
+    )
     embedding_edge_materialization = config.embedding_edge_materialization
     cross_layer_jacobian_execution = config.cross_layer_jacobian_execution
     if instrumentation is not None:
@@ -425,6 +445,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "stop_gradient_selected_attribution_forward_execution",
             stop_gradient_selected_attribution_forward_execution,
+        )
+        instrumentation.set_counter(
+            "stop_gradient_selected_attribution_storage",
+            stop_gradient_selected_attribution_storage,
         )
         instrumentation.set_counter(
             "embedding_edge_materialization",
@@ -825,6 +849,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 ),
                 selected_attribution_forward_execution=(
                     stop_gradient_selected_attribution_forward_execution
+                ),
+                selected_attribution_storage=(
+                    stop_gradient_selected_attribution_storage
                 ),
             )
         # store neuron attributions and contributions (keep on CPU to save GPU memory)

@@ -40,6 +40,11 @@ from circuits.tracing.stop_gradient_selected_attribution_execution import (
     StopGradientSelectedAttributionForwardExecution,
     run_stop_gradient_selected_attribution_forward,
 )
+from circuits.tracing.stop_gradient_selected_attribution_storage import (
+    DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE,
+    StopGradientSelectedAttributionStorage,
+    store_stop_gradient_selected_attribution,
+)
 from circuits.tracing.utils import NeuronIdx
 
 DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE = 50
@@ -636,6 +641,9 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
     selected_attribution_forward_execution: (
         StopGradientSelectedAttributionForwardExecution
     ) = DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION,
+    selected_attribution_storage: StopGradientSelectedAttributionStorage = (
+        DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE
+    ),
 ) -> tuple[torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions from source tokens and contributions to target tokens
@@ -862,6 +870,7 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                         "source_token_count": len(src_tokens),
                         "raw_vjp_result_shape": list(layer_grad_attr.shape),
                         "retained_chunk_count_before": len(layer_attr_chunks),
+                        "selected_attribution_storage": selected_attribution_storage,
                     },
                 ) as projection_measurement:
                     layer_attr = _project_stop_gradient_selected_attribution_vjp(
@@ -869,6 +878,14 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                         embeds,
                         src_tokens,
                     )
+                    stored_layer_attr = store_stop_gradient_selected_attribution(
+                        layer_attr,
+                        strategy=selected_attribution_storage,
+                        layer=lid,
+                        chunk_start=chunk_start,
+                        instrumentation=instrumentation,
+                    )
+                    layer_attr = stored_layer_attr.tensor
 
                     layer_attr_chunks.append(layer_attr)
                     layer_neuron_acts_chunks.append(layer_neuron_acts.detach())
@@ -880,9 +897,27 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
                         projection_measurement.metadata[
                             "retained_chunk_count_after"
                         ] = len(layer_attr_chunks)
+                        projection_measurement.metadata["input_requires_grad"] = (
+                            stored_layer_attr.input_requires_grad
+                        )
+                        projection_measurement.metadata["input_grad_fn_retained"] = (
+                            stored_layer_attr.input_grad_fn_retained
+                        )
+                        projection_measurement.metadata["stored_requires_grad"] = (
+                            stored_layer_attr.stored_requires_grad
+                        )
+                        projection_measurement.metadata["stored_grad_fn_retained"] = (
+                            stored_layer_attr.stored_grad_fn_retained
+                        )
+                        projection_measurement.metadata["terminal_detached"] = (
+                            stored_layer_attr.terminal_detached
+                        )
+                        projection_measurement.metadata["shares_projection_storage"] = (
+                            stored_layer_attr.shares_projection_storage
+                        )
 
                     # Clean up memory after each chunk
-                    del layer_grad_attr, layer_attr, grad_outputs
+                    del layer_grad_attr, layer_attr, stored_layer_attr, grad_outputs
                     torch.cuda.empty_cache()
 
             with cuda_memory_observation_stage(
