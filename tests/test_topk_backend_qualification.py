@@ -15,6 +15,7 @@ from circuits.tracing.backend_qualification import (
     SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
+    SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS,
     STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS,
     STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_IDENTITY_PATHS,
@@ -31,6 +32,7 @@ from scripts.bonafide.topk_backend_qualification import (
 from tests.test_teacher_forced_trace import _topk_trace
 
 _UNSET = object()
+_OMIT = object()
 
 
 def _manifest(
@@ -49,6 +51,8 @@ def _manifest(
     selected_attribution_neuron_lane_chunk_size: object = _UNSET,
     stop_gradient_selected_attribution_forward_execution: object = _UNSET,
     stop_gradient_selected_attribution_storage: object = _UNSET,
+    selected_target_logit_execution: object = _UNSET,
+    selected_target_logit_ig_steps: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -133,6 +137,17 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "stop_gradient_selected_attribution_storage"
         ] = stop_gradient_selected_attribution_storage
+    if selected_target_logit_execution is not _UNSET:
+        manifest["artifact_identity"]["adag_config"][
+            "selected_target_logit_execution"
+        ] = selected_target_logit_execution
+        if selected_target_logit_ig_steps is not _OMIT:
+            manifest["artifact_identity"]["adag_config"]["ig_steps"] = (
+                None
+                if selected_target_logit_ig_steps is _UNSET
+                else selected_target_logit_ig_steps
+            )
+        manifest["artifact_identity"]["adag_config"]["center_logits"] = False
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -257,6 +272,12 @@ def _save_pair(
     candidate_selected_attribution_storage: object = _UNSET,
     reference_selected_attribution_storage_instrumentation: dict | None = None,
     candidate_selected_attribution_storage_instrumentation: dict | None = None,
+    reference_selected_target_logit_execution: object = _UNSET,
+    candidate_selected_target_logit_execution: object = _UNSET,
+    reference_selected_target_logit_ig_steps: object = _UNSET,
+    candidate_selected_target_logit_ig_steps: object = _UNSET,
+    reference_selected_target_logit_instrumentation: dict | None = None,
+    candidate_selected_target_logit_instrumentation: dict | None = None,
     reference_stop_gradient_embed_receipts: list[dict] | None = None,
     candidate_stop_gradient_embed_receipts: list[dict] | None = None,
     reference_dtype: str = "bfloat16",
@@ -375,6 +396,14 @@ def _save_pair(
         candidate.circuit_data.trace_metadata["instrumentation"] = (
             candidate_selected_attribution_storage_instrumentation
         )
+    if reference_selected_target_logit_instrumentation is not None:
+        reference.circuit_data.trace_metadata["instrumentation"] = (
+            reference_selected_target_logit_instrumentation
+        )
+    if candidate_selected_target_logit_instrumentation is not None:
+        candidate.circuit_data.trace_metadata["instrumentation"] = (
+            candidate_selected_target_logit_instrumentation
+        )
     reference_path = tmp_path / "reference"
     candidate_path = tmp_path / "candidate"
     save_topk_compact_trace(
@@ -409,6 +438,8 @@ def _save_pair(
             stop_gradient_selected_attribution_storage=(
                 reference_selected_attribution_storage
             ),
+            selected_target_logit_execution=(reference_selected_target_logit_execution),
+            selected_target_logit_ig_steps=reference_selected_target_logit_ig_steps,
         ),
     )
     save_topk_compact_trace(
@@ -443,6 +474,8 @@ def _save_pair(
             stop_gradient_selected_attribution_storage=(
                 candidate_selected_attribution_storage
             ),
+            selected_target_logit_execution=(candidate_selected_target_logit_execution),
+            selected_target_logit_ig_steps=candidate_selected_target_logit_ig_steps,
         ),
     )
     return reference_path, candidate_path
@@ -1606,6 +1639,269 @@ def test_selected_attribution_storage_ab_cli_is_strict_and_non_overridable(
     args.stop_gradient_selected_attribution_forward_ab = True
     with pytest.raises(ValueError, match="mutually exclusive"):
         comparison_options(args)
+
+
+def _selected_target_logit_instrumentation(
+    strategy: str,
+    *,
+    execution_indexes: tuple[int | None, ...] = (None,),
+) -> dict:
+    full = strategy == "full_logits_v1"
+    head_positions = 9 if full else 3
+    records = [
+        {
+            "execution": strategy,
+            "execution_index": execution_index,
+            "batch_size": 1,
+            "sequence_position_count": 9,
+            "selected_position_count": 3,
+            "unique_selected_position_count": 2,
+            "vocab_size": 11,
+            "lm_head_input_shape": [1, head_positions, 5],
+            "lm_head_output_shape": [1, head_positions, 11],
+            "selected_position_logit_shape": [1, 3, 11],
+            "target_logit_shape": [3, 1],
+            "causal_lm_forward_completed": True,
+            "selected_position_request_forwarded": not full,
+            "full_sequence_logits_materialized": full,
+            "selected_position_logits_materialized": True,
+            "center_logits": False,
+        }
+        for execution_index in execution_indexes
+    ]
+    execution_count = len(records)
+    return {
+        "execution_records": {"selected_target_logit_execution": records},
+        "counters": {
+            "selected_target_logit_execution": strategy,
+            "selected_target_logit_execution_count": execution_count,
+            f"selected_target_logit_{strategy}_execution_count": execution_count,
+            "selected_target_logit_full_sequence_logits_materialized_count": (
+                execution_count if full else 0
+            ),
+            "selected_target_logit_selected_position_logits_materialized_count": (
+                execution_count
+            ),
+            "selected_target_logit_lm_head_position_rows": (
+                head_positions * execution_count
+            ),
+        },
+    }
+
+
+def _selected_target_logit_pair(
+    tmp_path,
+    *,
+    candidate_runtime=None,
+    ig_steps: object = None,
+    reference_runtime=None,
+):
+    expected_indexes = (
+        tuple(range(ig_steps + 1))
+        if type(ig_steps) is int and ig_steps > 0
+        else (None,)
+    )
+    return _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_target_logit_execution="full_logits_v1",
+        candidate_selected_target_logit_execution="selected_position_logits_v1",
+        reference_selected_target_logit_ig_steps=ig_steps,
+        candidate_selected_target_logit_ig_steps=ig_steps,
+        reference_selected_target_logit_instrumentation=(
+            reference_runtime
+            if reference_runtime is not None
+            else _selected_target_logit_instrumentation(
+                "full_logits_v1",
+                execution_indexes=expected_indexes,
+            )
+        ),
+        candidate_selected_target_logit_instrumentation=(
+            candidate_runtime
+            if candidate_runtime is not None
+            else _selected_target_logit_instrumentation(
+                "selected_position_logits_v1",
+                execution_indexes=expected_indexes,
+            )
+        ),
+    )
+
+
+def test_selected_target_logit_execution_ab_requires_exact_row_receipts(
+    tmp_path,
+) -> None:
+    reference, candidate = _selected_target_logit_pair(tmp_path)
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        require_canonical_selected_target_logit_execution_ab=True,
+    )
+
+    assert report["qualification_passed"] is True
+    contract = report["selected_target_logit_execution_ab_contract"]
+    assert contract["passed"] is True
+    assert contract["checks"]["aggregate_lm_head_row_reduction"] is True
+    assert contract["reference_runtime"]["lm_head_position_rows"] == 9
+    assert contract["candidate_runtime"]["lm_head_position_rows"] == 3
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["full_materialized", "head_rows", "workload", "counter", "no_row_reduction"],
+)
+def test_selected_target_logit_execution_ab_fails_closed_on_receipt_defects(
+    tmp_path,
+    defect: str,
+) -> None:
+    runtime = _selected_target_logit_instrumentation("selected_position_logits_v1")
+    record = runtime["execution_records"]["selected_target_logit_execution"][0]
+    if defect == "full_materialized":
+        record["full_sequence_logits_materialized"] = True
+    elif defect == "head_rows":
+        record["lm_head_input_shape"] = [1, 9, 5]
+        record["lm_head_output_shape"] = [1, 9, 11]
+    elif defect == "workload":
+        record["selected_position_count"] = 2
+    elif defect == "counter":
+        runtime["counters"]["selected_target_logit_lm_head_position_rows"] = 9
+    else:
+        record["selected_position_count"] = 9
+        record["lm_head_input_shape"] = [1, 9, 5]
+        record["lm_head_output_shape"] = [1, 9, 11]
+        record["selected_position_logit_shape"] = [1, 9, 11]
+        record["target_logit_shape"] = [9, 1]
+        runtime["counters"]["selected_target_logit_lm_head_position_rows"] = 9
+    reference, candidate = _selected_target_logit_pair(
+        tmp_path, candidate_runtime=runtime
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS
+        ),
+        require_canonical_selected_target_logit_execution_ab=True,
+    )
+    assert report["validation_passed"] is False
+    contract = report["selected_target_logit_execution_ab_contract"]
+    assert contract["passed"] is False
+    if defect in {"counter", "no_row_reduction"}:
+        assert contract["checks"]["aggregate_lm_head_row_reduction"] is False
+
+
+def test_selected_target_logit_execution_ab_rejects_extra_null_ig_record(
+    tmp_path,
+) -> None:
+    candidate_runtime = _selected_target_logit_instrumentation(
+        "selected_position_logits_v1",
+        execution_indexes=(None, None),
+    )
+    reference, candidate = _selected_target_logit_pair(
+        tmp_path,
+        candidate_runtime=candidate_runtime,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS
+        ),
+        require_canonical_selected_target_logit_execution_ab=True,
+    )
+    contract = report["selected_target_logit_execution_ab_contract"]
+    assert report["validation_passed"] is False
+    assert contract["candidate_runtime"]["expected_execution_indexes"] == [None]
+    assert contract["candidate_runtime"]["observed_execution_indexes"] == [None, None]
+
+
+@pytest.mark.parametrize("execution_indexes", [(0, 0, 2), (0, 1)])
+def test_selected_target_logit_execution_ab_rejects_wrong_ig_indexes_or_count(
+    tmp_path,
+    execution_indexes: tuple[int, ...],
+) -> None:
+    candidate_runtime = _selected_target_logit_instrumentation(
+        "selected_position_logits_v1",
+        execution_indexes=execution_indexes,
+    )
+    reference, candidate = _selected_target_logit_pair(
+        tmp_path,
+        ig_steps=2,
+        candidate_runtime=candidate_runtime,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS
+        ),
+        require_canonical_selected_target_logit_execution_ab=True,
+    )
+    contract = report["selected_target_logit_execution_ab_contract"]
+    assert report["validation_passed"] is False
+    assert contract["candidate_runtime"]["expected_execution_indexes"] == [0, 1, 2]
+    assert contract["candidate_runtime"]["observed_execution_indexes"] == list(
+        execution_indexes
+    )
+
+
+@pytest.mark.parametrize("ig_steps", [_OMIT, 0, True, "2"])
+def test_selected_target_logit_execution_ab_rejects_missing_or_malformed_ig_steps(
+    tmp_path,
+    ig_steps: object,
+) -> None:
+    reference, candidate = _selected_target_logit_pair(
+        tmp_path,
+        ig_steps=ig_steps,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS
+        ),
+        require_canonical_selected_target_logit_execution_ab=True,
+    )
+    contract = report["selected_target_logit_execution_ab_contract"]
+    assert report["validation_passed"] is False
+    assert contract["reference_runtime"]["config_valid"] is False
+    assert contract["candidate_runtime"]["config_valid"] is False
+
+
+def test_selected_target_logit_execution_ab_cli_is_strict_and_exact(tmp_path) -> None:
+    args = build_parser().parse_args(
+        [
+            "--reference",
+            str(tmp_path / "reference"),
+            "--candidate",
+            str(tmp_path / "candidate"),
+            "--output",
+            str(tmp_path / "report.json"),
+            "--selected-target-logit-execution-ab",
+        ]
+    )
+    options = comparison_options(args)
+    assert options["allowed_identity_difference_paths"] == (
+        SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+    assert options["require_canonical_selected_target_logit_execution_ab"] is True
+    assert options["tolerances"] == {
+        group: NumericTolerance(absolute=0.0, relative=0.0)
+        for group in TOLERANCE_GROUPS
+    }
 
 
 def _selected_neuron_receipts() -> list[dict]:

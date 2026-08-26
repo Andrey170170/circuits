@@ -69,6 +69,11 @@ from circuits.tracing.instrumentation import (
     instrumentation_stage,
     record_selection_predictors,
 )
+from circuits.tracing.selected_target_logit_execution import (
+    DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION,
+    SelectedTargetLogitExecution,
+    validate_selected_target_logit_configuration,
+)
 from circuits.tracing.stop_gradient_selected_attribution_execution import (
     DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION,
     StopGradientSelectedAttributionForwardExecution,
@@ -170,6 +175,10 @@ class ADAGConfig:
     stop_gradient_selected_attribution_forward_execution: StopGradientSelectedAttributionForwardExecution = DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION
     # Compact stop-gradient selected-attribution projection lifetime only.
     stop_gradient_selected_attribution_storage: StopGradientSelectedAttributionStorage = DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE
+    # Ordinary selected attribution/contribution target-logit forward only.
+    selected_target_logit_execution: SelectedTargetLogitExecution = (
+        DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION
+    )
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
@@ -198,6 +207,10 @@ class ADAGConfig:
         )
         resolve_stop_gradient_selected_attribution_storage(
             self.stop_gradient_selected_attribution_storage
+        )
+        validate_selected_target_logit_configuration(
+            self.selected_target_logit_execution,
+            center_logits=self.center_logits,
         )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -234,6 +247,10 @@ class ADAGConfig:
             self.stop_gradient_selected_attribution_storage = (
                 DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE
             )
+        if "selected_target_logit_execution" not in state:
+            self.selected_target_logit_execution = (
+                DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION
+            )
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
@@ -260,6 +277,10 @@ class ADAGConfig:
         )
         resolve_stop_gradient_selected_attribution_storage(
             self.stop_gradient_selected_attribution_storage
+        )
+        validate_selected_target_logit_configuration(
+            self.selected_target_logit_execution,
+            center_logits=self.center_logits,
         )
 
 
@@ -407,6 +428,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     stop_gradient_selected_attribution_storage = (
         config.stop_gradient_selected_attribution_storage
     )
+    selected_target_logit_execution = config.selected_target_logit_execution
     embedding_edge_materialization = config.embedding_edge_materialization
     cross_layer_jacobian_execution = config.cross_layer_jacobian_execution
     if instrumentation is not None:
@@ -449,6 +471,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "stop_gradient_selected_attribution_storage",
             stop_gradient_selected_attribution_storage,
+        )
+        instrumentation.set_counter(
+            "selected_target_logit_execution",
+            selected_target_logit_execution,
         )
         instrumentation.set_counter(
             "embedding_edge_materialization",
@@ -761,6 +787,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                         embed_contribution_target_lane_chunk_size=(
                             selected_embed_contribution_target_lane_chunk_size
                         ),
+                        selected_target_logit_execution=(
+                            selected_target_logit_execution
+                        ),
                     )
                 )
             else:
@@ -786,6 +815,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                         ),
                         embed_contribution_target_lane_chunk_size=(
                             selected_embed_contribution_target_lane_chunk_size
+                        ),
+                        selected_target_logit_execution=(
+                            selected_target_logit_execution
                         ),
                     )
                 )

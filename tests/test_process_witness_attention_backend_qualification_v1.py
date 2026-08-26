@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -21,6 +22,129 @@ CONTRIBUTION_EXECUTIONS = (
     "source_leaf_v1",
     "sparse_source_leaf_v1",
 )
+
+
+def _selected_target_logit_record(
+    *,
+    sequence_count: int = 4,
+    selected_count: int = 1,
+) -> dict:
+    batch_size = 2
+    vocab_size = 7
+    return {
+        "execution": "selected_position_logits_v1",
+        "execution_index": None,
+        "batch_size": batch_size,
+        "sequence_position_count": sequence_count,
+        "selected_position_count": selected_count,
+        "unique_selected_position_count": min(selected_count, sequence_count),
+        "vocab_size": vocab_size,
+        "lm_head_input_shape": [batch_size, selected_count, 3],
+        "lm_head_output_shape": [batch_size, selected_count, vocab_size],
+        "selected_position_logit_shape": [batch_size, selected_count, vocab_size],
+        "target_logit_shape": [selected_count, batch_size],
+        "causal_lm_forward_completed": True,
+        "selected_position_request_forwarded": True,
+        "full_sequence_logits_materialized": False,
+        "selected_position_logits_materialized": True,
+        "center_logits": False,
+    }
+
+
+def _run_launcher_postflight(
+    tmp_path: Path,
+    record: dict,
+    *,
+    lm_head_position_rows: int | None = None,
+) -> subprocess.CompletedProcess[str]:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    start_marker = "    'import json,pathlib,sys\n"
+    start = launcher.rindex(start_marker) + len("    '")
+    end = launcher.index('\' \\\n    "$SUMMARY_JSONL"', start)
+    postflight = launcher[start:end]
+
+    artifact_root = tmp_path / "artifact"
+    artifact_root.mkdir()
+    runtime_environment = {
+        "gpu_runtime": {
+            "devices": [{"name": "NVIDIA A100 80GB PCIe"}],
+            "driver_versions": {"cuda_driver": "qualification-test"},
+        }
+    }
+    strategy = "selected_position_logits_v1"
+    adag_config = {
+        "stop_gradient_attention_backend": "flash_sdpa_causal_v1",
+        "stop_gradient_contribution_execution": "source_leaf_v1",
+        "stop_gradient_contribution_target_lane_chunk_size": None,
+        "selected_target_logit_execution": strategy,
+        "center_logits": False,
+        "ig_steps": None,
+    }
+    manifest = {
+        "artifact_identity": {
+            "adag_config": adag_config,
+            "runtime_environment": runtime_environment,
+        },
+        "runtime_environment": runtime_environment,
+    }
+    (artifact_root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    observed_rows = (
+        record["batch_size"] * record["lm_head_input_shape"][1]
+        if lm_head_position_rows is None
+        else lm_head_position_rows
+    )
+    instrumentation = {
+        "execution_records": {"selected_target_logit_execution": [record]},
+        "counters": {
+            "selected_target_logit_execution_count": 1,
+            f"selected_target_logit_{strategy}_execution_count": 1,
+            "selected_target_logit_full_sequence_logits_materialized_count": 0,
+            "selected_target_logit_selected_position_logits_materialized_count": 1,
+            "selected_target_logit_lm_head_position_rows": observed_rows,
+        },
+    }
+    summary_path = tmp_path / "summary.jsonl"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "source_width1_artifact_id": "source-artifact",
+                "artifact_path": str(artifact_root),
+                "runtime_environment": runtime_environment,
+                "instrumentation": instrumentation,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            postflight,
+            str(summary_path),
+            "source-artifact",
+            str(artifact_root),
+            "flash_sdpa_causal_v1",
+            "source_leaf_v1",
+            "none",
+            "NVIDIA A100 80GB PCIe",
+            "",
+            "",
+            "",
+            "legacy_unbound",
+            "legacy_unbound",
+            "legacy_unbound",
+            "legacy_unbound",
+            "legacy_unbound",
+            "legacy_unbound",
+            strategy,
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def _config(backend: str) -> dict:
@@ -67,6 +191,7 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE",
         "EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION",
         "EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE",
+        "EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
         "EXPECTED_EMBEDDING_EDGE_MATERIALIZATION",
         "EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION",
@@ -84,6 +209,8 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "legacy-unbound qualification config unexpectedly declares stop-gradient selected-attribution forward execution",
         "run config stop-gradient selected-attribution storage disagrees",
         "legacy-unbound qualification config unexpectedly declares stop-gradient selected-attribution storage",
+        "run config selected target-logit execution disagrees",
+        "legacy-unbound qualification config unexpectedly declares selected target-logit execution",
         "saved artifact allocator identity disagrees",
         "saved artifact contribution execution identity disagrees",
         "saved artifact target-lane chunk size identity disagrees",
@@ -97,6 +224,17 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "saved artifact stop-gradient selected-attribution storage identity disagrees",
         "saved artifact lacks exact stop-gradient selected-attribution storage receipts",
         "saved artifact graph-lifetime receipts disagree",
+        "saved artifact selected target-logit execution identity disagrees",
+        "saved artifact selected target-logit qualification requires center_logits=false",
+        "saved artifact lacks exact selected target-logit execution receipts",
+        "saved artifact selected target-logit execution lacks explicit ig_steps",
+        "saved artifact selected target-logit execution has invalid ig_steps",
+        "saved artifact selected target-logit execution indexes disagree with ig_steps",
+        "saved artifact materialization receipts disagree with requested selected target-logit execution",
+        "saved artifact selected target-logit execution has malformed shape receipts",
+        "saved artifact selected target-logit execution record disagrees with requested strategy",
+        "saved artifact selected target-logit LM-head row counter disagrees with records",
+        "saved artifact selected target-logit execution did not reduce LM-head rows",
         "chunk_size_field not in artifact_adag",
         "saved artifact lacks the exact requested allocator runtime receipt",
         "run config embedding-edge materialization disagrees",
@@ -122,6 +260,51 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         assert execution in launcher
     assert '!= "none"' in launcher
     assert "^[1-9][0-9]*$" in launcher
+
+
+def test_launcher_postflight_rejects_malformed_target_logit_shape(
+    tmp_path: Path,
+) -> None:
+    record = _selected_target_logit_record()
+    record["lm_head_output_shape"] = [2, 1, 8]
+
+    completed = _run_launcher_postflight(tmp_path, record)
+
+    assert completed.returncode != 0
+    assert (
+        "saved artifact selected target-logit execution has malformed shape receipts"
+        in completed.stderr
+    )
+
+
+def test_launcher_postflight_rejects_candidate_without_row_reduction(
+    tmp_path: Path,
+) -> None:
+    record = _selected_target_logit_record(sequence_count=4, selected_count=4)
+
+    completed = _run_launcher_postflight(tmp_path, record)
+
+    assert completed.returncode != 0
+    assert (
+        "saved artifact selected target-logit execution did not reduce LM-head rows"
+        in completed.stderr
+    )
+
+
+def test_launcher_postflight_cross_checks_target_logit_row_counter(
+    tmp_path: Path,
+) -> None:
+    completed = _run_launcher_postflight(
+        tmp_path,
+        _selected_target_logit_record(),
+        lm_head_position_rows=99,
+    )
+
+    assert completed.returncode != 0
+    assert (
+        "saved artifact selected target-logit LM-head row counter disagrees with records"
+        in completed.stderr
+    )
 
 
 def test_embedding_edge_materialization_configs_clone_allocator_default() -> None:
@@ -453,6 +636,52 @@ def test_stop_gradient_selected_attribution_storage_configs_are_exact_pair() -> 
             config["artifact_root"]
             == "results/bonafide/process-witness-stop-gradient-selected-"
             "attribution-storage-qualification-v1"
+        )
+        normalized_source_clone = json.loads(json.dumps(config))
+        del normalized_source_clone["adag_config"][field]
+        normalized_source_clone["artifact_root"] = source["artifact_root"]
+        assert normalized_source_clone == source
+        configs.append(config)
+
+    normalized = []
+    for config in configs:
+        copied = json.loads(json.dumps(config))
+        del copied["adag_config"][field]
+        normalized.append(copied)
+    assert normalized[0] == normalized[1]
+
+
+def test_selected_target_logit_execution_configs_are_exact_optimized_pair() -> None:
+    field = "selected_target_logit_execution"
+    source = json.loads(
+        (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_stop_gradient_selected_attribution_storage_"
+            "qualification_terminal_detached_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    configs = []
+    for strategy in ("full_logits_v1", "selected_position_logits_v1"):
+        path = (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_selected_target_logit_execution_qualification_"
+            f"{strategy}.json"
+        )
+        config = json.loads(path.read_text(encoding="utf-8"))
+        assert config["adag_config"][field] == strategy
+        assert config["adag_config"]["stop_gradient_selected_attribution_storage"] == (
+            "terminal_detached_v1"
+        )
+        assert (
+            config["adag_config"][
+                "stop_gradient_selected_attribution_forward_execution"
+            ]
+            == "prefix_stop_v1"
+        )
+        assert (
+            config["artifact_root"]
+            == "results/bonafide/process-witness-selected-target-logit-"
+            "execution-qualification-v1"
         )
         normalized_source_clone = json.loads(json.dumps(config))
         del normalized_source_clone["adag_config"][field]

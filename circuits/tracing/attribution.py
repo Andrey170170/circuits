@@ -35,6 +35,11 @@ from circuits.tracing.instrumentation import (
     cuda_memory_instrumentation_stage,
     cuda_memory_observation_stage,
 )
+from circuits.tracing.selected_target_logit_execution import (
+    DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION,
+    SelectedTargetLogitExecution,
+    run_selected_target_logits,
+)
 from circuits.tracing.stop_gradient_selected_attribution_execution import (
     DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION,
     StopGradientSelectedAttributionForwardExecution,
@@ -1209,6 +1214,9 @@ def _get_neuron_attr_and_contrib(
     contribution_target_lane_chunk_size: int | None = None,
     embed_contribution_target_lane_chunk_size: int | None = None,
     contribution_execution_index: int | None = None,
+    selected_target_logit_execution: SelectedTargetLogitExecution = (
+        DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION
+    ),
 ) -> (
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx]]
     | tuple[
@@ -1277,11 +1285,20 @@ def _get_neuron_attr_and_contrib(
         else:
             model.model.layers[lid].mlp.down_proj.register_forward_hook(_hook(lid))
 
-    # forward pass
-    out = model(inputs_embeds=embeds, attention_mask=attention_masks)
-    logits = out.logits
-    if center_logits:
-        logits -= logits.mean(dim=-1)
+    # The execution module owns full-vs-selected position materialization,
+    # final-normalized LM-head execution, centering, and batch/token gathering.
+    target_logit_result = run_selected_target_logits(
+        model,
+        embeds,
+        attention_masks,
+        focus_positions,
+        focus_logits,
+        execution=selected_target_logit_execution,
+        center_logits=center_logits,
+        instrumentation=instrumentation,
+        execution_index=contribution_execution_index,
+    )
+    tgt_vec = target_logit_result.target_logits
 
     # process neuron activations layer by layer for memory efficiency
     attr_list = []
@@ -1415,11 +1432,6 @@ def _get_neuron_attr_and_contrib(
     torch.cuda.empty_cache()
 
     # contribution to tgt tokens
-    tgt_nodes = []
-    for id, p in enumerate(focus_positions):
-        tid = [focus_logit[id] for focus_logit in focus_logits]
-        tgt_nodes.append(logits[torch.arange(logits.shape[0]), p, tid])
-    tgt_vec = torch.stack(tgt_nodes)  # (t, batch)
     t = tgt_vec.size(0)
     needs_full_grad_outputs = (
         embed_contribution_target_lane_chunk_size is None
@@ -1534,6 +1546,9 @@ def _get_neuron_attr_and_contrib_ig(
     instrumentation: TraceInstrumentation | None = None,
     contribution_target_lane_chunk_size: int | None = None,
     embed_contribution_target_lane_chunk_size: int | None = None,
+    selected_target_logit_execution: SelectedTargetLogitExecution = (
+        DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION
+    ),
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions and contributions using Integrated Gradients.
@@ -1592,6 +1607,7 @@ def _get_neuron_attr_and_contrib_ig(
                     embed_contribution_target_lane_chunk_size
                 ),
                 contribution_execution_index=step,
+                selected_target_logit_execution=selected_target_logit_execution,
             )
         )
 

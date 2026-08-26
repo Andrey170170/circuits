@@ -49,6 +49,7 @@ EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE="${EXPECTED_STO
 EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE="${EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE:-legacy_unbound}"
 EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION="${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION:-legacy_unbound}"
 EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE="${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE:-legacy_unbound}"
+EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION="${EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION:-legacy_unbound}"
 
 for path_name in CONFIG MANIFEST ARTIFACT_ROOT UV_PROJECT_ENVIRONMENT; do
     path_value="${!path_name}"
@@ -120,6 +121,13 @@ case "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE" in
     legacy_unbound|graph_retaining_v1|terminal_detached_v1) ;;
     *)
         echo "Unsupported EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE}." >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION" in
+    legacy_unbound|full_logits_v1|selected_position_logits_v1) ;;
+    *)
+        echo "Unsupported EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION=${EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION}." >&2
         exit 2
         ;;
 esac
@@ -254,6 +262,7 @@ expected_selected_attribution_chunk_size=(
 )
 expected_selected_forward_execution=sys.argv[18]
 expected_selected_storage=sys.argv[19]
+expected_selected_target_logit_execution=sys.argv[20]
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -310,6 +319,15 @@ if selected_storage_is_bound:
         raise SystemExit("run config stop-gradient selected-attribution storage disagrees with EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE")
 elif selected_storage_field in adag:
     raise SystemExit("legacy-unbound qualification config unexpectedly declares stop-gradient selected-attribution storage")
+selected_target_logit_field="selected_target_logit_execution"
+selected_target_logit_is_bound=(
+    expected_selected_target_logit_execution != "legacy_unbound"
+)
+if selected_target_logit_is_bound:
+    if selected_target_logit_field not in adag or adag[selected_target_logit_field] != expected_selected_target_logit_execution:
+        raise SystemExit("run config selected target-logit execution disagrees with EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION")
+elif selected_target_logit_field in adag:
+    raise SystemExit("legacy-unbound qualification config unexpectedly declares selected target-logit execution")
 declared_embedding_edge_materialization=adag.get("embedding_edge_materialization")
 if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
@@ -366,7 +384,8 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
         "$EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE" \
         "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" \
-        "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE"
+        "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE" \
+        "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION"
 )"
 
 for target in "$EXPECTED_OUTPUT_DIR" "$SUMMARY_JSONL"; do
@@ -389,6 +408,7 @@ echo "stop_gradient_embed_contribution_target_lane_chunk_size=${EXPECTED_STOP_GR
 echo "selected_attribution_neuron_lane_chunk_size=${EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE}"
 echo "stop_gradient_selected_attribution_forward_execution=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION}"
 echo "stop_gradient_selected_attribution_storage=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE}"
+echo "selected_target_logit_execution=${EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
 echo "cross_layer_jacobian_execution=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-legacy_unbound}"
@@ -477,6 +497,7 @@ expected_selected_attribution_chunk_size=(
 )
 expected_selected_forward_execution=sys.argv[15]
 expected_selected_storage=sys.argv[16]
+expected_selected_target_logit_execution=sys.argv[17]
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -585,6 +606,108 @@ if selected_storage_is_bound:
     expected_detached_count=storage_count if expected_selected_storage == "terminal_detached_v1" else 0
     if stored_graph_count != expected_stored_graph_count or detached_count != expected_detached_count:
         raise SystemExit("saved artifact graph-lifetime receipts disagree with requested selected-attribution storage")
+selected_target_logit_field="selected_target_logit_execution"
+selected_target_logit_is_bound=(
+    expected_selected_target_logit_execution != "legacy_unbound"
+)
+observed_selected_target_logit_execution=artifact_adag.get(selected_target_logit_field)
+if selected_target_logit_is_bound:
+    if selected_target_logit_field not in artifact_adag or observed_selected_target_logit_execution != expected_selected_target_logit_execution:
+        raise SystemExit("saved artifact selected target-logit execution identity disagrees with requested strategy")
+elif selected_target_logit_field in artifact_adag:
+    raise SystemExit("legacy-unbound artifact unexpectedly declares selected target-logit execution")
+if selected_target_logit_is_bound:
+    counters=row.get("instrumentation", {}).get("counters", {})
+    if artifact_adag.get("center_logits") is not False:
+        raise SystemExit("saved artifact selected target-logit qualification requires center_logits=false")
+    if "ig_steps" not in artifact_adag:
+        raise SystemExit("saved artifact selected target-logit execution lacks explicit ig_steps")
+    ig_steps=artifact_adag["ig_steps"]
+    if ig_steps is None:
+        expected_execution_indexes=[None]
+    elif type(ig_steps) is int and ig_steps > 0:
+        expected_execution_indexes=list(range(ig_steps + 1))
+    else:
+        raise SystemExit("saved artifact selected target-logit execution has invalid ig_steps")
+    records=row.get("instrumentation", {}).get("execution_records", {}).get("selected_target_logit_execution")
+    observed_execution_indexes=(
+        [record.get("execution_index") for record in records]
+        if isinstance(records, list) and all(isinstance(record, dict) for record in records)
+        else None
+    )
+    execution_count=counters.get("selected_target_logit_execution_count")
+    strategy_count=counters.get(f"selected_target_logit_{expected_selected_target_logit_execution}_execution_count")
+    full_materialized_count=counters.get("selected_target_logit_full_sequence_logits_materialized_count")
+    selected_materialized_count=counters.get("selected_target_logit_selected_position_logits_materialized_count")
+    lm_head_position_row_count=counters.get("selected_target_logit_lm_head_position_rows")
+    expected_full_count=(execution_count if expected_selected_target_logit_execution == "full_logits_v1" else 0)
+    if execution_count != len(expected_execution_indexes) or strategy_count != execution_count:
+        raise SystemExit("saved artifact lacks exact selected target-logit execution receipts")
+    if observed_execution_indexes != expected_execution_indexes:
+        raise SystemExit("saved artifact selected target-logit execution indexes disagree with ig_steps")
+    if full_materialized_count != expected_full_count or selected_materialized_count != execution_count:
+        raise SystemExit("saved artifact materialization receipts disagree with requested selected target-logit execution")
+    full_strategy=expected_selected_target_logit_execution == "full_logits_v1"
+    observed_lm_head_rows=0
+    full_sequence_baseline_rows=0
+    every_candidate_record_reduces=True
+    for record in records:
+        batch_size=record.get("batch_size")
+        sequence_count=record.get("sequence_position_count")
+        selected_count=record.get("selected_position_count")
+        unique_count=record.get("unique_selected_position_count")
+        vocab_size=record.get("vocab_size")
+        lm_head_input_shape=record.get("lm_head_input_shape")
+        lm_head_output_shape=record.get("lm_head_output_shape")
+        selected_logit_shape=record.get("selected_position_logit_shape")
+        target_logit_shape=record.get("target_logit_shape")
+        expected_head_positions=sequence_count if full_strategy else selected_count
+        shapes_valid=(
+            type(batch_size) is int
+            and batch_size > 0
+            and type(sequence_count) is int
+            and sequence_count > 0
+            and type(selected_count) is int
+            and selected_count > 0
+            and type(unique_count) is int
+            and 0 < unique_count <= min(selected_count, sequence_count)
+            and type(vocab_size) is int
+            and vocab_size > 0
+            and isinstance(lm_head_input_shape, list)
+            and len(lm_head_input_shape) == 3
+            and lm_head_input_shape[:2] == [batch_size, expected_head_positions]
+            and type(lm_head_input_shape[2]) is int
+            and lm_head_input_shape[2] > 0
+            and lm_head_output_shape == [batch_size, expected_head_positions, vocab_size]
+            and selected_logit_shape == [batch_size, selected_count, vocab_size]
+            and target_logit_shape == [selected_count, batch_size]
+        )
+        if not shapes_valid:
+            raise SystemExit("saved artifact selected target-logit execution has malformed shape receipts")
+        execution_receipts_valid=(
+            record.get("execution") == expected_selected_target_logit_execution
+            and record.get("causal_lm_forward_completed") is True
+            and record.get("selected_position_request_forwarded") is (not full_strategy)
+            and record.get("full_sequence_logits_materialized") is full_strategy
+            and record.get("selected_position_logits_materialized") is True
+            and record.get("center_logits") is False
+        )
+        if not execution_receipts_valid:
+            raise SystemExit("saved artifact selected target-logit execution record disagrees with requested strategy")
+        observed_lm_head_rows += batch_size * lm_head_input_shape[1]
+        full_sequence_baseline_rows += batch_size * sequence_count
+        if not full_strategy:
+            every_candidate_record_reduces=(
+                every_candidate_record_reduces
+                and selected_count < sequence_count
+            )
+    if lm_head_position_row_count != observed_lm_head_rows:
+        raise SystemExit("saved artifact selected target-logit LM-head row counter disagrees with records")
+    if not full_strategy and (
+        not every_candidate_record_reduces
+        or observed_lm_head_rows >= full_sequence_baseline_rows
+    ):
+        raise SystemExit("saved artifact selected target-logit execution did not reduce LM-head rows")
 observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materialization")
 if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
@@ -626,4 +749,5 @@ if expected_allocator_policy is not None:
     "$EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE" \
     "$EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE" \
     "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" \
-    "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE"
+    "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE" \
+    "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION"

@@ -89,6 +89,13 @@ STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE_AB_STRATEGIES = (
     "graph_retaining_v1",
     "terminal_detached_v1",
 )
+SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.selected_target_logit_execution",
+)
+SELECTED_TARGET_LOGIT_EXECUTION_AB_STRATEGIES = (
+    "full_logits_v1",
+    "selected_position_logits_v1",
+)
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",
     "selected_target_activations",
@@ -107,6 +114,7 @@ _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config."
     "stop_gradient_selected_attribution_forward_execution",
     "artifact_identity.adag_config.stop_gradient_selected_attribution_storage",
+    "artifact_identity.adag_config.selected_target_logit_execution",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -1882,6 +1890,232 @@ def _stop_gradient_selected_attribution_storage_contract(
     }
 
 
+def _selected_target_logit_execution_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+) -> dict[str, Any]:
+    """Prove full-sequence versus selected-position LM-head execution."""
+
+    namespace = "selected_target_logit_execution"
+    missing = object()
+
+    def instrumentation(artifact: TopKCompactTraceArtifact) -> Any:
+        return artifact.topk_trace.circuit_data.trace_metadata.get("instrumentation")
+
+    def identity_adag(artifact: TopKCompactTraceArtifact) -> Mapping[str, Any] | None:
+        identity = artifact.manifest.get("artifact_identity")
+        adag = identity.get("adag_config") if isinstance(identity, Mapping) else None
+        return adag if isinstance(adag, Mapping) else None
+
+    def validate(
+        raw: Any,
+        *,
+        expected_strategy: str,
+        adag: Mapping[str, Any] | None,
+    ) -> tuple[bool, dict[str, Any]]:
+        ig_steps = (
+            adag.get("ig_steps", missing) if isinstance(adag, Mapping) else missing
+        )
+        ig_steps_valid = ig_steps is None or (type(ig_steps) is int and ig_steps > 0)
+        config_valid = (
+            isinstance(adag, Mapping)
+            and adag.get("selected_target_logit_execution") == expected_strategy
+            and "ig_steps" in adag
+            and ig_steps_valid
+            and adag.get("center_logits") is False
+        )
+        expected_execution_indexes = (
+            ([None] if ig_steps is None else list(range(ig_steps + 1)))
+            if ig_steps_valid
+            else []
+        )
+        if not isinstance(raw, Mapping):
+            return False, {
+                "config_valid": config_valid,
+                "ig_steps": None if ig_steps is missing else ig_steps,
+                "expected_execution_indexes": expected_execution_indexes,
+            }
+        execution_records = raw.get("execution_records")
+        counters = raw.get("counters")
+        records = (
+            execution_records.get(namespace)
+            if isinstance(execution_records, Mapping)
+            else None
+        )
+        if (
+            not isinstance(records, list)
+            or not records
+            or not isinstance(counters, Mapping)
+        ):
+            return False, {
+                "config_valid": config_valid,
+                "ig_steps": None if ig_steps is missing else ig_steps,
+                "expected_execution_indexes": expected_execution_indexes,
+            }
+
+        full_strategy = expected_strategy == "full_logits_v1"
+        records_valid = True
+        workloads: list[dict[str, Any]] = []
+        lm_head_position_rows = 0
+        observed_execution_indexes: list[Any] = []
+        for record in records:
+            if not isinstance(record, Mapping):
+                records_valid = False
+                continue
+            batch = record.get("batch_size")
+            sequence_count = record.get("sequence_position_count")
+            selected_count = record.get("selected_position_count")
+            unique_count = record.get("unique_selected_position_count")
+            vocab_size = record.get("vocab_size")
+            lm_input = record.get("lm_head_input_shape")
+            lm_output = record.get("lm_head_output_shape")
+            selected_shape = record.get("selected_position_logit_shape")
+            target_shape = record.get("target_logit_shape")
+            expected_head_positions = (
+                sequence_count if full_strategy else selected_count
+            )
+            shape_valid = (
+                (
+                    type(batch) is int
+                    and batch > 0
+                    and type(sequence_count) is int
+                    and sequence_count > 0
+                    and type(selected_count) is int
+                    and selected_count > 0
+                    and (full_strategy or selected_count < sequence_count)
+                    and type(unique_count) is int
+                    and 0 < unique_count <= min(selected_count, sequence_count)
+                    and type(vocab_size) is int
+                    and vocab_size > 0
+                    and lm_input == [batch, expected_head_positions, lm_input[2]]
+                    and type(lm_input[2]) is int
+                    and lm_input[2] > 0
+                    and lm_output == [batch, expected_head_positions, vocab_size]
+                    and selected_shape == [batch, selected_count, vocab_size]
+                    and target_shape == [selected_count, batch]
+                )
+                if isinstance(lm_input, list) and len(lm_input) == 3
+                else False
+            )
+            receipt_valid = (
+                record.get("execution") == expected_strategy
+                and record.get("causal_lm_forward_completed") is True
+                and record.get("selected_position_request_forwarded")
+                is (not full_strategy)
+                and record.get("full_sequence_logits_materialized") is full_strategy
+                and record.get("selected_position_logits_materialized") is True
+                and record.get("center_logits") is False
+            )
+            observed_execution_indexes.append(record.get("execution_index"))
+            records_valid = records_valid and shape_valid and receipt_valid
+            if shape_valid:
+                lm_head_position_rows += batch * expected_head_positions
+            workloads.append(
+                {
+                    "execution_index": record.get("execution_index"),
+                    "batch_size": batch,
+                    "sequence_position_count": sequence_count,
+                    "selected_position_count": selected_count,
+                    "unique_selected_position_count": unique_count,
+                    "vocab_size": vocab_size,
+                    "selected_position_logit_shape": selected_shape,
+                    "target_logit_shape": target_shape,
+                    "center_logits": record.get("center_logits"),
+                }
+            )
+        counters_valid = (
+            counters.get("selected_target_logit_execution") == expected_strategy
+            and counters.get("selected_target_logit_execution_count") == len(records)
+            and counters.get(
+                f"selected_target_logit_{expected_strategy}_execution_count"
+            )
+            == len(records)
+            and counters.get(
+                "selected_target_logit_full_sequence_logits_materialized_count"
+            )
+            == (len(records) if full_strategy else 0)
+            and counters.get(
+                "selected_target_logit_selected_position_logits_materialized_count"
+            )
+            == len(records)
+            and counters.get("selected_target_logit_lm_head_position_rows")
+            == lm_head_position_rows
+        )
+        schedule_valid = (
+            config_valid
+            and len(records) == len(expected_execution_indexes)
+            and observed_execution_indexes == expected_execution_indexes
+        )
+        checks = {
+            "artifact_config_and_ig_schedule": schedule_valid,
+            "ordered_execution_receipts": records_valid,
+            "aggregate_counters": counters_valid,
+        }
+        return all(checks.values()), {
+            "strategy": expected_strategy,
+            "config_valid": config_valid,
+            "ig_steps": None if ig_steps is missing else ig_steps,
+            "expected_execution_indexes": expected_execution_indexes,
+            "observed_execution_indexes": observed_execution_indexes,
+            "workloads": workloads,
+            "lm_head_position_rows": lm_head_position_rows,
+            "checks": checks,
+        }
+
+    reference_adag = identity_adag(reference)
+    candidate_adag = identity_adag(candidate)
+    reference_strategy = (
+        reference_adag.get("selected_target_logit_execution")
+        if reference_adag is not None
+        else None
+    )
+    candidate_strategy = (
+        candidate_adag.get("selected_target_logit_execution")
+        if candidate_adag is not None
+        else None
+    )
+    reference_valid, reference_runtime = validate(
+        instrumentation(reference),
+        expected_strategy=SELECTED_TARGET_LOGIT_EXECUTION_AB_STRATEGIES[0],
+        adag=reference_adag,
+    )
+    candidate_valid, candidate_runtime = validate(
+        instrumentation(candidate),
+        expected_strategy=SELECTED_TARGET_LOGIT_EXECUTION_AB_STRATEGIES[1],
+        adag=candidate_adag,
+    )
+    strategy_valid = (
+        reference_strategy == SELECTED_TARGET_LOGIT_EXECUTION_AB_STRATEGIES[0]
+        and candidate_strategy == SELECTED_TARGET_LOGIT_EXECUTION_AB_STRATEGIES[1]
+    )
+    workload_equal = (
+        reference_valid
+        and candidate_valid
+        and reference_runtime["workloads"] == candidate_runtime["workloads"]
+    )
+    aggregate_row_reduction = (
+        reference_valid
+        and candidate_valid
+        and candidate_runtime["lm_head_position_rows"]
+        < reference_runtime["lm_head_position_rows"]
+    )
+    checks = {
+        "canonical_identity_strategies": strategy_valid,
+        "reference_full_logits_receipts": reference_valid,
+        "candidate_selected_position_logits_receipts": candidate_valid,
+        "cross_side_workload_equal": workload_equal,
+        "aggregate_lm_head_row_reduction": aggregate_row_reduction,
+    }
+    return {
+        "reference_strategy": reference_strategy,
+        "candidate_strategy": candidate_strategy,
+        "reference_runtime": reference_runtime,
+        "candidate_runtime": candidate_runtime,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def _embed_contribution_receipt_contract(
     reference: TopKCompactTraceArtifact,
     candidate: TopKCompactTraceArtifact,
@@ -2342,6 +2576,7 @@ def compare_execution_artifacts(
     require_canonical_cross_layer_jacobian_ab: bool = False,
     require_canonical_stop_gradient_selected_attribution_forward_ab: bool = False,
     require_canonical_stop_gradient_selected_attribution_storage_ab: bool = False,
+    require_canonical_selected_target_logit_execution_ab: bool = False,
     require_canonical_selected_attribution_neuron_lane_chunk_ab: bool = False,
     require_canonical_selected_neuron_contribution_target_lane_chunk_ab: bool = False,
     selected_embed_contribution_target_lane_chunk_ab_profile: str | None = None,
@@ -2589,6 +2824,18 @@ def compare_execution_artifacts(
                 ),
                 "required": True,
                 "passed": stop_gradient_selected_attribution_storage_contract["passed"],
+            }
+        )
+    selected_target_logit_execution_contract = None
+    if require_canonical_selected_target_logit_execution_ab:
+        selected_target_logit_execution_contract = (
+            _selected_target_logit_execution_contract(reference, candidate)
+        )
+        gates.append(
+            {
+                "gate": "canonical_selected_target_logit_execution_ab_pair",
+                "required": True,
+                "passed": selected_target_logit_execution_contract["passed"],
             }
         )
     selected_neuron_contribution_chunk_contract = None
@@ -2993,6 +3240,7 @@ def compare_execution_artifacts(
             "artifact_identity.adag_config."
             "stop_gradient_selected_attribution_forward_execution",
             "artifact_identity.adag_config.stop_gradient_selected_attribution_storage",
+            "artifact_identity.adag_config.selected_target_logit_execution",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -3048,6 +3296,9 @@ def compare_execution_artifacts(
         ),
         "stop_gradient_selected_attribution_storage_ab_contract": (
             stop_gradient_selected_attribution_storage_contract
+        ),
+        "selected_target_logit_execution_ab_contract": (
+            selected_target_logit_execution_contract
         ),
         "selected_attribution_neuron_lane_chunk_ab_contract": (
             selected_attribution_neuron_lane_chunk_contract

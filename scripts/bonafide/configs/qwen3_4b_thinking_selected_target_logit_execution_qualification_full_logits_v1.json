@@ -1,0 +1,64 @@
+{
+  "adag_config": {
+    "ablation_mode": "zero",
+    "apply_blacklist": true,
+    "batch_aggregation": "any",
+    "center_logits": false,
+    "cross_layer_jacobian_execution": "cached_range_v1",
+    "disable_half_rule": false,
+    "disable_stop_grad": false,
+    "edge_threshold": 0.01,
+    "embedding_edge_materialization": "vectorized_v1",
+    "focus_last_residual": false,
+    "ig_mode": "ig-inputs",
+    "ig_steps": null,
+    "node_attribution_threshold": null,
+    "parent_threshold": null,
+    "percentage_threshold": 0.005,
+    "return_nodes_only": false,
+    "return_only_important_neurons": false,
+    "selected_attribution_neuron_lane_chunk_size": 1,
+    "selected_embed_contribution_target_lane_chunk_size": 1,
+    "selected_neuron_contribution_target_lane_chunk_size": 1,
+    "selected_target_logit_execution": "full_logits_v1",
+    "skip_attr_contrib": false,
+    "stop_gradient_attention_backend": "flash_sdpa_causal_v1",
+    "stop_gradient_contribution_execution": "source_leaf_v1",
+    "stop_gradient_contribution_target_lane_chunk_size": 1,
+    "stop_gradient_embed_contribution_target_lane_chunk_size": 1,
+    "stop_gradient_selected_attribution_forward_execution": "prefix_stop_v1",
+    "stop_gradient_selected_attribution_storage": "terminal_detached_v1",
+    "topk": null,
+    "topk_neurons": null,
+    "use_relp_grad": true,
+    "use_stop_grad_on_mlps": true,
+    "verbose": false
+  },
+  "artifact_root": "results/bonafide/process-witness-selected-target-logit-execution-qualification-v1",
+  "batch_size": 1,
+  "continue_on_error": false,
+  "cuda_allocator_policy": "default_v1",
+  "instrumentation": {
+    "cuda_memory_telemetry": true
+  },
+  "model": {
+    "device": "cuda:0",
+    "dtype": "bfloat16",
+    "from_pretrained_kwargs": {},
+    "local_files_only": true,
+    "local_snapshot_path": "${HF_HUB_CACHE}/models--Qwen--Qwen3-4B-Thinking-2507/snapshots/768f209d9ea81521153ed38c47d515654e938aea",
+    "model_id": "Qwen/Qwen3-4B-Thinking-2507",
+    "revision": "768f209d9ea81521153ed38c47d515654e938aea"
+  },
+  "schema_version": "bonafide-trace-run-config/v1",
+  "trace_warmup": {
+    "enabled": false,
+    "mode": "first_wave_item_full_trace_discard",
+    "wave_id_prefixes": []
+  },
+  "wave_limits": {
+    "max_trace_seconds": 1800,
+    "min_cuda_headroom_bytes": 8589934592,
+    "stop_on_oom": true
+  }
+}

@@ -257,13 +257,21 @@ class _ToyModel(nn.Module):
         self.model = _ToyBackbone()
         self.lm_head = nn.Linear(4, 6, bias=False)
 
-    def forward(self, *, inputs_embeds, attention_mask):
+    def forward(self, *, inputs_embeds, attention_mask, logits_to_keep=None):
         del attention_mask
         hidden = torch.tanh(self.model.layers[0].mlp.down_proj(inputs_embeds))
+        if logits_to_keep is not None:
+            hidden = hidden[:, logits_to_keep, :]
         return SimpleNamespace(logits=self.lm_head(hidden))
 
 
-def _run_toy(model: _ToyModel, *, chunk_size: int | None, ig: bool):
+def _run_toy(
+    model: _ToyModel,
+    *,
+    chunk_size: int | None,
+    ig: bool,
+    selected_target_logit_execution: str = "full_logits_v1",
+):
     kwargs = {
         "model": model,
         "neuron_cfg": {0: [[2, 3], [0, 1], [2, 3]]},
@@ -275,6 +283,7 @@ def _run_toy(model: _ToyModel, *, chunk_size: int | None, ig: bool):
         "attention_masks": torch.ones(2, 3),
         "neuron_chunk_size": 2,
         "contribution_target_lane_chunk_size": chunk_size,
+        "selected_target_logit_execution": selected_target_logit_execution,
     }
     if ig:
         return _get_neuron_attr_and_contrib_ig(**kwargs, ig_steps=2)
@@ -292,6 +301,33 @@ def test_direct_and_integrated_gradient_paths_forward_chunking_exactly(
 
     reference = _run_toy(reference_model, chunk_size=None, ig=ig)
     candidate = _run_toy(candidate_model, chunk_size=1, ig=ig)
+
+    for expected, actual in zip(reference[:3], candidate[:3], strict=True):
+        torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    assert candidate[3] == reference[3]
+
+
+@pytest.mark.parametrize("ig", [False, True])
+def test_direct_and_integrated_gradient_paths_forward_target_logit_strategy_exactly(
+    ig: bool,
+) -> None:
+    torch.manual_seed(79)
+    reference_model = _ToyModel()
+    candidate_model = _ToyModel()
+    candidate_model.load_state_dict(reference_model.state_dict())
+
+    reference = _run_toy(
+        reference_model,
+        chunk_size=1,
+        ig=ig,
+        selected_target_logit_execution="full_logits_v1",
+    )
+    candidate = _run_toy(
+        candidate_model,
+        chunk_size=1,
+        ig=ig,
+        selected_target_logit_execution="selected_position_logits_v1",
+    )
 
     for expected, actual in zip(reference[:3], candidate[:3], strict=True):
         torch.testing.assert_close(actual, expected, atol=0, rtol=0)
