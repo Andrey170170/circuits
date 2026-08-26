@@ -144,7 +144,13 @@ class _DenseTargetLaneExecution:
         target_concat_dim: int,
         instrumentation: TraceInstrumentation | None,
     ) -> _DenseTargetLaneVjpResult:
-        """Differentiate, project, and release one dense source chunk at a time."""
+        """Differentiate, project, and release one dense source chunk at a time.
+
+        ``project_chunk`` must return a compact tensor with storage independent
+        of its dense-VJP argument. Current adapters enforce this through
+        advanced indexing or a reduction before this method detaches the
+        first-order result.
+        """
 
         if source.ndim != 3:
             raise ValueError(
@@ -228,7 +234,10 @@ class _DenseTargetLaneExecution:
                     .diagonal(dim1=1, dim2=2)
                     .permute(0, 3, 1, 2)
                 )
-                projected_chunks.append(project_chunk(dense_vjp))
+                # Projection results are first-order trace values. Sever any
+                # edge created by multiplying terminal VJPs with a
+                # differentiable source before retaining the compact chunk.
+                projected_chunks.append(project_chunk(dense_vjp).detach())
                 del dense_vjp, raw_vjp, target_chunk
 
             projected = (
@@ -248,6 +257,10 @@ class _DenseTargetLaneExecution:
                 )
                 vjp_measurement.metadata["projected_vjp_result_shape"] = list(
                     projected.shape
+                )
+                vjp_measurement.metadata["terminal_projection_detached"] = True
+                vjp_measurement.metadata["projected_requires_grad"] = (
+                    projected.requires_grad
                 )
         return _DenseTargetLaneVjpResult(
             projected=projected,

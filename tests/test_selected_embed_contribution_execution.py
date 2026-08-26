@@ -211,6 +211,27 @@ def test_telemetry_receipts_are_top_level_and_execution_indexed(
     assert all(
         metadata["retain_graph_after_execution"] is True for metadata in stage_metadata
     )
+    assert all(
+        metadata["terminal_projection_detached"] is True for metadata in stage_metadata
+    )
+    assert all(
+        metadata["projected_requires_grad"] is False for metadata in stage_metadata
+    )
+
+
+@pytest.mark.parametrize("return_gradient_only", [False, True])
+def test_projected_result_is_terminal(return_gradient_only: bool) -> None:
+    embeddings, targets = _embedding_graph()
+    projected = run_selected_embed_contribution_vjp(
+        embeddings,
+        targets,
+        [3, 0, 3],
+        return_gradient_only=return_gradient_only,
+        target_lane_chunk_size=1,
+    )
+
+    assert projected.requires_grad is False
+    assert projected.grad_fn is None
 
 
 class _ToyMlp(nn.Module):
@@ -292,6 +313,39 @@ def test_end_to_end_widths_are_independent_and_exact(
     for expected, actual in zip(reference[:3], candidate[:3], strict=True):
         torch.testing.assert_close(actual, expected, atol=0, rtol=0)
     assert candidate[3] == reference[3]
+
+
+def test_selected_attribution_raw_vjp_dies_before_next_backward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_grad = torch.autograd.grad
+    raw_refs: list[weakref.ReferenceType[torch.Tensor]] = []
+    observed_attribution_calls = 0
+
+    def observe(*args, **kwargs):
+        nonlocal observed_attribution_calls
+        if raw_refs:
+            gc.collect()
+            assert raw_refs[-1]() is None
+            raw_refs.clear()
+        result = original_grad(*args, **kwargs)
+        if observed_attribution_calls < 2:
+            raw_refs.append(weakref.ref(result[0]))
+            observed_attribution_calls += 1
+        return result
+
+    monkeypatch.setattr(torch.autograd, "grad", observe)
+    result = _run_toy(
+        _ToyModel(),
+        embed_width=1,
+        neuron_width=1,
+        ig=False,
+    )
+
+    gc.collect()
+    assert observed_attribution_calls == 2
+    assert raw_refs == []
+    assert all(tensor.requires_grad is False for tensor in result[:3])
 
 
 @pytest.mark.parametrize(

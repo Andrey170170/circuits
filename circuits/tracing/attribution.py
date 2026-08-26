@@ -69,6 +69,56 @@ def _copy_selected_neuron_contributions(
     return layer_grad_contrib[:, :, positions, neurons].permute(2, 1, 0)
 
 
+def _project_selected_attribution_vjp(
+    raw_vjp: torch.Tensor,
+    embeddings: torch.Tensor,
+    source_tokens: Sequence[int],
+    *,
+    return_gradient_only: bool,
+) -> torch.Tensor:
+    """Project a terminal selected-attribution VJP into compact source order.
+
+    The returned values are first-order trace data, not inputs to a later
+    backward pass. Detaching here prevents the compact projection from keeping
+    the dense raw VJP alive through a gradient edge to ``embeddings``.
+    """
+
+    if raw_vjp.ndim != 4 or embeddings.ndim != 3:
+        raise ValueError(
+            "selected-attribution VJP must have shape "
+            "(neuron * batch, batch, sequence, hidden)"
+        )
+    batch = int(embeddings.shape[0])
+    if batch <= 0 or tuple(raw_vjp.shape[1:]) != tuple(embeddings.shape):
+        raise ValueError(
+            "selected-attribution VJP shape does not match embedding shape"
+        )
+    if raw_vjp.shape[0] % batch != 0:
+        raise ValueError(
+            "selected-attribution VJP lane count is not divisible by batch"
+        )
+
+    neuron_count = raw_vjp.shape[0] // batch
+    dense_vjp = (
+        raw_vjp.reshape(
+            neuron_count,
+            batch,
+            batch,
+            raw_vjp.shape[-2],
+            raw_vjp.shape[-1],
+        )
+        .diagonal(dim1=1, dim2=2)
+        .permute(0, 3, 1, 2)
+    )
+    source_positions = list(source_tokens)
+    if return_gradient_only:
+        projected = dense_vjp[:, :, source_positions, :]
+    else:
+        projected = (dense_vjp * embeddings.detach()[None, ...]).sum(-1)
+        projected = projected[:, :, source_positions]
+    return projected.detach()
+
+
 def _get_grad_attributions_from_logits(
     model,
     input_ids,
@@ -1185,39 +1235,45 @@ def _get_neuron_attr_and_contrib(
                     vjp_measurement.metadata["vjp_result_shape"] = list(
                         layer_grad_attr.shape
                     )
-            # shape: (n_chunk * batch, batch, seq, d)
-            # convert back to (n_chunk, batch, batch, seq, d)
-            layer_grad_attr = layer_grad_attr.reshape(
-                n_chunk,
-                batch,
-                batch,
-                layer_grad_attr.shape[-2],
-                layer_grad_attr.shape[-1],
-            )
-            # get only identity along batch, batch
-            layer_grad_attr = layer_grad_attr.diagonal(dim1=1, dim2=2).permute(
-                0, 3, 1, 2
-            )
-            # now (n_chunk, batch, seq, d)
+            with cuda_memory_observation_stage(
+                instrumentation,
+                "selected_attribution_chunk_projection",
+                metadata={
+                    "operation_kind": "terminal_projection",
+                    "layer": lid,
+                    "chunk_start": chunk_start,
+                    "chunk_neuron_count": n_chunk,
+                    "raw_vjp_result_shape": list(layer_grad_attr.shape),
+                    "source_token_count": len(src_tokens),
+                    "return_gradient_only": alpha is not None,
+                    "terminal_projection_detached": True,
+                    "retained_chunk_count_before": len(layer_attr_chunks),
+                },
+            ) as projection_measurement:
+                layer_attr = _project_selected_attribution_vjp(
+                    layer_grad_attr,
+                    embeds,
+                    src_tokens,
+                    return_gradient_only=alpha is not None,
+                )
+                layer_attr_chunks.append(layer_attr)
+                del layer_grad_attr
+                if projection_measurement is not None:
+                    projection_measurement.metadata["projected_shape"] = list(
+                        layer_attr.shape
+                    )
+                    projection_measurement.metadata["projected_requires_grad"] = (
+                        layer_attr.requires_grad
+                    )
+                    projection_measurement.metadata["retained_chunk_count_after"] = len(
+                        layer_attr_chunks
+                    )
 
-            if alpha is not None:
-                # For IG: return gradient only, multiply by activation later
-                layer_attr = layer_grad_attr[
-                    :, :, src_tokens, :
-                ]  # (n_chunk, batch, src, d)
-            else:
-                # For regular attribution: gradient * activation
-                layer_attr = (layer_grad_attr * embeds[None, ...]).sum(
-                    -1
-                )  # (n_chunk, batch, seq)
-                layer_attr = layer_attr[:, :, src_tokens]  # (n_chunk, batch, src)
-
-            layer_attr_chunks.append(layer_attr)
             layer_neuron_acts_chunks.append(layer_neuron_acts.detach())
             neuron_tags.extend(layer_neuron_tags)
 
             # clean up memory after each chunk
-            del layer_grad_attr, layer_attr, grad_outputs
+            del layer_attr, grad_outputs
             torch.cuda.empty_cache()
 
         # Concatenate chunks for this layer

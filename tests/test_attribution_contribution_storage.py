@@ -14,6 +14,7 @@ from circuits.tracing.attribution import (
     _copy_selected_neuron_contributions,
     _get_neuron_attr_and_contrib_with_stop_grad_on_mlps,
     _nonempty_neuron_layers,
+    _project_selected_attribution_vjp,
 )
 from torch import nn
 
@@ -63,6 +64,66 @@ def test_nonempty_neuron_layers_skips_empty_layers_and_preserves_order() -> None
 def test_selected_contribution_copy_rejects_empty_selection() -> None:
     with pytest.raises(ValueError, match="empty neuron selection"):
         _copy_selected_neuron_contributions(torch.zeros(1, 1, 1, 1), [])
+
+
+@pytest.mark.parametrize("return_gradient_only", [False, True])
+def test_selected_attribution_projection_is_exact_compact_and_terminal(
+    return_gradient_only: bool,
+) -> None:
+    embeddings = torch.linspace(-0.7, 0.8, 2 * 4 * 3).reshape(2, 4, 3)
+    embeddings.requires_grad_(True)
+    raw_vjp = torch.linspace(-1.1, 1.2, 3 * 2 * 2 * 4 * 3).reshape(3 * 2, 2, 4, 3)
+    raw_vjp.requires_grad_(True)
+    raw_ref = weakref.ref(raw_vjp)
+    raw_data_ptr = raw_vjp.untyped_storage().data_ptr()
+    source_tokens = [3, 0, 3, 1]
+
+    dense_vjp = (
+        raw_vjp.reshape(3, 2, 2, 4, 3).diagonal(dim1=1, dim2=2).permute(0, 3, 1, 2)
+    )
+    if return_gradient_only:
+        expected = dense_vjp[:, :, source_tokens, :].detach().clone()
+    else:
+        expected = (dense_vjp * embeddings.detach()[None, ...]).sum(-1)
+        expected = expected[:, :, source_tokens].detach().clone()
+
+    actual = _project_selected_attribution_vjp(
+        raw_vjp,
+        embeddings,
+        source_tokens,
+        return_gradient_only=return_gradient_only,
+    )
+    del dense_vjp, raw_vjp
+
+    assert actual.requires_grad is False
+    assert actual.grad_fn is None
+    assert actual.untyped_storage().data_ptr() != raw_data_ptr
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    assert torch.equal(actual[:, :, 0], actual[:, :, 2])
+    del expected
+    assert raw_ref() is None
+
+
+@pytest.mark.parametrize(
+    ("raw_shape", "embedding_shape", "message"),
+    [
+        ((2, 3, 4), (2, 3, 4), "must have shape"),
+        ((4, 2, 3, 4), (1, 3, 4), "does not match"),
+        ((5, 2, 3, 4), (2, 3, 4), "not divisible"),
+    ],
+)
+def test_selected_attribution_projection_rejects_malformed_shapes(
+    raw_shape: tuple[int, ...],
+    embedding_shape: tuple[int, ...],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _project_selected_attribution_vjp(
+            torch.zeros(raw_shape),
+            torch.zeros(embedding_shape),
+            [0],
+            return_gradient_only=False,
+        )
 
 
 class _ToyMlp(nn.Module):
