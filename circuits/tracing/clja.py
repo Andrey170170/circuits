@@ -13,7 +13,6 @@ import torch
 from transformers import PreTrainedTokenizer
 
 from circuits.tracing.attribution import (
-    DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE,
     _get_global_important_neurons_mask,
     _get_grad_attributions_from_logits,
     _get_ig_attributions_from_logits,
@@ -37,6 +36,7 @@ from circuits.tracing.contribution_execution import (
 )
 from circuits.tracing.cross_layer_jacobian_execution import (
     DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION,
+    DEFAULT_CROSS_LAYER_JACOBIAN_TARGET_CHUNK_SIZE,
     CrossLayerJacobianExecution,
     CrossLayerJacobianPair,
     CrossLayerJacobianPairResult,
@@ -644,7 +644,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         selected_attribution_neuron_lane_chunk_size_resolved if ig_steps is None else 20
     )
     jacobian_target_chunk_size = (
-        DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE if ig_steps is None else 20
+        DEFAULT_CROSS_LAYER_JACOBIAN_TARGET_CHUNK_SIZE if ig_steps is None else 20
     )
     record_selection_predictors(
         instrumentation,
@@ -1471,7 +1471,11 @@ def _get_cl_ja_based_edges(
                 print(f"Compute edge weights {tgt_layer} -> {src_layer}")
 
             # for other layer pairs, calculate the jacobian
-            target_chunk_size = 50 if ig_steps is None else 20
+            target_chunk_size = (
+                DEFAULT_CROSS_LAYER_JACOBIAN_TARGET_CHUNK_SIZE
+                if ig_steps is None
+                else 20
+            )
             candidate_edges = len(src_neuron_list) * len(tgt_neuron_list)
             target_chunks = (
                 math.ceil(len(tgt_neuron_list) / target_chunk_size)
@@ -1494,7 +1498,7 @@ def _get_cl_ja_based_edges(
                         tgt_layer=tgt_layer,
                         src_neurons=tuple(src_neuron_list),
                         tgt_neurons=tuple(tgt_neuron_list),
-                        tgt_chunk_size=50,
+                        tgt_chunk_size=target_chunk_size,
                     )
                 )
                 if not isinstance(pair_result, CrossLayerJacobianPairResult):

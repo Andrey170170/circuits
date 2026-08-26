@@ -235,6 +235,8 @@ def _save_pair(
     candidate_stop_gradient_embed_chunk_size: object = _UNSET,
     reference_selected_attribution_chunk_size: object = _UNSET,
     candidate_selected_attribution_chunk_size: object = _UNSET,
+    reference_selected_attribution_instrumentation: dict | None = None,
+    candidate_selected_attribution_instrumentation: dict | None = None,
     reference_stop_gradient_embed_receipts: list[dict] | None = None,
     candidate_stop_gradient_embed_receipts: list[dict] | None = None,
     reference_dtype: str = "bfloat16",
@@ -329,6 +331,14 @@ def _save_pair(
         instrumentation.setdefault("execution_records", {})[
             "stop_gradient_embed_contribution_vjp"
         ] = candidate_stop_gradient_embed_receipts
+    if reference_selected_attribution_instrumentation is not None:
+        reference.circuit_data.trace_metadata["instrumentation"] = (
+            reference_selected_attribution_instrumentation
+        )
+    if candidate_selected_attribution_instrumentation is not None:
+        candidate.circuit_data.trace_metadata["instrumentation"] = (
+            candidate_selected_attribution_instrumentation
+        )
     reference_path = tmp_path / "reference"
     candidate_path = tmp_path / "candidate"
     save_topk_compact_trace(
@@ -590,6 +600,331 @@ def test_backend_qualification_can_allow_selected_neuron_chunk_size_difference(
                 "selected_neuron_contribution_target_lane_chunk_size.*"
             ],
         )
+
+
+def _selected_attribution_runtime_instrumentation(
+    requested_width: int | None,
+) -> dict:
+    resolved_width = 50 if requested_width is None else requested_width
+    selected_counts = [{"layer": 0, "count": 2}, {"layer": 3, "count": 3}]
+    vjp_calls = []
+    projection_calls = []
+    for selected in selected_counts:
+        layer = selected["layer"]
+        count = selected["count"]
+        chunk_count = (count + resolved_width - 1) // resolved_width
+        for chunk_index, chunk_start in enumerate(range(0, count, resolved_width)):
+            chunk_neuron_count = min(resolved_width, count - chunk_start)
+            lanes = chunk_neuron_count
+            raw_shape = [lanes, 1, 7, 11]
+            common = {
+                "layer": layer,
+                "chunk_start": chunk_start,
+                "chunk_index": chunk_index,
+                "chunk_count": chunk_count,
+                "neuron_lane_chunk_size_resolved": resolved_width,
+                "chunk_neuron_count": chunk_neuron_count,
+            }
+            call_index = len(vjp_calls)
+            vjp_calls.append(
+                {
+                    "call_index": call_index,
+                    "failed": False,
+                    "wall_seconds": 0.1,
+                    "metadata": {
+                        **common,
+                        "operation_kind": "batched_vjp",
+                        "lane_count": lanes,
+                        "differentiated_output_shape": [chunk_neuron_count, 1],
+                        "differentiated_input_shape": [1, 7, 11],
+                        "grad_outputs_shape": [lanes, lanes],
+                        "vjp_result_shape": raw_shape,
+                    },
+                    "cuda_memory": {},
+                }
+            )
+            projection_calls.append(
+                {
+                    "call_index": call_index,
+                    "failed": False,
+                    "wall_seconds": 0.01,
+                    "metadata": {
+                        **common,
+                        "operation_kind": "terminal_projection",
+                        "raw_vjp_result_shape": raw_shape,
+                        "source_token_count": 3,
+                        "return_gradient_only": False,
+                        "terminal_projection_detached": True,
+                        "retained_chunk_count_before": chunk_index,
+                        "retained_chunk_count_after": chunk_index + 1,
+                        "projected_shape": [chunk_neuron_count, 1, 3],
+                        "projected_requires_grad": False,
+                    },
+                    "cuda_memory": {},
+                }
+            )
+    chunk_executions = len(vjp_calls)
+    chunk_counters = {
+        "selected_attribution_chunk_size": resolved_width,
+        "selected_attribution_chunks_per_pass": chunk_executions,
+        "selected_attribution_pass_count": 1,
+        "selected_attribution_chunk_executions": chunk_executions,
+    }
+    return {
+        "counters": {
+            "selected_attribution_neuron_lane_chunk_size_requested": (requested_width),
+            "selected_attribution_neuron_lane_chunk_size_resolved": resolved_width,
+            **chunk_counters,
+        },
+        "early_predictors": {
+            "selected_neuron_counts_by_layer": selected_counts,
+            "ig_steps": None,
+            "ig_execution_count": 1,
+            **chunk_counters,
+        },
+        "stages": {
+            "selected_attribution_vjp": {
+                "calls": chunk_executions,
+                "failed_calls": 0,
+                "call_measurements": vjp_calls,
+            },
+            "selected_attribution_chunk_projection": {
+                "calls": chunk_executions,
+                "failed_calls": 0,
+                "call_measurements": projection_calls,
+            },
+        },
+    }
+
+
+def test_selected_attribution_neuron_lane_ab_requires_canonical_runtime_widths(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_attribution_chunk_size=None,
+        candidate_selected_attribution_chunk_size=1,
+        reference_selected_attribution_instrumentation=(
+            _selected_attribution_runtime_instrumentation(None)
+        ),
+        candidate_selected_attribution_instrumentation=(
+            _selected_attribution_runtime_instrumentation(1)
+        ),
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        require_canonical_selected_attribution_neuron_lane_chunk_ab=True,
+    )
+
+    assert report["qualification_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    contract = report["selected_attribution_neuron_lane_chunk_ab_contract"]
+    assert contract["passed"] is True
+    assert contract["reference_strategy"] == {
+        "expected": None,
+        "observed": None,
+        "field_present": True,
+        "passed": True,
+    }
+    assert contract["candidate_strategy"] == {
+        "expected": 1,
+        "observed": 1,
+        "field_present": True,
+        "passed": True,
+    }
+    runtime = contract["runtime_width_receipts"]
+    assert runtime["checks"] == {
+        "reference_runtime_width_proven": True,
+        "candidate_runtime_width_proven": True,
+        "cross_side_workload_equal": True,
+    }
+    assert len(runtime["reference_runtime"]["calls"]) == 2
+    assert len(runtime["candidate_runtime"]["calls"]) == 5
+
+
+@pytest.mark.parametrize(
+    ("reference_width", "candidate_width", "failed_side"),
+    [
+        (_UNSET, 1, "reference_strategy"),
+        (None, _UNSET, "candidate_strategy"),
+        (50, 1, "reference_strategy"),
+        (None, 2, "candidate_strategy"),
+        (_UNSET, _UNSET, "both"),
+    ],
+)
+def test_selected_attribution_neuron_lane_ab_rejects_wrong_or_missing_identity(
+    tmp_path,
+    reference_width: object,
+    candidate_width: object,
+    failed_side: str,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_attribution_chunk_size=reference_width,
+        candidate_selected_attribution_chunk_size=candidate_width,
+        reference_selected_attribution_instrumentation=(
+            _selected_attribution_runtime_instrumentation(None)
+        ),
+        candidate_selected_attribution_instrumentation=(
+            _selected_attribution_runtime_instrumentation(1)
+        ),
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        require_canonical_selected_attribution_neuron_lane_chunk_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    contract = report["selected_attribution_neuron_lane_chunk_ab_contract"]
+    assert contract["passed"] is False
+    if failed_side == "both":
+        assert contract["reference_strategy"]["passed"] is False
+        assert contract["candidate_strategy"]["passed"] is False
+    else:
+        assert contract[failed_side]["passed"] is False
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing_instrumentation",
+        "missing_vjp_stage",
+        "missing_projection_stage",
+        "wrong_requested_counter",
+        "wrong_duplicated_counter",
+        "wrong_predictor_width",
+        "wrong_lane_count",
+        "wrong_projection_detach",
+        "wrong_projected_requires_grad",
+        "both_wrong_chunk_start",
+    ],
+)
+def test_selected_attribution_neuron_lane_ab_fails_closed_on_runtime_receipts(
+    tmp_path,
+    defect: str,
+) -> None:
+    reference_runtime = _selected_attribution_runtime_instrumentation(None)
+    candidate_runtime = _selected_attribution_runtime_instrumentation(1)
+    if defect == "missing_instrumentation":
+        candidate_runtime = None
+    elif defect == "missing_vjp_stage":
+        candidate_runtime["stages"].pop("selected_attribution_vjp")
+    elif defect == "missing_projection_stage":
+        candidate_runtime["stages"].pop("selected_attribution_chunk_projection")
+    elif defect == "wrong_requested_counter":
+        candidate_runtime["counters"][
+            "selected_attribution_neuron_lane_chunk_size_requested"
+        ] = 2
+    elif defect == "wrong_duplicated_counter":
+        candidate_runtime["counters"]["selected_attribution_chunk_executions"] = 4
+    elif defect == "wrong_predictor_width":
+        candidate_runtime["early_predictors"]["selected_attribution_chunk_size"] = 2
+    elif defect == "wrong_lane_count":
+        candidate_runtime["stages"]["selected_attribution_vjp"]["call_measurements"][0][
+            "metadata"
+        ]["lane_count"] = 2
+    elif defect == "wrong_projection_detach":
+        candidate_runtime["stages"]["selected_attribution_chunk_projection"][
+            "call_measurements"
+        ][0]["metadata"]["terminal_projection_detached"] = False
+    elif defect == "wrong_projected_requires_grad":
+        candidate_runtime["stages"]["selected_attribution_chunk_projection"][
+            "call_measurements"
+        ][0]["metadata"]["projected_requires_grad"] = True
+    else:
+        for runtime in (reference_runtime, candidate_runtime):
+            runtime["stages"]["selected_attribution_vjp"]["call_measurements"][0][
+                "metadata"
+            ]["chunk_start"] = 99
+            runtime["stages"]["selected_attribution_chunk_projection"][
+                "call_measurements"
+            ][0]["metadata"]["chunk_start"] = 99
+
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_attribution_chunk_size=None,
+        candidate_selected_attribution_chunk_size=1,
+        reference_selected_attribution_instrumentation=reference_runtime,
+        candidate_selected_attribution_instrumentation=candidate_runtime,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS
+        ),
+        require_canonical_selected_attribution_neuron_lane_chunk_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    contract = report["selected_attribution_neuron_lane_chunk_ab_contract"]
+    assert contract["passed"] is False
+    assert contract["runtime_width_receipts"]["passed"] is False
+
+
+def test_selected_attribution_neuron_lane_ab_cli_is_strict_and_non_overridable(
+    tmp_path,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--reference",
+            str(tmp_path / "reference"),
+            "--candidate",
+            str(tmp_path / "candidate"),
+            "--output",
+            str(tmp_path / "report.json"),
+            "--selected-attribution-neuron-lane-chunk-ab",
+        ]
+    )
+
+    options = comparison_options(args)
+    assert options["allowed_identity_difference_paths"] == (
+        SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_same_gpu_family"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+    assert options["require_canonical_selected_attribution_neuron_lane_chunk_ab"]
+    assert options["tolerances"] == {
+        group: NumericTolerance(absolute=0.0, relative=0.0)
+        for group in TOLERANCE_GROUPS
+    }
+
+    args.allow_identity_difference = ["artifact_identity.code_revision.*"]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        comparison_options(args)
+    args.allow_identity_difference = []
+    args.node_atol = 1e-6
+    with pytest.raises(ValueError, match="fixes every numerical tolerance at zero"):
+        comparison_options(args)
+    args.node_atol = None
+    args.cross_layer_jacobian_ab = True
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        comparison_options(args)
 
 
 def _selected_neuron_receipts() -> list[dict]:

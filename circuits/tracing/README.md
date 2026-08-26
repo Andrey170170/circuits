@@ -97,7 +97,10 @@ contribution target-lane width. Requested and resolved widths are recorded in
 trace counters, while each VJP record carries its resolved width and chunk
 index. Treat non-default widths as unqualified engineering candidates until a
 frozen same-target, same-GPU artifact comparison passes the declared exactness
-and resource gates.
+and resource gates. The canonical comparator profile is exposed as
+`--selected-attribution-neuron-lane-chunk-ab`; it requires an explicit `null`
+control, a width-one candidate, exact topology and numerical values, and
+runtime telemetry proving the resolved 50-versus-1 execution widths.
 
 `ADAGConfig.selected_embed_contribution_target_lane_chunk_size` independently
 bounds the ordinary embedding contribution VJP. Direct execution projects each

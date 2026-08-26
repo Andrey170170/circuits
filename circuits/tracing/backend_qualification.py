@@ -57,6 +57,8 @@ SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_STRATEGIES = (None, 1)
 SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS = (
     "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
 )
+SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_STRATEGIES = (None, 1)
+SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_RESOLVED_WIDTHS = (50, 1)
 SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
     "artifact_identity.adag_config.selected_embed_contribution_target_lane_chunk_size",
 )
@@ -1059,6 +1061,258 @@ def _selected_neuron_contribution_receipt_contract(
     }
 
 
+def _selected_attribution_neuron_lane_runtime_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+) -> dict[str, Any]:
+    """Prove the selected-attribution VJPs executed at None/50 versus width one."""
+
+    def instrumentation(artifact: TopKCompactTraceArtifact) -> Any:
+        return artifact.topk_trace.circuit_data.trace_metadata.get("instrumentation")
+
+    def validate(
+        raw: Any,
+        *,
+        expected_requested: int | None,
+    ) -> tuple[bool, dict[str, Any]]:
+        if not isinstance(raw, Mapping):
+            return False, {}
+        counters = raw.get("counters")
+        early = raw.get("early_predictors")
+        stages = raw.get("stages")
+        if not all(isinstance(value, Mapping) for value in (counters, early, stages)):
+            return False, {}
+        strategy_index = SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_STRATEGIES.index(
+            expected_requested
+        )
+        expected_resolved = SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_RESOLVED_WIDTHS[
+            strategy_index
+        ]
+        selected_counts = early.get("selected_neuron_counts_by_layer")
+        counts_valid = (
+            isinstance(selected_counts, list)
+            and bool(selected_counts)
+            and all(
+                isinstance(item, Mapping)
+                and type(item.get("layer")) is int
+                and item["layer"] >= 0
+                and type(item.get("count")) is int
+                and item["count"] >= 0
+                for item in selected_counts
+            )
+        )
+        if not counts_valid:
+            return False, {}
+        layer_ids = [item["layer"] for item in selected_counts]
+        counts_valid = len(set(layer_ids)) == len(layer_ids) and layer_ids == sorted(
+            layer_ids
+        )
+        expected_chunks: list[dict[str, int]] = []
+        for item in selected_counts:
+            layer = item["layer"]
+            count = item["count"]
+            chunk_count = (
+                (count + expected_resolved - 1) // expected_resolved if count else 0
+            )
+            for chunk_index, chunk_start in enumerate(
+                range(0, count, expected_resolved)
+            ):
+                expected_chunks.append(
+                    {
+                        "layer": layer,
+                        "chunk_start": chunk_start,
+                        "chunk_index": chunk_index,
+                        "chunk_count": chunk_count,
+                        "chunk_neuron_count": min(
+                            expected_resolved, count - chunk_start
+                        ),
+                    }
+                )
+        if not counts_valid or not expected_chunks:
+            return False, {}
+
+        def calls(stage_name: str) -> list[Any] | None:
+            stage = stages.get(stage_name)
+            call_measurements = (
+                stage.get("call_measurements") if isinstance(stage, Mapping) else None
+            )
+            return call_measurements if isinstance(call_measurements, list) else None
+
+        vjp_calls = calls("selected_attribution_vjp")
+        projection_calls = calls("selected_attribution_chunk_projection")
+        if not isinstance(vjp_calls, list) or not isinstance(projection_calls, list):
+            return False, {}
+        calls_valid = len(vjp_calls) == len(projection_calls) == len(expected_chunks)
+        batch: int | None = None
+        differentiated_input_shape: list[int] | None = None
+        source_token_count: int | None = None
+        call_summaries: list[dict[str, Any]] = []
+        for call_index, expected in enumerate(expected_chunks):
+            vjp_call = vjp_calls[call_index] if call_index < len(vjp_calls) else None
+            projection_call = (
+                projection_calls[call_index]
+                if call_index < len(projection_calls)
+                else None
+            )
+            vjp = vjp_call.get("metadata") if isinstance(vjp_call, Mapping) else None
+            projection = (
+                projection_call.get("metadata")
+                if isinstance(projection_call, Mapping)
+                else None
+            )
+            if not isinstance(vjp, Mapping) or not isinstance(projection, Mapping):
+                calls_valid = False
+                continue
+            output_shape = vjp.get("differentiated_output_shape")
+            input_shape = vjp.get("differentiated_input_shape")
+            current_batch = (
+                output_shape[1]
+                if isinstance(output_shape, list)
+                and len(output_shape) == 2
+                and type(output_shape[1]) is int
+                else None
+            )
+            if batch is None:
+                batch = current_batch
+            if differentiated_input_shape is None and isinstance(input_shape, list):
+                differentiated_input_shape = input_shape
+            current_source_count = projection.get("source_token_count")
+            if source_token_count is None and type(current_source_count) is int:
+                source_token_count = current_source_count
+            lanes = (
+                expected["chunk_neuron_count"] * current_batch
+                if type(current_batch) is int
+                else None
+            )
+            raw_shape = (
+                [lanes, current_batch, *input_shape[1:]]
+                if type(lanes) is int
+                and isinstance(input_shape, list)
+                and len(input_shape) == 3
+                else None
+            )
+            common_valid = all(
+                vjp.get(field) == value and projection.get(field) == value
+                for field, value in {
+                    **expected,
+                    "neuron_lane_chunk_size_resolved": expected_resolved,
+                }.items()
+            )
+            call_valid = (
+                isinstance(vjp_call, Mapping)
+                and isinstance(projection_call, Mapping)
+                and vjp_call.get("call_index") == call_index
+                and projection_call.get("call_index") == call_index
+                and vjp_call.get("failed") is False
+                and projection_call.get("failed") is False
+                and common_valid
+                and vjp.get("operation_kind") == "batched_vjp"
+                and type(current_batch) is int
+                and current_batch > 0
+                and output_shape == [expected["chunk_neuron_count"], current_batch]
+                and input_shape == differentiated_input_shape
+                and isinstance(input_shape, list)
+                and len(input_shape) == 3
+                and all(type(extent) is int and extent > 0 for extent in input_shape)
+                and input_shape[0] == current_batch
+                and vjp.get("lane_count") == lanes
+                and vjp.get("grad_outputs_shape") == [lanes, lanes]
+                and vjp.get("vjp_result_shape") == raw_shape
+                and projection.get("operation_kind") == "terminal_projection"
+                and projection.get("raw_vjp_result_shape") == raw_shape
+                and type(current_source_count) is int
+                and current_source_count > 0
+                and current_source_count == source_token_count
+                and projection.get("return_gradient_only") is False
+                and projection.get("terminal_projection_detached") is True
+                and projection.get("retained_chunk_count_before")
+                == expected["chunk_index"]
+                and projection.get("retained_chunk_count_after")
+                == expected["chunk_index"] + 1
+                and projection.get("projected_shape")
+                == [expected["chunk_neuron_count"], current_batch, current_source_count]
+                and projection.get("projected_requires_grad") is False
+            )
+            calls_valid = calls_valid and call_valid
+            call_summaries.append(
+                {
+                    **expected,
+                    "lane_count": lanes,
+                    "valid": call_valid,
+                }
+            )
+
+        predictor_chunk_count = len(expected_chunks)
+        counters_valid = (
+            counters.get("selected_attribution_neuron_lane_chunk_size_requested")
+            == expected_requested
+            and counters.get("selected_attribution_neuron_lane_chunk_size_resolved")
+            == expected_resolved
+            and counters.get("selected_attribution_chunk_size") == expected_resolved
+            and counters.get("selected_attribution_chunks_per_pass")
+            == predictor_chunk_count
+            and counters.get("selected_attribution_pass_count") == 1
+            and counters.get("selected_attribution_chunk_executions")
+            == predictor_chunk_count
+        )
+        predictors_valid = (
+            early.get("selected_attribution_chunk_size") == expected_resolved
+            and early.get("selected_attribution_chunks_per_pass")
+            == predictor_chunk_count
+            and early.get("selected_attribution_pass_count") == 1
+            and early.get("selected_attribution_chunk_executions")
+            == predictor_chunk_count
+            and early.get("ig_steps") is None
+            and early.get("ig_execution_count") == 1
+        )
+        summary = {
+            "expected_requested_width": expected_requested,
+            "expected_resolved_width": expected_resolved,
+            "selected_neuron_counts_by_layer": selected_counts,
+            "batch": batch,
+            "differentiated_input_shape": differentiated_input_shape,
+            "source_token_count": source_token_count,
+            "calls": call_summaries,
+            "checks": {
+                "counters": counters_valid,
+                "early_predictors": predictors_valid,
+                "ordered_vjp_and_projection_calls": calls_valid,
+            },
+        }
+        return all(summary["checks"].values()), summary
+
+    reference_valid, reference_runtime = validate(
+        instrumentation(reference),
+        expected_requested=SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_STRATEGIES[0],
+    )
+    candidate_valid, candidate_runtime = validate(
+        instrumentation(candidate),
+        expected_requested=SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_STRATEGIES[1],
+    )
+    cross_side_workload_equal = (
+        reference_valid
+        and candidate_valid
+        and reference_runtime["selected_neuron_counts_by_layer"]
+        == candidate_runtime["selected_neuron_counts_by_layer"]
+        and reference_runtime["batch"] == candidate_runtime["batch"]
+        and reference_runtime["differentiated_input_shape"]
+        == candidate_runtime["differentiated_input_shape"]
+        and reference_runtime["source_token_count"]
+        == candidate_runtime["source_token_count"]
+    )
+    checks = {
+        "reference_runtime_width_proven": reference_valid,
+        "candidate_runtime_width_proven": candidate_valid,
+        "cross_side_workload_equal": cross_side_workload_equal,
+    }
+    return {
+        "reference_runtime": reference_runtime,
+        "candidate_runtime": candidate_runtime,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def _embed_contribution_receipt_contract(
     reference: TopKCompactTraceArtifact,
     candidate: TopKCompactTraceArtifact,
@@ -1517,6 +1771,7 @@ def compare_execution_artifacts(
     require_canonical_cuda_allocator_ab: bool = False,
     require_canonical_embedding_edge_ab: bool = False,
     require_canonical_cross_layer_jacobian_ab: bool = False,
+    require_canonical_selected_attribution_neuron_lane_chunk_ab: bool = False,
     require_canonical_selected_neuron_contribution_target_lane_chunk_ab: bool = False,
     selected_embed_contribution_target_lane_chunk_ab_profile: str | None = None,
     stop_gradient_embed_contribution_target_lane_chunk_ab_profile: str | None = None,
@@ -1524,7 +1779,7 @@ def compare_execution_artifacts(
     """Compare two saved execution traces under explicit qualification gates.
 
     The historical public name is retained for compatibility. Callers may
-    explicitly qualify a named attention, contribution, allocator, or
+    explicitly qualify a named attention, attribution, contribution, allocator,
     embedding-edge, or cross-layer Jacobian execution strategy, but no other
     scientific configuration field.
     """
@@ -1732,6 +1987,75 @@ def compare_execution_artifacts(
             }
         )
     selected_neuron_contribution_chunk_contract = None
+    selected_attribution_neuron_lane_chunk_contract = None
+    if require_canonical_selected_attribution_neuron_lane_chunk_ab:
+        reference_identity = reference.manifest.get("artifact_identity")
+        candidate_identity = candidate.manifest.get("artifact_identity")
+        reference_adag = (
+            reference_identity.get("adag_config")
+            if isinstance(reference_identity, Mapping)
+            else None
+        )
+        candidate_adag = (
+            candidate_identity.get("adag_config")
+            if isinstance(candidate_identity, Mapping)
+            else None
+        )
+        field = "selected_attribution_neuron_lane_chunk_size"
+        reference_strategy_valid = (
+            isinstance(reference_adag, Mapping)
+            and field in reference_adag
+            and reference_adag[field]
+            == SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_STRATEGIES[0]
+        )
+        candidate_strategy_valid = (
+            isinstance(candidate_adag, Mapping)
+            and field in candidate_adag
+            and candidate_adag[field]
+            == SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_STRATEGIES[1]
+        )
+        runtime_contract = _selected_attribution_neuron_lane_runtime_contract(
+            reference, candidate
+        )
+        selected_attribution_neuron_lane_chunk_contract = {
+            "reference_strategy": {
+                "expected": SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_STRATEGIES[0],
+                "observed": (
+                    reference_adag.get(field)
+                    if isinstance(reference_adag, Mapping)
+                    else None
+                ),
+                "field_present": (
+                    isinstance(reference_adag, Mapping) and field in reference_adag
+                ),
+                "passed": reference_strategy_valid,
+            },
+            "candidate_strategy": {
+                "expected": SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_STRATEGIES[1],
+                "observed": (
+                    candidate_adag.get(field)
+                    if isinstance(candidate_adag, Mapping)
+                    else None
+                ),
+                "field_present": (
+                    isinstance(candidate_adag, Mapping) and field in candidate_adag
+                ),
+                "passed": candidate_strategy_valid,
+            },
+            "runtime_width_receipts": runtime_contract,
+            "passed": (
+                reference_strategy_valid
+                and candidate_strategy_valid
+                and runtime_contract["passed"]
+            ),
+        }
+        gates.append(
+            {
+                "gate": "canonical_selected_attribution_neuron_lane_chunk_ab_pair",
+                "required": True,
+                "passed": selected_attribution_neuron_lane_chunk_contract["passed"],
+            }
+        )
     if require_canonical_selected_neuron_contribution_target_lane_chunk_ab:
         reference_identity = reference.manifest.get("artifact_identity")
         candidate_identity = candidate.manifest.get("artifact_identity")
@@ -2111,6 +2435,9 @@ def compare_execution_artifacts(
         "cuda_allocator_ab_contract": allocator_contract,
         "embedding_edge_ab_contract": embedding_edge_contract,
         "cross_layer_jacobian_ab_contract": cross_layer_jacobian_contract,
+        "selected_attribution_neuron_lane_chunk_ab_contract": (
+            selected_attribution_neuron_lane_chunk_contract
+        ),
         "selected_neuron_contribution_target_lane_chunk_ab_contract": (
             selected_neuron_contribution_chunk_contract
         ),

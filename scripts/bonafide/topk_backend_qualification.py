@@ -14,6 +14,7 @@ from circuits.tracing.backend_qualification import (
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+    SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
@@ -102,6 +103,16 @@ def build_parser() -> argparse.ArgumentParser:
             "full-model reference and cached-range candidate, same GPU model, "
             "exact topology, zero numerical tolerances, and only the exact "
             "Jacobian execution strategy field may differ."
+        ),
+    )
+    parser.add_argument(
+        "--selected-attribution-neuron-lane-chunk-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed ordinary selected-attribution neuron-lane "
+            "chunk A/B profile: explicit None control and width-one candidate, "
+            "same GPU model, exact topology and runtime width receipts, zero "
+            "numerical tolerances, and only the exact chunk-width field may differ."
         ),
     )
     parser.add_argument(
@@ -198,6 +209,10 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             (args.embedding_edge_ab, "--embedding-edge-ab"),
             (args.cross_layer_jacobian_ab, "--cross-layer-jacobian-ab"),
             (
+                args.selected_attribution_neuron_lane_chunk_ab,
+                "--selected-attribution-neuron-lane-chunk-ab",
+            ),
+            (
                 args.selected_neuron_contribution_target_lane_chunk_ab,
                 "--selected-neuron-contribution-target-lane-chunk-ab",
             ),
@@ -246,6 +261,8 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             identity_paths = (
                 SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS
             )
+        elif args.selected_attribution_neuron_lane_chunk_ab:
+            identity_paths = SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS
         elif (
             args.selected_embed_contribution_target_lane_full_width_ab
             or args.selected_embed_contribution_target_lane_width_one_bf16_ab
@@ -286,6 +303,9 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             "require_canonical_cuda_allocator_ab": args.cuda_allocator_ab,
             "require_canonical_embedding_edge_ab": args.embedding_edge_ab,
             "require_canonical_cross_layer_jacobian_ab": (args.cross_layer_jacobian_ab),
+            "require_canonical_selected_attribution_neuron_lane_chunk_ab": (
+                args.selected_attribution_neuron_lane_chunk_ab
+            ),
             "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": (
                 args.selected_neuron_contribution_target_lane_chunk_ab
             ),
@@ -311,6 +331,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
         "require_canonical_cuda_allocator_ab": False,
         "require_canonical_embedding_edge_ab": False,
         "require_canonical_cross_layer_jacobian_ab": False,
+        "require_canonical_selected_attribution_neuron_lane_chunk_ab": False,
         "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": False,
         "selected_embed_contribution_target_lane_chunk_ab_profile": None,
         "stop_gradient_embed_contribution_target_lane_chunk_ab_profile": None,

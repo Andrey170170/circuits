@@ -25,6 +25,7 @@ from circuits.tracing.tensor_receipts import raw_tensor_sha256
 
 CrossLayerJacobianExecution = Literal["full_model_v1", "cached_range_v1"]
 DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION: CrossLayerJacobianExecution = "full_model_v1"
+DEFAULT_CROSS_LAYER_JACOBIAN_TARGET_CHUNK_SIZE = 50
 
 
 @dataclass(frozen=True)
@@ -614,6 +615,7 @@ def prepare_cross_layer_jacobian_execution(
 
 __all__ = [
     "DEFAULT_CROSS_LAYER_JACOBIAN_EXECUTION",
+    "DEFAULT_CROSS_LAYER_JACOBIAN_TARGET_CHUNK_SIZE",
     "CrossLayerJacobianExecution",
     "CrossLayerJacobianExecutor",
     "CrossLayerJacobianPair",

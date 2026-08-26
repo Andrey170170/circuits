@@ -10,6 +10,7 @@ import torch
 from circuits.tracing import cross_layer_jacobian_execution as execution_module
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.cross_layer_jacobian_execution import (
+    DEFAULT_CROSS_LAYER_JACOBIAN_TARGET_CHUNK_SIZE,
     CrossLayerJacobianExecution,
     CrossLayerJacobianPair,
     CrossLayerJacobianPairResult,
@@ -36,6 +37,10 @@ def _model(dtype: torch.dtype = torch.float32) -> Qwen3ForCausalLM:
     )
     config._attn_implementation = "eager"
     return Qwen3ForCausalLM(config).to(dtype=dtype).eval()
+
+
+def test_default_target_chunk_size_preserves_historical_width() -> None:
+    assert DEFAULT_CROSS_LAYER_JACOBIAN_TARGET_CHUNK_SIZE == 50
 
 
 def _preparation(
