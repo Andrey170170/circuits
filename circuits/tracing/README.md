@@ -136,3 +136,18 @@ run-wide allocated peak fell only to 36,084,537,856 bytes because ownership move
 to `selected_attribution_contribution`; the run-wide reserved peak fell to
 38,486,933,504 bytes. This exact lifetime optimization is the active behavior,
 while the remaining comparison tensor still scales at one boolean per attribution.
+
+Commit `014324851be2b2e037d95ac4aab4a86699acad67` makes every compact
+selected-attribution projection terminal immediately and applies the same
+first-order detach contract to the shared dense target-lane projection adapter.
+The frozen 2,951-token A100 qualification is bit-exact against the accepted
+important-mask artifact at zero tolerance. It removes the 1,647,824,384-byte
+cross-layer VJP accumulation: the last selected-attribution VJP now starts at
+27,093,679,104 bytes instead of 28,741,503,488 bytes, and the run-wide allocated
+peak falls from 36,084,537,856 to 34,436,713,472 bytes. Reserved peak falls from
+38,486,933,504 to 37,107,007,488 bytes, while trace wall time is 138.81 seconds
+versus 139.67 seconds for the control. The active owner remains the final
+30-neuron `selected_attribution_vjp`, whose 7,343,034,368-byte within-call
+workspace is unchanged. The next Level 1 capacity candidate is therefore an
+independently configurable selected-attribution neuron-lane width; this result
+does not yet justify Level 2 offload or a default change.

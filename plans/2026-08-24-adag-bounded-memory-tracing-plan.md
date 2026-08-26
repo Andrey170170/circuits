@@ -583,6 +583,64 @@ at 36,084,537,856 bytes. The next Level 1 checkpoint should qualify immediate de
 terminal attribution projections within that path before introducing Level 2 host-backed
 offload. No broader trace run was launched during this checkpoint.
 
+### Level 1i measured checkpoint: terminal selected-attribution projection release
+
+Execution commit `014324851be2b2e037d95ac4aab4a86699acad67` moves the ordinary
+selected-attribution reshape, batch-diagonal extraction, source-token projection, and terminal
+detach behind one internal projection contract. Regular attribution multiplies by a detached
+embedding value, and integrated-gradient execution retains compact gradient-only values without a
+backward edge. The shared dense target-lane executor now also detaches each compact first-order
+projection before retaining it. Its callback contract requires independent compact storage, which
+all current adapters establish through advanced indexing or a reduction.
+
+The focused storage, contribution, teacher-forced trace, telemetry, benchmark, and launcher gates
+passed 138 tests, Ruff format and check, and diff hygiene. Tests cover regular and gradient-only
+exactness, batch size greater than one, reordered and duplicate source tokens, compact storage,
+terminal graph state, and release of one raw VJP before the next backward. A separate critical
+review found no blocking correctness issue. The repository-wide ty gate remains red on 44
+pre-existing diagnostics outside this checkpoint; `circuits/tracing/attribution.py` also remains
+outside the configured typed boundary. The immutable execution worktree is
+`/scratch/general/vast/u1653998/circuits/run-worktrees/selected-attribution-release-qual-0143248`.
+Slurm job `15128945` ran the unchanged frozen 2,951-token width-one target on one A100 80GB PCIe at
+`notch369`, completed with exit `0:0` in 3:41, and produced artifact
+`topk-trace-c090599f4a3be645e46f0484`.
+
+| Measurement | Accepted important-mask baseline | Terminal projection release | Difference |
+| --- | ---: | ---: | ---: |
+| Trace wall seconds | 139.66994787286967 | 138.81428890000097 | -0.85565897286870 (-0.61 percent) |
+| Global peak allocated bytes | 36,084,537,856 | 34,436,713,472 | -1,647,824,384 (-4.57 percent) |
+| Global peak reserved bytes | 38,486,933,504 | 37,107,007,488 | -1,379,926,016 (-3.59 percent) |
+| Selected-attribution phase peak allocated bytes | 36,084,537,856 | 34,436,713,472 | -1,647,824,384 |
+| Selected-attribution phase end allocated bytes | 25,809,368,576 | 25,733,809,152 | -75,559,424 |
+| First selected-attribution VJP start bytes | 27,093,016,576 | 27,093,016,576 | unchanged |
+| Last selected-attribution VJP start bytes | 28,741,503,488 | 27,093,679,104 | -1,647,824,384 |
+| Last selected-attribution VJP peak bytes | 36,084,537,856 | 34,436,713,472 | -1,647,824,384 |
+| Last VJP incremental workspace bytes | 7,343,034,368 | 7,343,034,368 | unchanged |
+
+The strict report
+`.../qualification-reports/prior-mask-vs-selected-attribution-release-zero-v1.json`, SHA-256
+`545f724fba71e58018bb53cca40452abbcaf8edfbcc74bf46da1a04dede4e1e7`, records
+`qualification_passed=true`. Both artifact identities are internally valid; the frozen scientific
+identity and exact A100 model match; node and edge topology are exact; and targets, node values,
+edge values, source-attribution profiles, and all five candidate profiles have zero maximum
+absolute error. This establishes exact engineering parity for this target, not general scientific
+parity.
+
+The VJP-call baseline is now effectively flat: the first call starts at 27,093,016,576 bytes and
+the final call starts only 662,528 bytes higher. The removed 1.648 GB was therefore retained raw
+VJP storage, not required shared-forward state. The additional 75.6 MB reduction at phase end is
+consistent with terminal release in the shared embedding projection path. The global owner is
+still `selected_attribution_vjp`, but it is now the final 30-neuron call's real within-call
+workspace rather than accumulation from prior layers. Its incremental workspace remains
+7,343,034,368 bytes.
+
+The next Level 1 checkpoint should expose the selected-attribution neuron-lane width independently
+of the other contribution widths and qualify a narrower value on this same target. The active
+hard-coded width is 50 and the peak layer has 30 selected neurons, so that call is currently
+unchunked. A narrower width should bound the remaining raw VJP/workspace coefficient at the cost of
+additional backward traversals; it requires exact or explicitly bounded BF16 evidence before any
+default change. No broader trace run was launched during this checkpoint.
+
 ## Level 2: host-backed boundary streaming and source-group reuse
 
 ### Method
