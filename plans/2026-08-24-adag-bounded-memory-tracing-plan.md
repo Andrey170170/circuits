@@ -4,8 +4,10 @@ Status: active under explicit user authorization. The Level 1a sparse-source and
 target-lane stop-gradient contribution slices are implemented and measured. The Level 1e ordinary
 selected-neuron and Level 1f ordinary embedding contribution slices are accepted as numerically
 equivalent BF16 capacity primitives. The Level 1g stop-gradient embedding contribution slice is an
-exact capacity primitive on the frozen calibration target. None completes Level 1 or authorizes
-broader tracing runs by itself.
+exact capacity primitive on the frozen calibration target. Level 1j bounds ordinary
+selected-attribution neuron lanes and establishes a measured A100 safety bracket between 6,997 and
+7,796 tokens for the current optimized profile. None completes Level 1 or authorizes broader
+tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -47,9 +49,10 @@ The frozen 2,951-token A100 qualification target has 139 selected neurons across
 `source_leaf_v1`, `vectorized_v1`, `cached_range_v1`, `flash_sdpa_causal_v1`, and the default CUDA
 allocator.
 
-The latest accepted calibration profile additionally uses width-one target-lane chunks for the
+The pre-Level-1h calibration profile additionally used width-one target-lane chunks for the
 stop-gradient neuron, stop-gradient embedding, ordinary selected-neuron, and ordinary embedding
-contribution VJPs. Current top-level runtime from the Level 1g width-one artifact is:
+contribution VJPs. The following Level 1g tables are retained as the owner snapshot that motivated
+Levels 1h-1j:
 
 | Stage | Seconds | Share of 136.11 seconds |
 | --- | ---: | ---: |
@@ -70,10 +73,11 @@ Current stage allocation peaks:
 
 Width-one target-lane execution reduced the measured dense contribution-VJP workspaces from about
 13.45 GB to 2.69-2.75 GB without changing target selection or compact topology. The current
-36,359,686,656-byte allocated owner is `important_mask_selection`, while the reserved peak remains
-51,661,242,368 bytes. Continue Level 1 only against a measured owner; move genuinely reusable
-sequence state to host RAM under Level 2 when local lifetime and projection changes no longer
-provide enough capacity.
+Level 1j 2,951-token profile instead peaks at 30,616,958,976 allocated and 34,613,493,760 reserved
+bytes. Its allocated owner is `stop_grad_selected_layer_forward`; the 7,796-token reserved peak is
+reached during `selected_attribution_vjp`. Continue Level 1 only against those measured owners;
+move genuinely reusable sequence state to host RAM under Level 2 when local lifetime and
+projection changes no longer provide enough capacity.
 
 ## Intended memory model
 
@@ -640,6 +644,94 @@ hard-coded width is 50 and the peak layer has 30 selected neurons, so that call 
 unchunked. A narrower width should bound the remaining raw VJP/workspace coefficient at the cost of
 additional backward traversals; it requires exact or explicitly bounded BF16 evidence before any
 default change. No broader trace run was launched during this checkpoint.
+
+### Level 1j measured checkpoint: selected-attribution neuron-lane chunks and A100 ladder
+
+Execution commit `0d3c1c5141e3102af318d033884e69c5845f559e` adds the independent
+`selected_attribution_neuron_lane_chunk_size` adapter. `None` remains the compatibility default and
+resolves to the historical width 50; a positive integer chunks only ordinary
+selected-attribution VJPs. It does not change integrated gradients, stop-gradient attribution,
+cross-layer Jacobians, or any contribution lane. Every chunk is projected into terminal compact
+source-attribution storage before the next traversal. Comparator-hardening commit
+`52d67b3aa6e9da6b551471cb16331ea03062501e` adds a canonical explicit-`None` versus width-one
+runtime contract and separates the historical Jacobian width into its own constant.
+
+The implementation gate passed 145 focused tests before comparator hardening. The final
+qualification/Jacobian gate passed 91 tests, plus Ruff and diff hygiene. The immutable execution
+worktree is
+`/scratch/general/vast/u1653998/circuits/run-worktrees/selected-attribution-neuron-lane-qual-0d3c1c5`.
+All GPU runs used one A100 80GB PCIe at a time, the same frozen manifest, and an 8 GiB physical
+headroom stop gate. A gate failure after an artifact was saved is capacity evidence, not an OOM or
+a correctness failure.
+
+The unmodified width-50 profile first established the local scaling regime:
+
+| Tokens | Job | Selected / active layers / pairs / max layer count | Trace seconds | Peak allocated GB | Peak reserved GB | Headroom GB | Result |
+| ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 2,951 | `15128945` | 139 / 20 / 190 / 30 | 138.814 | 34.437 | 37.107 | 47.987 | accepted anchor |
+| 4,201 | `15129303` | 100 / 22 / 231 / 16 | 164.782 | 40.688 | 45.519 | 39.575 | passed |
+| 4,999 | `15129322` | 101 / 20 / 190 / 12 | 189.623 | 46.260 | 52.855 | 32.239 | passed |
+| 6,202 | `15129394` | 79 / 16 / 120 / 13 | 176.337 | 55.613 | 63.552 | 21.542 | passed |
+| 6,997 | `15129406` | 118 / 18 / 153 / 35 | 357.661 | 73.436 | 77.588 | 7.505 | artifact complete; headroom gate failed |
+
+The first four points through 6,202 tokens fit a reserved-memory slope of approximately 8.19
+decimal GB per 1,000 tokens with `R^2=0.994`. Including the structurally heavier 6,997-token target
+raises the fitted slope to approximately 9.71 GB per 1,000 tokens with `R^2=0.969`. These fits are
+descriptive only: selected-neuron count, active layers, pairs, and the maximum selected layer alter
+the working set, so token count alone is not a capacity law. The ladder stopped before 7,796 as
+predeclared when 6,997 crossed the safety gate.
+
+Jobs `15129472` and `15129486` then ran an explicit-`None` versus width-one A/B on the 2,951-token
+anchor:
+
+| Measurement | Explicit `None` / resolved 50 | Width one | Difference |
+| --- | ---: | ---: | ---: |
+| Trace wall seconds | 138.04753871797584 | 137.4302997670602 | -0.617239 (-0.45 percent) |
+| Peak allocated bytes | 34,436,713,472 | 30,616,958,976 | -3,819,754,496 (-11.09 percent) |
+| Peak reserved bytes | 37,107,007,488 | 34,613,493,760 | -2,493,513,728 (-6.72 percent) |
+| CUDA headroom bytes | 47,986,769,920 | 50,480,283,648 | +2,493,513,728 |
+| Selected-attribution VJP executions | 20 | 139 | +119 |
+
+The canonical strict report
+`.../qualification-reports/none-vs-1-canonical-zero-v1.json`, SHA-256
+`c6ee9a2e318fc40411c3de88ed3f0115602516c4fd14e265b55a5f5b7311d110`, passes artifact
+identity, frozen scientific identity, the exact allowlist, same GPU model, exact topology, and the
+runtime contract proving requested/resolved widths `None/50` versus `1/1` and 20 versus 139 ordered
+VJP/projection calls. Its overall zero-tolerance result remains failed only on node numerics. The
+changed values are confined to source-attribution profiles: 181,354 of 9,127,300 cells (1.99
+percent), median changed absolute difference `7.63e-6`, 99th percentile `3.66e-4`, cosine
+`0.9999999968`, and maximum `0.5`; only 36 cells differ by more than `0.01`. Targets, topology,
+scalar node values, edges, and all candidate profiles are exact. The separate posthoc scoped
+diagnostic passes an observed absolute bound of `0.5`; it is retained as calibration evidence, not
+a predeclared scientific-parity gate. The user explicitly accepted this localized BF16 execution-
+order drift. Width one is therefore accepted as an opt-in capacity primitive on this calibration
+lane, while `None` remains the default.
+
+The optimized boundary replay demonstrates the capacity effect:
+
+| Tokens | Profile | Job | Trace seconds | Peak allocated GB | Peak reserved GB | Headroom GB | Result |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 6,997 | width 50 | `15129406` | 357.661 | 73.436 | 77.588 | 7.505 | headroom gate failed |
+| 6,997 | width 1 | `15129592` | 355.066 | 61.265 | 70.460 | 14.634 | passed |
+| 7,796 | width 1 | `15129662` | 361.769 | 67.545 | 77.773 | 7.321 | artifact complete; headroom gate failed |
+
+At 6,997 tokens, width one removes 12,170,908,672 allocated bytes (16.57 percent) and
+7,128,219,648 reserved bytes (9.19 percent), adds the same amount of physical headroom, and changes
+trace time by -2.59 seconds (-0.73 percent). The generic exact comparison against the legacy
+width-50 artifact passes every target, topology, node, edge, and candidate-profile value across
+49,797,528 source-profile cells. At 7,796 tokens there is still no OOM, but the saved artifact is
+outside the predeclared 8 GiB safety margin. Its allocated owner is
+`stop_grad_selected_layer_forward`; its reserved peak occurs during `selected_attribution_vjp`,
+where 58.886 GB allocated coexists with 77.773 GB reserved, exposing allocator/cache pressure as a
+separate capacity concern.
+
+The strongest current A100 statement is therefore a measured safety bracket: 6,997 tokens passes
+and 7,796 tokens fails the 8 GiB headroom gate under width one. A three-point optimized reserved-
+memory fit estimates the gate crossing near 7,664 tokens and physical exhaustion near 8,630, but
+it uses only three heterogeneous workloads and is not a launch guarantee. Ten thousand tokens is
+not projected to fit safely on an A100 under this profile. The next Level 1 targets are the
+stop-gradient selected-layer forward live set and phase-scoped allocator/cache release; Level 2
+host-backed streaming remains the planned route once those local reductions stop paying.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 

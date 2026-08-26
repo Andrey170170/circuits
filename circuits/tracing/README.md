@@ -96,11 +96,25 @@ gradients width, the 10-neuron stop-gradient selected-attribution width, or any
 contribution target-lane width. Requested and resolved widths are recorded in
 trace counters, while each VJP record carries its resolved width and chunk
 index. Treat non-default widths as unqualified engineering candidates until a
-frozen same-target, same-GPU artifact comparison passes the declared exactness
-and resource gates. The canonical comparator profile is exposed as
+frozen same-target, same-GPU artifact comparison passes the declared numerical
+and resource gates. The canonical zero-tolerance diagnostic profile is exposed as
 `--selected-attribution-neuron-lane-chunk-ab`; it requires an explicit `null`
 control, a width-one candidate, exact topology and numerical values, and
 runtime telemetry proving the resolved 50-versus-1 execution widths.
+
+Commit `0d3c1c5141e3102af318d033884e69c5845f559e` adds this adapter. On the frozen
+2,951-token A100 target, width one reduced peak allocated memory from
+34,436,713,472 to 30,616,958,976 bytes and peak reserved memory from
+37,107,007,488 to 34,613,493,760 bytes, with trace time changing from 138.05 to
+137.43 seconds. Identity, topology, targets, scalar node values, edges, and all
+candidate profiles were exact. Only source-attribution maps changed: 1.99 percent
+of cells differed, with median nonzero absolute drift `7.63e-6`, 99th percentile
+`3.66e-4`, cosine `0.9999999968`, and maximum `0.5`. The canonical runtime
+contract passed and proved 20 width-50 versus 139 width-one VJPs; its overall
+zero-tolerance diagnostic remains failed on the node-value gate. Width one is
+therefore an accepted opt-in BF16 capacity primitive for this calibration lane,
+not a bitwise-equivalent default or a broader scientific-parity claim. `None`
+remains the compatibility default.
 
 `ADAGConfig.selected_embed_contribution_target_lane_chunk_size` independently
 bounds the ordinary embedding contribution VJP. Direct execution projects each
