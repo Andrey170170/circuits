@@ -16,6 +16,7 @@ from circuits.tracing.backend_qualification import (
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
+    STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS,
     TOLERANCE_GROUPS,
     NumericTolerance,
     compare_attention_backend_artifacts,
@@ -45,6 +46,7 @@ def _manifest(
     selected_embed_contribution_target_lane_chunk_size: object = _UNSET,
     stop_gradient_embed_contribution_target_lane_chunk_size: object = _UNSET,
     selected_attribution_neuron_lane_chunk_size: object = _UNSET,
+    stop_gradient_selected_attribution_forward_execution: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -121,6 +123,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "selected_attribution_neuron_lane_chunk_size"
         ] = selected_attribution_neuron_lane_chunk_size
+    if stop_gradient_selected_attribution_forward_execution is not _UNSET:
+        manifest["artifact_identity"]["adag_config"][
+            "stop_gradient_selected_attribution_forward_execution"
+        ] = stop_gradient_selected_attribution_forward_execution
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -237,6 +243,10 @@ def _save_pair(
     candidate_selected_attribution_chunk_size: object = _UNSET,
     reference_selected_attribution_instrumentation: dict | None = None,
     candidate_selected_attribution_instrumentation: dict | None = None,
+    reference_selected_attribution_forward_execution: object = _UNSET,
+    candidate_selected_attribution_forward_execution: object = _UNSET,
+    reference_selected_attribution_forward_instrumentation: dict | None = None,
+    candidate_selected_attribution_forward_instrumentation: dict | None = None,
     reference_stop_gradient_embed_receipts: list[dict] | None = None,
     candidate_stop_gradient_embed_receipts: list[dict] | None = None,
     reference_dtype: str = "bfloat16",
@@ -339,6 +349,14 @@ def _save_pair(
         candidate.circuit_data.trace_metadata["instrumentation"] = (
             candidate_selected_attribution_instrumentation
         )
+    if reference_selected_attribution_forward_instrumentation is not None:
+        reference.circuit_data.trace_metadata["instrumentation"] = (
+            reference_selected_attribution_forward_instrumentation
+        )
+    if candidate_selected_attribution_forward_instrumentation is not None:
+        candidate.circuit_data.trace_metadata["instrumentation"] = (
+            candidate_selected_attribution_forward_instrumentation
+        )
     reference_path = tmp_path / "reference"
     candidate_path = tmp_path / "candidate"
     save_topk_compact_trace(
@@ -367,6 +385,9 @@ def _save_pair(
             selected_attribution_neuron_lane_chunk_size=(
                 reference_selected_attribution_chunk_size
             ),
+            stop_gradient_selected_attribution_forward_execution=(
+                reference_selected_attribution_forward_execution
+            ),
         ),
     )
     save_topk_compact_trace(
@@ -394,6 +415,9 @@ def _save_pair(
             ),
             selected_attribution_neuron_lane_chunk_size=(
                 candidate_selected_attribution_chunk_size
+            ),
+            stop_gradient_selected_attribution_forward_execution=(
+                candidate_selected_attribution_forward_execution
             ),
         ),
     )
@@ -922,6 +946,313 @@ def test_selected_attribution_neuron_lane_ab_cli_is_strict_and_non_overridable(
     with pytest.raises(ValueError, match="fixes every numerical tolerance at zero"):
         comparison_options(args)
     args.node_atol = None
+    args.cross_layer_jacobian_ab = True
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        comparison_options(args)
+
+
+def _selected_attribution_forward_instrumentation(execution: str) -> dict:
+    records = []
+    full_entries = list(range(5))
+    for layer in (0, 3):
+        is_full = execution == "full_model_v1"
+        record = {
+            "execution": execution,
+            "layer": layer,
+            "decoder_layer_entries": (
+                full_entries if is_full else list(range(layer + 1))
+            ),
+            "selected_down_projection_completed": is_full,
+            "lm_head_completed": is_full,
+            "logits_completed": is_full,
+            "down_projection_materialized": is_full,
+            "decoder_suffix_materialized": is_full and layer + 1 < len(full_entries),
+            "logits_materialized": is_full,
+        }
+        records.append(record)
+    calls = [
+        {
+            "call_index": index,
+            "failed": False,
+            "wall_seconds": 0.1,
+            "metadata": {**record, "activation_shape": [1, 7, 11]},
+            "cuda_memory": {},
+        }
+        for index, record in enumerate(records)
+    ]
+    return {
+        "execution_records": {
+            "stop_gradient_selected_attribution_forward": records,
+        },
+        "counters": {
+            "stop_gradient_selected_attribution_forward_execution": execution,
+            "stop_gradient_selected_attribution_forward_execution_count": len(records),
+            f"stop_gradient_selected_attribution_{execution}_execution_count": len(
+                records
+            ),
+            "stop_gradient_selected_attribution_down_projection_materialized_count": sum(
+                int(record["down_projection_materialized"]) for record in records
+            ),
+            "stop_gradient_selected_attribution_decoder_suffix_materialized_count": sum(
+                int(record["decoder_suffix_materialized"]) for record in records
+            ),
+            "stop_gradient_selected_attribution_logits_materialized_count": sum(
+                int(record["logits_materialized"]) for record in records
+            ),
+            "stop_gradient_selected_attribution_decoder_layer_entry_count": sum(
+                len(record["decoder_layer_entries"]) for record in records
+            ),
+            "stop_gradient_selected_attribution_selected_down_projection_completed_count": sum(
+                int(record["selected_down_projection_completed"]) for record in records
+            ),
+            "stop_gradient_selected_attribution_lm_head_completed_count": sum(
+                int(record["lm_head_completed"]) for record in records
+            ),
+            "stop_gradient_selected_attribution_logits_completed_count": sum(
+                int(record["logits_completed"]) for record in records
+            ),
+        },
+        "stages": {
+            "stop_grad_selected_layer_forward": {
+                "calls": len(calls),
+                "failed_calls": 0,
+                "call_measurements": calls,
+            }
+        },
+    }
+
+
+def _selected_attribution_forward_pair(tmp_path, *, reference=None, candidate=None):
+    return _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_attribution_forward_execution="full_model_v1",
+        candidate_selected_attribution_forward_execution="prefix_stop_v1",
+        reference_selected_attribution_forward_instrumentation=(
+            reference
+            if reference is not None
+            else _selected_attribution_forward_instrumentation("full_model_v1")
+        ),
+        candidate_selected_attribution_forward_instrumentation=(
+            candidate
+            if candidate is not None
+            else _selected_attribution_forward_instrumentation("prefix_stop_v1")
+        ),
+    )
+
+
+def test_selected_attribution_forward_ab_requires_ordered_execution_receipts(
+    tmp_path,
+) -> None:
+    reference, candidate = _selected_attribution_forward_pair(tmp_path)
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        require_canonical_stop_gradient_selected_attribution_forward_ab=True,
+    )
+
+    assert report["qualification_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    contract = report["stop_gradient_selected_attribution_forward_ab_contract"]
+    assert contract["passed"] is True
+    assert contract["checks"] == {
+        "canonical_identity_strategies": True,
+        "reference_full_model_receipts": True,
+        "candidate_prefix_stop_receipts": True,
+        "cross_side_workload_equal": True,
+    }
+    assert contract["reference_runtime"]["full_decoder_layer_entries"] == list(range(5))
+    assert contract["candidate_runtime"]["records"][1]["decoder_layer_entries"] == list(
+        range(4)
+    )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing_execution_records",
+        "malformed_record",
+        "reference_truncated_decoder_entries",
+        "reference_lm_head_not_completed",
+        "candidate_selected_down_projection_completed",
+        "candidate_noncanonical_decoder_entries",
+        "stage_receipt_mismatch",
+        "aggregate_counter_mismatch",
+        "cross_side_layer_mismatch",
+    ],
+)
+def test_selected_attribution_forward_ab_fails_closed_on_receipt_defects(
+    tmp_path,
+    defect: str,
+) -> None:
+    reference_runtime = _selected_attribution_forward_instrumentation("full_model_v1")
+    candidate_runtime = _selected_attribution_forward_instrumentation("prefix_stop_v1")
+    reference_records = reference_runtime["execution_records"][
+        "stop_gradient_selected_attribution_forward"
+    ]
+    candidate_records = candidate_runtime["execution_records"][
+        "stop_gradient_selected_attribution_forward"
+    ]
+    if defect == "missing_execution_records":
+        candidate_runtime.pop("execution_records")
+    elif defect == "malformed_record":
+        candidate_records[0] = None
+    elif defect == "reference_truncated_decoder_entries":
+        reference_records[0]["decoder_layer_entries"] = list(range(4))
+        reference_runtime["stages"]["stop_grad_selected_layer_forward"][
+            "call_measurements"
+        ][0]["metadata"]["decoder_layer_entries"] = list(range(4))
+    elif defect == "reference_lm_head_not_completed":
+        reference_records[0]["lm_head_completed"] = False
+        reference_runtime["stages"]["stop_grad_selected_layer_forward"][
+            "call_measurements"
+        ][0]["metadata"]["lm_head_completed"] = False
+    elif defect == "candidate_selected_down_projection_completed":
+        candidate_records[0]["selected_down_projection_completed"] = True
+        candidate_runtime["stages"]["stop_grad_selected_layer_forward"][
+            "call_measurements"
+        ][0]["metadata"]["selected_down_projection_completed"] = True
+    elif defect == "candidate_noncanonical_decoder_entries":
+        candidate_records[1]["decoder_layer_entries"] = [0, 1, 3]
+        candidate_runtime["stages"]["stop_grad_selected_layer_forward"][
+            "call_measurements"
+        ][1]["metadata"]["decoder_layer_entries"] = [0, 1, 3]
+    elif defect == "stage_receipt_mismatch":
+        candidate_runtime["stages"]["stop_grad_selected_layer_forward"][
+            "call_measurements"
+        ][0]["metadata"]["logits_completed"] = True
+    elif defect == "aggregate_counter_mismatch":
+        candidate_runtime["counters"][
+            "stop_gradient_selected_attribution_forward_execution_count"
+        ] = 1
+    else:
+        candidate_records[1]["layer"] = 2
+        candidate_records[1]["decoder_layer_entries"] = [0, 1, 2]
+        candidate_metadata = candidate_runtime["stages"][
+            "stop_grad_selected_layer_forward"
+        ]["call_measurements"][1]["metadata"]
+        candidate_metadata["layer"] = 2
+        candidate_metadata["decoder_layer_entries"] = [0, 1, 2]
+
+    reference, candidate = _selected_attribution_forward_pair(
+        tmp_path,
+        reference=reference_runtime,
+        candidate=candidate_runtime,
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS
+        ),
+        require_canonical_stop_gradient_selected_attribution_forward_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    assert (
+        report["stop_gradient_selected_attribution_forward_ab_contract"]["passed"]
+        is False
+    )
+
+
+@pytest.mark.parametrize("candidate_execution", [_UNSET, "full_model_v1"])
+def test_selected_attribution_forward_ab_rejects_missing_or_wrong_identity_strategy(
+    tmp_path,
+    candidate_execution: object,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="eager",
+        candidate_backend="eager",
+        reference_selected_attribution_forward_execution="full_model_v1",
+        candidate_selected_attribution_forward_execution=candidate_execution,
+        reference_selected_attribution_forward_instrumentation=(
+            _selected_attribution_forward_instrumentation("full_model_v1")
+        ),
+        candidate_selected_attribution_forward_instrumentation=(
+            _selected_attribution_forward_instrumentation("prefix_stop_v1")
+        ),
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS
+        ),
+        require_canonical_stop_gradient_selected_attribution_forward_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    contract = report["stop_gradient_selected_attribution_forward_ab_contract"]
+    assert contract["checks"]["canonical_identity_strategies"] is False
+
+
+def test_selected_attribution_forward_strategy_is_scalar_allowlist_only(
+    tmp_path,
+) -> None:
+    reference, candidate = _selected_attribution_forward_pair(tmp_path)
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config."
+                "stop_gradient_selected_attribution_forward_execution.*"
+            ],
+        )
+
+
+def test_selected_attribution_forward_ab_cli_is_strict_and_non_overridable(
+    tmp_path,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--reference",
+            str(tmp_path / "reference"),
+            "--candidate",
+            str(tmp_path / "candidate"),
+            "--output",
+            str(tmp_path / "report.json"),
+            "--stop-gradient-selected-attribution-forward-ab",
+        ]
+    )
+
+    options = comparison_options(args)
+    assert options["allowed_identity_difference_paths"] == (
+        STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS
+    )
+    assert options["require_same_gpu_model"] is True
+    assert options["require_same_gpu_family"] is True
+    assert options["require_exact_node_topology"] is True
+    assert options["require_exact_edge_topology"] is True
+    assert options["require_canonical_stop_gradient_selected_attribution_forward_ab"]
+    assert options["tolerances"] == {
+        group: NumericTolerance(absolute=0.0, relative=0.0)
+        for group in TOLERANCE_GROUPS
+    }
+
+    args.allow_identity_difference = ["artifact_identity.code_revision.*"]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        comparison_options(args)
+    args.allow_identity_difference = []
+    args.edge_atol = 1e-6
+    with pytest.raises(ValueError, match="fixes every numerical tolerance at zero"):
+        comparison_options(args)
+    args.edge_atol = None
     args.cross_layer_jacobian_ab = True
     with pytest.raises(ValueError, match="mutually exclusive"):
         comparison_options(args)

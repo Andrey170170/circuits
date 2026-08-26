@@ -69,6 +69,11 @@ from circuits.tracing.instrumentation import (
     instrumentation_stage,
     record_selection_predictors,
 )
+from circuits.tracing.stop_gradient_selected_attribution_execution import (
+    DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION,
+    StopGradientSelectedAttributionForwardExecution,
+    resolve_stop_gradient_selected_attribution_forward_execution,
+)
 from circuits.tracing.utils import Edge, NeuronIdx, Node, collect_neuron_acts
 
 BLACKLISTED_NEURONS: dict[str, list[NeuronIdx]] = {
@@ -156,6 +161,8 @@ class ADAGConfig:
     stop_gradient_embed_contribution_target_lane_chunk_size: int | None = None
     # Ordinary selected-attribution VJP neuron lanes only. None preserves 50.
     selected_attribution_neuron_lane_chunk_size: int | None = None
+    # Stop-gradient selected-attribution forward loop only.
+    stop_gradient_selected_attribution_forward_execution: StopGradientSelectedAttributionForwardExecution = DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
@@ -178,6 +185,9 @@ class ADAGConfig:
         )
         resolve_selected_attribution_neuron_lane_chunk_size(
             self.selected_attribution_neuron_lane_chunk_size
+        )
+        resolve_stop_gradient_selected_attribution_forward_execution(
+            self.stop_gradient_selected_attribution_forward_execution
         )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -206,6 +216,10 @@ class ADAGConfig:
             self.stop_gradient_embed_contribution_target_lane_chunk_size = None
         if "selected_attribution_neuron_lane_chunk_size" not in state:
             self.selected_attribution_neuron_lane_chunk_size = None
+        if "stop_gradient_selected_attribution_forward_execution" not in state:
+            self.stop_gradient_selected_attribution_forward_execution = (
+                DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION
+            )
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
@@ -226,6 +240,9 @@ class ADAGConfig:
         )
         resolve_selected_attribution_neuron_lane_chunk_size(
             self.selected_attribution_neuron_lane_chunk_size
+        )
+        resolve_stop_gradient_selected_attribution_forward_execution(
+            self.stop_gradient_selected_attribution_forward_execution
         )
 
 
@@ -367,6 +384,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             selected_attribution_neuron_lane_chunk_size_requested
         )
     )
+    stop_gradient_selected_attribution_forward_execution = (
+        config.stop_gradient_selected_attribution_forward_execution
+    )
     embedding_edge_materialization = config.embedding_edge_materialization
     cross_layer_jacobian_execution = config.cross_layer_jacobian_execution
     if instrumentation is not None:
@@ -401,6 +421,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "selected_attribution_neuron_lane_chunk_size_resolved",
             selected_attribution_neuron_lane_chunk_size_resolved,
+        )
+        instrumentation.set_counter(
+            "stop_gradient_selected_attribution_forward_execution",
+            stop_gradient_selected_attribution_forward_execution,
         )
         instrumentation.set_counter(
             "embedding_edge_materialization",
@@ -798,6 +822,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                 ),
                 embed_contribution_target_lane_chunk_size=(
                     stop_gradient_embed_contribution_target_lane_chunk_size
+                ),
+                selected_attribution_forward_execution=(
+                    stop_gradient_selected_attribution_forward_execution
                 ),
             )
         # store neuron attributions and contributions (keep on CPU to save GPU memory)

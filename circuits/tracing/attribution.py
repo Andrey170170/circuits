@@ -35,6 +35,11 @@ from circuits.tracing.instrumentation import (
     cuda_memory_instrumentation_stage,
     cuda_memory_observation_stage,
 )
+from circuits.tracing.stop_gradient_selected_attribution_execution import (
+    DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION,
+    StopGradientSelectedAttributionForwardExecution,
+    run_stop_gradient_selected_attribution_forward,
+)
 from circuits.tracing.utils import NeuronIdx
 
 DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE = 50
@@ -143,6 +148,40 @@ def _project_selected_attribution_vjp(
         projected = (dense_vjp * embeddings.detach()[None, ...]).sum(-1)
         projected = projected[:, :, source_positions]
     return projected.detach()
+
+
+def _project_stop_gradient_selected_attribution_vjp(
+    raw_vjp: torch.Tensor,
+    embeddings: torch.Tensor,
+    source_tokens: Sequence[int],
+) -> torch.Tensor:
+    """Preserve the historical float32 stop-gradient attribution projection."""
+
+    batch = int(embeddings.shape[0])
+    if raw_vjp.ndim != 4 or embeddings.ndim != 3 or batch <= 0:
+        raise ValueError("malformed stop-gradient selected-attribution VJP")
+    if tuple(raw_vjp.shape[1:]) != tuple(embeddings.shape):
+        raise ValueError("stop-gradient selected-attribution VJP shape mismatch")
+    if raw_vjp.shape[0] % batch != 0:
+        raise ValueError("stop-gradient selected-attribution VJP lane mismatch")
+    neuron_count = raw_vjp.shape[0] // batch
+    dense_vjp = (
+        raw_vjp.reshape(
+            neuron_count,
+            batch,
+            batch,
+            raw_vjp.shape[-2],
+            raw_vjp.shape[-1],
+        )
+        .diagonal(dim1=1, dim2=2)
+        .permute(0, 3, 1, 2)
+    )
+    projected = (
+        (dense_vjp.to(torch.float32) * embeddings[None, ...].to(torch.float32))
+        .sum(-1)
+        .to(embeddings.dtype)
+    )
+    return projected[:, :, list(source_tokens)]
 
 
 def _get_grad_attributions_from_logits(
@@ -594,6 +633,9 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
     ),
     contribution_target_lane_chunk_size: int | None = None,
     embed_contribution_target_lane_chunk_size: int | None = None,
+    selected_attribution_forward_execution: (
+        StopGradientSelectedAttributionForwardExecution
+    ) = DEFAULT_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION,
 ) -> tuple[torch.Tensor, torch.Tensor, list[NeuronIdx]]:
     """
     Compute neuron attributions from source tokens and contributions to target tokens
@@ -618,256 +660,270 @@ def _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
         if not pairs:  # skip empty layers
             continue
 
-        with cuda_memory_observation_stage(
-            instrumentation,
-            "stop_grad_selected_layer_forward",
-            metadata={
-                "operation_kind": "model_forward",
-                "layer": lid,
-                "selected_neuron_count": len(pairs),
-                "planned_chunk_count": (len(pairs) + neuron_chunk_size - 1)
-                // neuron_chunk_size,
-                "neuron_chunk_size": neuron_chunk_size,
-                "source_token_count": len(src_tokens),
-                "retained_layer_count_before": len(attr_list),
-                "retained_attribution_numel_before": sum(
-                    tensor.numel() for tensor in attr_list
-                ),
-                "retained_neuron_activation_numel_before": sum(
-                    tensor.numel() for tensor in neuron_acts_list
-                ),
-            },
-        ) as forward_measurement:
-            # stop gradient on MLPs
-            model = layerwise_stop_nonlinear_grad(
-                model,
-                -1,
-                lid,
-                use_relp_grad=use_relp_grad,
-                use_stop_grad_on_mlps=True,
-                attention_backend=attention_backend,
-            )
+        layer_stop_gradient_active = False
 
-            cache = {}
-
-            def _hook(lid, layer_cache):
-                def fn(_, input, output):
-                    layer_cache[lid] = input[0]
-
-                return fn
-
-            # differentiable embeds
-            # shape: (batch, seq, d)
-            embeds = model.model.embed_tokens(input_ids).detach().requires_grad_()
-
-            if hasattr(model.model.layers[lid].mlp, "mlp"):
-                hook_handle = model.model.layers[
-                    lid
-                ].mlp.mlp.down_proj.register_forward_hook(_hook(lid, cache))
-            else:
-                hook_handle = model.model.layers[
-                    lid
-                ].mlp.down_proj.register_forward_hook(_hook(lid, cache))
-
-            # forward pass
+        def restore_selected_layer(layer_id: int = lid) -> None:
+            nonlocal model, layer_stop_gradient_active
+            if not layer_stop_gradient_active:
+                return
             try:
-                out = model(inputs_embeds=embeds, attention_mask=attention_masks)
+                model = layerwise_revert_stop_nonlinear_grad(model, -1, layer_id)
             finally:
-                hook_handle.remove()
-            logits = out.logits
-            if center_logits:
-                logits -= logits.mean(dim=-1)
+                remove_forward_hooks(model.model.layers[layer_id].mlp.down_proj)
+                layer_stop_gradient_active = False
 
-            act = cache[lid]  # (batch, seq, d)
-            if forward_measurement is not None:
-                forward_measurement.metadata["embedding_shape"] = list(embeds.shape)
-                forward_measurement.metadata["logit_shape"] = list(logits.shape)
-                forward_measurement.metadata["activation_shape"] = list(act.shape)
-                forward_measurement.metadata["capture_hook_removed"] = True
-                forward_measurement.metadata["downstream_graph_released"] = True
-            # The selected activation depends only on the prefix through this
-            # layer. The logits and downstream suffix graph are never consumed
-            # by the selected-attribution VJPs.
-            del out, logits, cache, hook_handle
-
-        # Process this layer's neurons in chunks
-        all_pairs = list(pairs)
-        layer_attr_chunks = []
-        layer_neuron_acts_chunks = []
-
-        for chunk_start in range(0, len(all_pairs), neuron_chunk_size):
+        try:
             with cuda_memory_observation_stage(
                 instrumentation,
-                "stop_grad_selected_chunk_prepare",
+                "stop_grad_selected_layer_forward",
                 metadata={
-                    "operation_kind": "vjp_prepare",
+                    "operation_kind": "model_forward",
                     "layer": lid,
-                    "chunk_start": chunk_start,
-                    "planned_chunk_neuron_count": min(
-                        neuron_chunk_size, len(all_pairs) - chunk_start
+                    "selected_neuron_count": len(pairs),
+                    "planned_chunk_count": (len(pairs) + neuron_chunk_size - 1)
+                    // neuron_chunk_size,
+                    "neuron_chunk_size": neuron_chunk_size,
+                    "source_token_count": len(src_tokens),
+                    "retained_layer_count_before": len(attr_list),
+                    "retained_attribution_numel_before": sum(
+                        tensor.numel() for tensor in attr_list
+                    ),
+                    "retained_neuron_activation_numel_before": sum(
+                        tensor.numel() for tensor in neuron_acts_list
+                    ),
+                    "selected_attribution_forward_execution": (
+                        selected_attribution_forward_execution
                     ),
                 },
-            ) as prepare_measurement:
-                chunk_pairs = all_pairs[chunk_start : chunk_start + neuron_chunk_size]
-
-                layer_neuron_acts = []
-                layer_neuron_tags = []
-
-                for pos, nid in chunk_pairs:
-                    layer_neuron_acts.append(act[:, pos, nid])
-                    layer_neuron_tags.append(
-                        NeuronIdx(layer=lid, token=pos, neuron=nid)
-                    )
-
-                if not layer_neuron_acts:  # skip if no neurons
-                    continue
-
-                # get all activations
-                layer_neuron_acts = torch.stack(layer_neuron_acts)  # (n_chunk, batch)
-                batch = layer_neuron_acts.shape[1]
-                n_chunk = layer_neuron_acts.shape[0]
-                retain_attribution_graph = chunk_start + len(chunk_pairs) < len(
-                    all_pairs
+            ) as forward_measurement:
+                # stop gradient on MLPs
+                layer_stop_gradient_active = True
+                model = layerwise_stop_nonlinear_grad(
+                    model,
+                    -1,
+                    lid,
+                    use_relp_grad=use_relp_grad,
+                    use_stop_grad_on_mlps=True,
+                    attention_backend=attention_backend,
                 )
-                grad_outputs = torch.eye(
-                    n_chunk * batch, device=device
-                )  # (n_chunk * batch, n_chunk * batch)
 
-                # attribution to inputs for this layer chunk
-                embeds.grad = None
-                if prepare_measurement is not None:
-                    prepare_measurement.metadata["chunk_neuron_count"] = n_chunk
-                    prepare_measurement.metadata["lane_count"] = n_chunk * batch
-                    prepare_measurement.metadata["retain_graph"] = (
-                        retain_attribution_graph
+                selected_forward = run_stop_gradient_selected_attribution_forward(
+                    model,
+                    input_ids,
+                    attention_masks,
+                    layer=lid,
+                    execution=selected_attribution_forward_execution,
+                    center_logits=center_logits,
+                    instrumentation=instrumentation,
+                )
+                embeds = selected_forward.embeddings
+                act = selected_forward.activation  # (batch, seq, d)
+                if forward_measurement is not None:
+                    forward_measurement.metadata["embedding_shape"] = list(embeds.shape)
+                    forward_measurement.metadata["execution"] = (
+                        selected_forward.execution
                     )
-                    prepare_measurement.metadata["selected_activation_shape"] = list(
-                        layer_neuron_acts.shape
+                    forward_measurement.metadata["logit_shape"] = (
+                        list(selected_forward.logit_shape)
+                        if selected_forward.logit_shape is not None
+                        else None
                     )
-                    prepare_measurement.metadata["grad_outputs_shape"] = list(
-                        grad_outputs.shape
+                    forward_measurement.metadata["activation_shape"] = list(act.shape)
+                    forward_measurement.metadata["capture_hook_removed"] = True
+                    forward_measurement.metadata["downstream_graph_released"] = True
+                    forward_measurement.metadata["model_forward_completed"] = (
+                        selected_forward.model_forward_completed
                     )
-            with cuda_memory_instrumentation_stage(
-                instrumentation,
-                "stop_grad_selected_attribution_vjp",
-                metadata={
-                    "operation_kind": "batched_vjp",
-                    "layer": lid,
-                    "chunk_start": chunk_start,
-                    "chunk_neuron_count": n_chunk,
-                    "lane_count": n_chunk * batch,
-                    "differentiated_output_shape": list(layer_neuron_acts.shape),
-                    "differentiated_input_shape": list(embeds.shape),
-                    "grad_outputs_shape": list(grad_outputs.shape),
-                    "retain_graph": retain_attribution_graph,
-                },
-            ) as vjp_measurement:
-                layer_grad_attr = torch.autograd.grad(
-                    layer_neuron_acts.flatten(),  # (n_chunk * batch)
-                    embeds,  # (batch, seq, d)
-                    grad_outputs=grad_outputs,  # (n_chunk * batch, n_chunk * batch)
-                    is_grads_batched=True,
-                    retain_graph=retain_attribution_graph,
-                )[0]
-                if vjp_measurement is not None:
-                    vjp_measurement.metadata["vjp_result_shape"] = list(
-                        layer_grad_attr.shape
+                    forward_measurement.metadata["decoder_layer_entries"] = list(
+                        selected_forward.decoder_layer_entries
                     )
+                    forward_measurement.metadata[
+                        "selected_down_projection_completed"
+                    ] = selected_forward.selected_down_projection_completed
+                    forward_measurement.metadata["lm_head_completed"] = (
+                        selected_forward.lm_head_completed
+                    )
+                    forward_measurement.metadata["logits_completed"] = (
+                        selected_forward.logits_completed
+                    )
+                    forward_measurement.metadata["stopped_before_down_projection"] = (
+                        selected_forward.stopped_before_down_projection
+                    )
+                    forward_measurement.metadata["down_projection_materialized"] = (
+                        selected_forward.down_projection_materialized
+                    )
+                    forward_measurement.metadata["decoder_suffix_materialized"] = (
+                        selected_forward.decoder_suffix_materialized
+                    )
+                    forward_measurement.metadata["logits_materialized"] = (
+                        selected_forward.logits_materialized
+                    )
+                    forward_measurement.metadata["executed_layer_entry"] = lid
+                # The selected activation depends only on the prefix through this
+                # layer. The logits and downstream suffix graph are never consumed
+                # by the selected-attribution VJPs.
+                del selected_forward
+
+            # Process this layer's neurons in chunks
+            all_pairs = list(pairs)
+            layer_attr_chunks = []
+            layer_neuron_acts_chunks = []
+
+            for chunk_start in range(0, len(all_pairs), neuron_chunk_size):
+                with cuda_memory_observation_stage(
+                    instrumentation,
+                    "stop_grad_selected_chunk_prepare",
+                    metadata={
+                        "operation_kind": "vjp_prepare",
+                        "layer": lid,
+                        "chunk_start": chunk_start,
+                        "planned_chunk_neuron_count": min(
+                            neuron_chunk_size, len(all_pairs) - chunk_start
+                        ),
+                    },
+                ) as prepare_measurement:
+                    chunk_pairs = all_pairs[
+                        chunk_start : chunk_start + neuron_chunk_size
+                    ]
+
+                    layer_neuron_acts = []
+                    layer_neuron_tags = []
+
+                    for pos, nid in chunk_pairs:
+                        layer_neuron_acts.append(act[:, pos, nid])
+                        layer_neuron_tags.append(
+                            NeuronIdx(layer=lid, token=pos, neuron=nid)
+                        )
+
+                    if not layer_neuron_acts:  # skip if no neurons
+                        continue
+
+                    # get all activations
+                    layer_neuron_acts = torch.stack(
+                        layer_neuron_acts
+                    )  # (n_chunk, batch)
+                    batch = layer_neuron_acts.shape[1]
+                    n_chunk = layer_neuron_acts.shape[0]
+                    retain_attribution_graph = chunk_start + len(chunk_pairs) < len(
+                        all_pairs
+                    )
+                    grad_outputs = torch.eye(
+                        n_chunk * batch, device=device
+                    )  # (n_chunk * batch, n_chunk * batch)
+
+                    # attribution to inputs for this layer chunk
+                    embeds.grad = None
+                    if prepare_measurement is not None:
+                        prepare_measurement.metadata["chunk_neuron_count"] = n_chunk
+                        prepare_measurement.metadata["lane_count"] = n_chunk * batch
+                        prepare_measurement.metadata["retain_graph"] = (
+                            retain_attribution_graph
+                        )
+                        prepare_measurement.metadata["selected_activation_shape"] = (
+                            list(layer_neuron_acts.shape)
+                        )
+                        prepare_measurement.metadata["grad_outputs_shape"] = list(
+                            grad_outputs.shape
+                        )
+                with cuda_memory_instrumentation_stage(
+                    instrumentation,
+                    "stop_grad_selected_attribution_vjp",
+                    metadata={
+                        "operation_kind": "batched_vjp",
+                        "layer": lid,
+                        "chunk_start": chunk_start,
+                        "chunk_neuron_count": n_chunk,
+                        "lane_count": n_chunk * batch,
+                        "differentiated_output_shape": list(layer_neuron_acts.shape),
+                        "differentiated_input_shape": list(embeds.shape),
+                        "grad_outputs_shape": list(grad_outputs.shape),
+                        "retain_graph": retain_attribution_graph,
+                    },
+                ) as vjp_measurement:
+                    layer_grad_attr = torch.autograd.grad(
+                        layer_neuron_acts.flatten(),  # (n_chunk * batch)
+                        embeds,  # (batch, seq, d)
+                        grad_outputs=grad_outputs,  # (n_chunk * batch, n_chunk * batch)
+                        is_grads_batched=True,
+                        retain_graph=retain_attribution_graph,
+                    )[0]
+                    if vjp_measurement is not None:
+                        vjp_measurement.metadata["vjp_result_shape"] = list(
+                            layer_grad_attr.shape
+                        )
+                with cuda_memory_observation_stage(
+                    instrumentation,
+                    "stop_grad_selected_chunk_projection",
+                    metadata={
+                        "operation_kind": "vjp_projection",
+                        "layer": lid,
+                        "chunk_start": chunk_start,
+                        "chunk_neuron_count": n_chunk,
+                        "source_token_count": len(src_tokens),
+                        "raw_vjp_result_shape": list(layer_grad_attr.shape),
+                        "retained_chunk_count_before": len(layer_attr_chunks),
+                    },
+                ) as projection_measurement:
+                    layer_attr = _project_stop_gradient_selected_attribution_vjp(
+                        layer_grad_attr,
+                        embeds,
+                        src_tokens,
+                    )
+
+                    layer_attr_chunks.append(layer_attr)
+                    layer_neuron_acts_chunks.append(layer_neuron_acts.detach())
+                    neuron_tags.extend(layer_neuron_tags)
+                    if projection_measurement is not None:
+                        projection_measurement.metadata["projected_shape"] = list(
+                            layer_attr.shape
+                        )
+                        projection_measurement.metadata[
+                            "retained_chunk_count_after"
+                        ] = len(layer_attr_chunks)
+
+                    # Clean up memory after each chunk
+                    del layer_grad_attr, layer_attr, grad_outputs
+                    torch.cuda.empty_cache()
+
             with cuda_memory_observation_stage(
                 instrumentation,
-                "stop_grad_selected_chunk_projection",
+                "stop_grad_selected_layer_release",
                 metadata={
-                    "operation_kind": "vjp_projection",
+                    "operation_kind": "layer_finalize_release",
                     "layer": lid,
-                    "chunk_start": chunk_start,
-                    "chunk_neuron_count": n_chunk,
-                    "source_token_count": len(src_tokens),
-                    "raw_vjp_result_shape": list(layer_grad_attr.shape),
-                    "retained_chunk_count_before": len(layer_attr_chunks),
+                    "selected_neuron_count": len(pairs),
+                    "retained_chunk_count": len(layer_attr_chunks),
+                    "retained_layer_count_before": len(attr_list),
                 },
-            ) as projection_measurement:
-                # shape: (n_chunk * batch, batch, seq, d)
-                # convert back to (n_chunk, batch, batch, seq, d)
-                layer_grad_attr = layer_grad_attr.reshape(
-                    n_chunk,
-                    batch,
-                    batch,
-                    layer_grad_attr.shape[-2],
-                    layer_grad_attr.shape[-1],
-                )
-                # get only identity along batch, batch
-                layer_grad_attr = layer_grad_attr.diagonal(dim1=1, dim2=2).permute(
-                    0, 3, 1, 2
-                )
-                # now (n_chunk, batch, seq, d)
-
-                layer_attr = (
-                    (
-                        layer_grad_attr.to(torch.float32)
-                        * embeds[None, ...].to(torch.float32)
-                    )
-                    .sum(-1)
-                    .to(embeds.dtype)
-                )  # (n_chunk, batch, seq)
-                layer_attr = layer_attr[:, :, src_tokens]  # (n_chunk, batch, src)
-
-                layer_attr_chunks.append(layer_attr)
-                layer_neuron_acts_chunks.append(layer_neuron_acts.detach())
-                neuron_tags.extend(layer_neuron_tags)
-                if projection_measurement is not None:
-                    projection_measurement.metadata["projected_shape"] = list(
-                        layer_attr.shape
-                    )
-                    projection_measurement.metadata["retained_chunk_count_after"] = len(
-                        layer_attr_chunks
-                    )
-
-                # Clean up memory after each chunk
-                del layer_grad_attr, layer_attr, grad_outputs
-                torch.cuda.empty_cache()
-
-        with cuda_memory_observation_stage(
-            instrumentation,
-            "stop_grad_selected_layer_release",
-            metadata={
-                "operation_kind": "layer_finalize_release",
-                "layer": lid,
-                "selected_neuron_count": len(pairs),
-                "retained_chunk_count": len(layer_attr_chunks),
-                "retained_layer_count_before": len(attr_list),
-            },
-        ) as release_measurement:
-            # Concatenate chunks for this layer
-            if layer_attr_chunks:
-                attr_list.append(torch.cat(layer_attr_chunks, dim=0))
-                neuron_acts_list.append(torch.cat(layer_neuron_acts_chunks, dim=0))
-
-            # revert stop grad for the next attribution
-            model = layerwise_revert_stop_nonlinear_grad(
-                model,
-                -1,
-                lid,
-            )
-            remove_forward_hooks(model.model.layers[lid].mlp.down_proj)
-
-            if release_measurement is not None:
-                release_measurement.metadata["retained_layer_count_after"] = len(
-                    attr_list
-                )
+            ) as release_measurement:
+                # Concatenate chunks for this layer
                 if layer_attr_chunks:
-                    release_measurement.metadata["retained_attribution_shape"] = list(
-                        attr_list[-1].shape
-                    )
-                release_measurement.metadata["retained_attribution_numel_after"] = sum(
-                    tensor.numel() for tensor in attr_list
-                )
-                release_measurement.metadata[
-                    "retained_neuron_activation_numel_after"
-                ] = sum(tensor.numel() for tensor in neuron_acts_list)
+                    attr_list.append(torch.cat(layer_attr_chunks, dim=0))
+                    neuron_acts_list.append(torch.cat(layer_neuron_acts_chunks, dim=0))
 
-            # clean up memory
-            del embeds, layer_attr_chunks, layer_neuron_acts_chunks
-            torch.cuda.empty_cache()
+                # revert stop grad for the next attribution
+                restore_selected_layer()
+
+                if release_measurement is not None:
+                    release_measurement.metadata["retained_layer_count_after"] = len(
+                        attr_list
+                    )
+                    if layer_attr_chunks:
+                        release_measurement.metadata["retained_attribution_shape"] = (
+                            list(attr_list[-1].shape)
+                        )
+                    release_measurement.metadata["retained_attribution_numel_after"] = (
+                        sum(tensor.numel() for tensor in attr_list)
+                    )
+                    release_measurement.metadata[
+                        "retained_neuron_activation_numel_after"
+                    ] = sum(tensor.numel() for tensor in neuron_acts_list)
+
+                # clean up memory
+                del embeds, layer_attr_chunks, layer_neuron_acts_chunks
+                torch.cuda.empty_cache()
+        finally:
+            restore_selected_layer()
 
     with cuda_memory_observation_stage(
         instrumentation,

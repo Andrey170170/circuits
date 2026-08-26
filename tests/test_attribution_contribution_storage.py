@@ -137,6 +137,9 @@ class _ToyLayer(nn.Module):
         super().__init__()
         self.mlp = _ToyMlp()
 
+    def forward(self, hidden):
+        return self.mlp.down_proj(hidden)
+
 
 class _ToyBackbone(nn.Module):
     def __init__(self) -> None:
@@ -154,7 +157,7 @@ class _ToyModel(nn.Module):
 
     def forward(self, *, inputs_embeds, attention_mask):
         del attention_mask
-        hidden = self.model.layers[0].mlp.down_proj(inputs_embeds)
+        hidden = self.model.layers[0](inputs_embeds)
         logits = self.lm_head(hidden)
         self.logit_refs.append(weakref.ref(logits))
         return SimpleNamespace(logits=logits)
@@ -190,6 +193,135 @@ def test_selected_capture_hook_is_removed_when_forward_fails(monkeypatch) -> Non
         )
 
     assert len(model.model.layers[0].mlp.down_proj._forward_hooks) == 0
+
+
+def _install_selected_layer_state_tracker(monkeypatch, model):
+    model.selected_layer_stop_active = False
+    calls = {"stop": 0, "revert": 0}
+    monkeypatch.setattr(
+        attribution_module, "revert_stop_nonlinear_grad", lambda current: current
+    )
+
+    def stop(current, *_args, **_kwargs):
+        calls["stop"] += 1
+        current.selected_layer_stop_active = True
+        current.model.layers[0].mlp.down_proj.register_forward_hook(
+            lambda *_hook_args: None
+        )
+        return current
+
+    def revert(current, *_args, **_kwargs):
+        calls["revert"] += 1
+        current.selected_layer_stop_active = False
+        return current
+
+    monkeypatch.setattr(attribution_module, "layerwise_stop_nonlinear_grad", stop)
+    monkeypatch.setattr(
+        attribution_module, "layerwise_revert_stop_nonlinear_grad", revert
+    )
+    return calls
+
+
+def _assert_selected_layer_state_restored(model, calls) -> None:
+    down_projection = model.model.layers[0].mlp.down_proj
+    assert calls == {"stop": 1, "revert": 1}
+    assert model.selected_layer_stop_active is False
+    assert len(down_projection._forward_hooks) == 0
+    assert len(down_projection._forward_pre_hooks) == 0
+    assert len(model.model.layers[0]._forward_hooks) == 0
+    assert len(model.model.layers[0]._forward_pre_hooks) == 0
+    assert len(model.lm_head._forward_hooks) == 0
+
+
+@pytest.mark.parametrize("execution", ["full_model_v1", "prefix_stop_v1"])
+def test_selected_layer_transaction_restores_after_forward_failure(
+    monkeypatch, execution
+) -> None:
+    model = _ToyModel()
+    calls = _install_selected_layer_state_tracker(monkeypatch, model)
+
+    if execution == "full_model_v1":
+
+        def fail(*, inputs_embeds, attention_mask):
+            del attention_mask
+            model.model.layers[0].mlp.down_proj(inputs_embeds)
+            raise RuntimeError("forced full forward failure")
+
+    else:
+
+        def fail(*, inputs_embeds, attention_mask):
+            del inputs_embeds, attention_mask
+            raise RuntimeError("forced prefix forward failure")
+
+    monkeypatch.setattr(model, "forward", fail)
+    with pytest.raises(RuntimeError, match=r"forced .* forward failure"):
+        _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
+            model,
+            neuron_cfg={0: [[0, 0]]},
+            input_ids=torch.tensor([[1, 2]]),
+            src_tokens=[0],
+            tgt_tokens=[1],
+            focus_positions=[1],
+            focus_logits=[[2]],
+            attention_masks=torch.ones(1, 2),
+            selected_attribution_forward_execution=execution,
+        )
+
+    _assert_selected_layer_state_restored(model, calls)
+
+
+def test_selected_layer_transaction_restores_after_vjp_failure(monkeypatch) -> None:
+    model = _ToyModel()
+    calls = _install_selected_layer_state_tracker(monkeypatch, model)
+
+    def fail_vjp(*_args, **_kwargs):
+        raise RuntimeError("forced selected VJP failure")
+
+    monkeypatch.setattr(torch.autograd, "grad", fail_vjp)
+    with pytest.raises(RuntimeError, match="forced selected VJP failure"):
+        _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
+            model,
+            neuron_cfg={0: [[0, 0]]},
+            input_ids=torch.tensor([[1, 2]]),
+            src_tokens=[0],
+            tgt_tokens=[1],
+            focus_positions=[1],
+            focus_logits=[[2]],
+            attention_masks=torch.ones(1, 2),
+            selected_attribution_forward_execution="prefix_stop_v1",
+        )
+
+    _assert_selected_layer_state_restored(model, calls)
+
+
+def test_selected_layer_transaction_restores_after_projection_failure(
+    monkeypatch,
+) -> None:
+    model = _ToyModel()
+    calls = _install_selected_layer_state_tracker(monkeypatch, model)
+
+    def fail_projection(*_args, **_kwargs):
+        raise RuntimeError("forced selected projection failure")
+
+    monkeypatch.setattr(
+        attribution_module,
+        "_project_stop_gradient_selected_attribution_vjp",
+        fail_projection,
+    )
+    with pytest.raises(RuntimeError, match="forced selected projection failure"):
+        _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
+            model,
+            neuron_cfg={0: [[0, 0]]},
+            input_ids=torch.tensor([[1, 2]]),
+            src_tokens=[0],
+            tgt_tokens=[1],
+            focus_positions=[1],
+            focus_logits=[[2]],
+            attention_masks=torch.ones(1, 2),
+            selected_attribution_forward_execution="prefix_stop_v1",
+        )
+
+    _assert_selected_layer_state_restored(model, calls)
 
 
 def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
@@ -287,12 +419,14 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
         selected_hook_counts.append(
             len(active_model.model.layers[0].mlp.down_proj._forward_hooks)
         )
-        output_liveness.append(active_model.logit_refs[-1]() is not None)
+        output_liveness.append(
+            bool(active_model.logit_refs) and active_model.logit_refs[-1]() is not None
+        )
         return original_autograd_grad(*args, **kwargs)
 
     monkeypatch.setattr(torch.autograd, "grad", capture_autograd_grad)
 
-    def run(model, instrumentation):
+    def run(model, instrumentation, *, selected_forward_execution="full_model_v1"):
         nonlocal active_model
         active_model = model
         return _get_neuron_attr_and_contrib_with_stop_grad_on_mlps(
@@ -306,6 +440,7 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
             attention_masks=torch.ones(1, 2),
             neuron_chunk_size=1,
             instrumentation=instrumentation,
+            selected_attribution_forward_execution=selected_forward_execution,
         )
 
     torch.manual_seed(7)
@@ -320,7 +455,11 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
         increment_counter=lambda *_args, **_kwargs: None,
         set_counter=lambda *_args, **_kwargs: None,
     )
-    result = run(candidate_model, instrumentation)
+    result = run(
+        candidate_model,
+        instrumentation,
+        selected_forward_execution="prefix_stop_v1",
+    )
 
     attr, contrib, embed_contrib, tags = result
     assert attr.shape == (2, 1, 2)
@@ -354,6 +493,18 @@ def test_stop_gradient_cuda_stage_partition_preserves_outputs_and_order(
     assert selected_forward["selected_neuron_count"] == 2
     assert selected_forward["planned_chunk_count"] == 2
     assert selected_forward["activation_shape"] == [1, 2, 3]
+    assert selected_forward["selected_attribution_forward_execution"] == (
+        "prefix_stop_v1"
+    )
+    assert selected_forward["execution"] == "prefix_stop_v1"
+    assert selected_forward["executed_layer_entry"] == 0
+    assert selected_forward["decoder_layer_entries"] == [0]
+    assert selected_forward["selected_down_projection_completed"] is False
+    assert selected_forward["lm_head_completed"] is False
+    assert selected_forward["logits_completed"] is False
+    assert selected_forward["down_projection_materialized"] is False
+    assert selected_forward["decoder_suffix_materialized"] is False
+    assert selected_forward["logits_materialized"] is False
     assert calls[-1][1]["contribution_shape"] == [2, 1, 1]
     assert retain_graph_calls == [True, False, False, True, False, False]
     assert selected_hook_counts == [0, 0, 0, 0, 0, 0]

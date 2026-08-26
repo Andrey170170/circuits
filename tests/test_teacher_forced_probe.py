@@ -126,6 +126,12 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(
         ]
         == 3
     )
+    assert (
+        probe_snapshot["counters"][
+            "stop_gradient_selected_attribution_forward_execution"
+        ]
+        == "full_model_v1"
+    )
     assert probe_snapshot["early_predictors"]["selected_attribution_chunk_size"] == 3
     assert probe_snapshot["early_predictors"]["jacobian_target_chunk_size"] == 50
 

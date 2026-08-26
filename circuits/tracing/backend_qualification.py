@@ -74,6 +74,14 @@ STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_PROFILES = {
     "full_width_exact_v1": (None, 5),
     "width_one_exact_v1": (5, 1),
 }
+STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config."
+    "stop_gradient_selected_attribution_forward_execution",
+)
+STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_STRATEGIES = (
+    "full_model_v1",
+    "prefix_stop_v1",
+)
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",
     "selected_target_activations",
@@ -89,6 +97,8 @@ _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config."
     "stop_gradient_embed_contribution_target_lane_chunk_size",
     "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
+    "artifact_identity.adag_config."
+    "stop_gradient_selected_attribution_forward_execution",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -241,7 +251,8 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
         ):
             raise ValueError(
                 "identity difference may only allow the stop-gradient attention "
-                "backend, contribution execution or lane chunk size, CUDA "
+                "backend, contribution execution, selected-attribution forward "
+                "execution or lane chunk size, CUDA "
                 "allocator policy, embedding-edge "
                 "materialization, cross-layer Jacobian execution, or fields under "
                 "code_revision/runtime_environment: "
@@ -1313,6 +1324,294 @@ def _selected_attribution_neuron_lane_runtime_contract(
     }
 
 
+def _stop_gradient_selected_attribution_forward_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+) -> dict[str, Any]:
+    """Prove full-model versus prefix-stop execution from ordered observations."""
+
+    namespace = "stop_gradient_selected_attribution_forward"
+    stage_name = "stop_grad_selected_layer_forward"
+    receipt_fields = (
+        "execution",
+        "layer",
+        "decoder_layer_entries",
+        "selected_down_projection_completed",
+        "lm_head_completed",
+        "logits_completed",
+        "down_projection_materialized",
+        "decoder_suffix_materialized",
+        "logits_materialized",
+    )
+
+    def instrumentation(artifact: TopKCompactTraceArtifact) -> Any:
+        return artifact.topk_trace.circuit_data.trace_metadata.get("instrumentation")
+
+    def identity_strategy(artifact: TopKCompactTraceArtifact) -> Any:
+        identity = artifact.manifest.get("artifact_identity")
+        adag = identity.get("adag_config") if isinstance(identity, Mapping) else None
+        return (
+            adag.get("stop_gradient_selected_attribution_forward_execution")
+            if isinstance(adag, Mapping)
+            else None
+        )
+
+    def validate(
+        raw: Any,
+        *,
+        expected_execution: str,
+        expected_full_layer_entries: list[int] | None,
+    ) -> tuple[bool, dict[str, Any]]:
+        if not isinstance(raw, Mapping):
+            return False, {}
+        execution_records = raw.get("execution_records")
+        counters = raw.get("counters")
+        stages = raw.get("stages")
+        records = (
+            execution_records.get(namespace)
+            if isinstance(execution_records, Mapping)
+            else None
+        )
+        stage = stages.get(stage_name) if isinstance(stages, Mapping) else None
+        calls = stage.get("call_measurements") if isinstance(stage, Mapping) else None
+        if (
+            not isinstance(records, list)
+            or not records
+            or not isinstance(counters, Mapping)
+            or not isinstance(calls, list)
+        ):
+            return False, {}
+
+        records_valid = len(records) == len(calls)
+        summaries: list[dict[str, Any]] = []
+        layers: list[int] = []
+        inferred_full_entries = expected_full_layer_entries
+        for index, record in enumerate(records):
+            call = calls[index] if index < len(calls) else None
+            metadata = call.get("metadata") if isinstance(call, Mapping) else None
+            required_shape = isinstance(record, Mapping) and all(
+                field in record for field in receipt_fields
+            )
+            layer = record.get("layer") if isinstance(record, Mapping) else None
+            entries = (
+                record.get("decoder_layer_entries")
+                if isinstance(record, Mapping)
+                else None
+            )
+            layer_valid = type(layer) is int and layer >= 0
+            entries_valid = (
+                isinstance(entries, list)
+                and bool(entries)
+                and all(type(value) is int and value >= 0 for value in entries)
+            )
+            if layer_valid:
+                layers.append(layer)
+            if expected_execution == "full_model_v1" and entries_valid:
+                if inferred_full_entries is None:
+                    inferred_full_entries = entries
+                expected_entries = inferred_full_entries
+                expected_materialization = {
+                    "selected_down_projection_completed": True,
+                    "lm_head_completed": True,
+                    "logits_completed": True,
+                    "down_projection_materialized": True,
+                    "decoder_suffix_materialized": (
+                        layer + 1 < len(expected_entries) if layer_valid else None
+                    ),
+                    "logits_materialized": True,
+                }
+            else:
+                expected_entries = list(range(layer + 1)) if layer_valid else None
+                expected_materialization = {
+                    "selected_down_projection_completed": False,
+                    "lm_head_completed": False,
+                    "logits_completed": False,
+                    "down_projection_materialized": False,
+                    "decoder_suffix_materialized": False,
+                    "logits_materialized": False,
+                }
+            materialization_valid = required_shape and all(
+                record.get(field) is expected
+                for field, expected in expected_materialization.items()
+            )
+            stage_valid = (
+                isinstance(call, Mapping)
+                and call.get("call_index") == index
+                and call.get("failed") is False
+                and isinstance(metadata, Mapping)
+                and isinstance(record, Mapping)
+                and all(
+                    metadata.get(field) == record.get(field) for field in receipt_fields
+                )
+            )
+            record_valid = (
+                required_shape
+                and record.get("execution") == expected_execution
+                and layer_valid
+                and entries_valid
+                and isinstance(expected_entries, list)
+                and layer < len(expected_entries)
+                and entries == expected_entries
+                and materialization_valid
+                and stage_valid
+            )
+            records_valid = records_valid and record_valid
+            summaries.append(
+                {
+                    "execution": (
+                        record.get("execution") if isinstance(record, Mapping) else None
+                    ),
+                    "layer": layer,
+                    "decoder_layer_entries": entries,
+                    "stage_receipt_matches": stage_valid,
+                    "valid": record_valid,
+                }
+            )
+
+        layer_order_valid = len(set(layers)) == len(records) and layers == sorted(
+            layers
+        )
+        stage_aggregate_valid = (
+            isinstance(stage, Mapping)
+            and stage.get("calls") == len(records)
+            and stage.get("failed_calls") == 0
+        )
+        full_entries_valid = (
+            isinstance(inferred_full_entries, list)
+            and bool(inferred_full_entries)
+            and inferred_full_entries == list(range(len(inferred_full_entries)))
+        )
+        expected_materialized_counts = {
+            "down_projection": sum(
+                int(bool(record.get("down_projection_materialized")))
+                for record in records
+                if isinstance(record, Mapping)
+            ),
+            "decoder_suffix": sum(
+                int(bool(record.get("decoder_suffix_materialized")))
+                for record in records
+                if isinstance(record, Mapping)
+            ),
+            "logits": sum(
+                int(bool(record.get("logits_materialized")))
+                for record in records
+                if isinstance(record, Mapping)
+            ),
+        }
+        expected_completion_counts = {
+            "selected_down_projection": sum(
+                int(bool(record.get("selected_down_projection_completed")))
+                for record in records
+                if isinstance(record, Mapping)
+            ),
+            "lm_head": sum(
+                int(bool(record.get("lm_head_completed")))
+                for record in records
+                if isinstance(record, Mapping)
+            ),
+            "logits": sum(
+                int(bool(record.get("logits_completed")))
+                for record in records
+                if isinstance(record, Mapping)
+            ),
+        }
+        counters_valid = (
+            counters.get("stop_gradient_selected_attribution_forward_execution")
+            == expected_execution
+            and counters.get(
+                "stop_gradient_selected_attribution_forward_execution_count"
+            )
+            == len(records)
+            and counters.get(
+                f"stop_gradient_selected_attribution_{expected_execution}_execution_count"
+            )
+            == len(records)
+            and all(
+                counters.get(
+                    f"stop_gradient_selected_attribution_{name}_materialized_count"
+                )
+                == count
+                for name, count in expected_materialized_counts.items()
+            )
+            and counters.get(
+                "stop_gradient_selected_attribution_decoder_layer_entry_count"
+            )
+            == sum(
+                (
+                    len(record.get("decoder_layer_entries"))
+                    if isinstance(record.get("decoder_layer_entries"), list)
+                    else 0
+                )
+                for record in records
+                if isinstance(record, Mapping)
+            )
+            and all(
+                counters.get(
+                    f"stop_gradient_selected_attribution_{name}_completed_count"
+                )
+                == count
+                for name, count in expected_completion_counts.items()
+            )
+        )
+        checks = {
+            "ordered_execution_records": (
+                records_valid and layer_order_valid and stage_aggregate_valid
+            ),
+            "canonical_full_layer_range": full_entries_valid,
+            "aggregate_counters": counters_valid,
+        }
+        return all(checks.values()), {
+            "execution": expected_execution,
+            "selected_layers": layers,
+            "full_decoder_layer_entries": inferred_full_entries,
+            "records": summaries,
+            "checks": checks,
+        }
+
+    reference_strategy = identity_strategy(reference)
+    candidate_strategy = identity_strategy(candidate)
+    reference_valid, reference_runtime = validate(
+        instrumentation(reference),
+        expected_execution=STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_STRATEGIES[0],
+        expected_full_layer_entries=None,
+    )
+    full_entries = reference_runtime.get("full_decoder_layer_entries")
+    candidate_valid, candidate_runtime = validate(
+        instrumentation(candidate),
+        expected_execution=STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_STRATEGIES[1],
+        expected_full_layer_entries=(
+            full_entries if isinstance(full_entries, list) else None
+        ),
+    )
+    strategy_valid = (
+        reference_strategy
+        == STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_STRATEGIES[0]
+        and candidate_strategy
+        == STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_AB_STRATEGIES[1]
+    )
+    workload_equal = (
+        reference_valid
+        and candidate_valid
+        and reference_runtime["selected_layers"] == candidate_runtime["selected_layers"]
+        and reference_runtime["full_decoder_layer_entries"]
+        == candidate_runtime["full_decoder_layer_entries"]
+    )
+    checks = {
+        "canonical_identity_strategies": strategy_valid,
+        "reference_full_model_receipts": reference_valid,
+        "candidate_prefix_stop_receipts": candidate_valid,
+        "cross_side_workload_equal": workload_equal,
+    }
+    return {
+        "reference_strategy": reference_strategy,
+        "candidate_strategy": candidate_strategy,
+        "reference_runtime": reference_runtime,
+        "candidate_runtime": candidate_runtime,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def _embed_contribution_receipt_contract(
     reference: TopKCompactTraceArtifact,
     candidate: TopKCompactTraceArtifact,
@@ -1771,6 +2070,7 @@ def compare_execution_artifacts(
     require_canonical_cuda_allocator_ab: bool = False,
     require_canonical_embedding_edge_ab: bool = False,
     require_canonical_cross_layer_jacobian_ab: bool = False,
+    require_canonical_stop_gradient_selected_attribution_forward_ab: bool = False,
     require_canonical_selected_attribution_neuron_lane_chunk_ab: bool = False,
     require_canonical_selected_neuron_contribution_target_lane_chunk_ab: bool = False,
     selected_embed_contribution_target_lane_chunk_ab_profile: str | None = None,
@@ -1984,6 +2284,23 @@ def compare_execution_artifacts(
                 "gate": "canonical_cross_layer_jacobian_ab_pair",
                 "required": True,
                 "passed": cross_layer_jacobian_contract["passed"],
+            }
+        )
+    stop_gradient_selected_attribution_forward_contract = None
+    if require_canonical_stop_gradient_selected_attribution_forward_ab:
+        stop_gradient_selected_attribution_forward_contract = (
+            _stop_gradient_selected_attribution_forward_contract(
+                reference,
+                candidate,
+            )
+        )
+        gates.append(
+            {
+                "gate": (
+                    "canonical_stop_gradient_selected_attribution_forward_ab_pair"
+                ),
+                "required": True,
+                "passed": stop_gradient_selected_attribution_forward_contract["passed"],
             }
         )
     selected_neuron_contribution_chunk_contract = None
@@ -2385,6 +2702,8 @@ def compare_execution_artifacts(
             "artifact_identity.adag_config."
             "stop_gradient_embed_contribution_target_lane_chunk_size",
             "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
+            "artifact_identity.adag_config."
+            "stop_gradient_selected_attribution_forward_execution",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -2435,6 +2754,9 @@ def compare_execution_artifacts(
         "cuda_allocator_ab_contract": allocator_contract,
         "embedding_edge_ab_contract": embedding_edge_contract,
         "cross_layer_jacobian_ab_contract": cross_layer_jacobian_contract,
+        "stop_gradient_selected_attribution_forward_ab_contract": (
+            stop_gradient_selected_attribution_forward_contract
+        ),
         "selected_attribution_neuron_lane_chunk_ab_contract": (
             selected_attribution_neuron_lane_chunk_contract
         ),
