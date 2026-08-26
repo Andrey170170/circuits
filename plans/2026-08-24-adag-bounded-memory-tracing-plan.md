@@ -6,8 +6,11 @@ selected-neuron and Level 1f ordinary embedding contribution slices are accepted
 equivalent BF16 capacity primitives. The Level 1g stop-gradient embedding contribution slice is an
 exact capacity primitive on the frozen calibration target. Level 1j bounds ordinary
 selected-attribution neuron lanes and establishes a measured A100 safety bracket between 6,997 and
-7,796 tokens for the current optimized profile. None completes Level 1 or authorizes broader
-tracing runs by itself.
+7,796 tokens for that optimized profile. Level 1k removes the unused decoder suffix from
+stop-gradient selected-attribution forwards, and Level 1l releases the compact projection's
+autograd edge immediately. The latter lowers the intermediate stop-gradient live set by 8.51 GB
+at 8,266 tokens but does not move the later ordinary selected-attribution/contribution peak. None
+completes Level 1 or authorizes broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -73,11 +76,12 @@ Current stage allocation peaks:
 
 Width-one target-lane execution reduced the measured dense contribution-VJP workspaces from about
 13.45 GB to 2.69-2.75 GB without changing target selection or compact topology. The current
-Level 1j 2,951-token profile instead peaks at 30,616,958,976 allocated and 34,613,493,760 reserved
-bytes. Its allocated owner is `stop_grad_selected_layer_forward`; the 7,796-token reserved peak is
-reached during `selected_attribution_vjp`. Continue Level 1 only against those measured owners;
-move genuinely reusable sequence state to host RAM under Level 2 when local lifetime and
-projection changes no longer provide enough capacity.
+Level 1l 2,951-token profile peaks at 29,801,943,552 allocated and 34,613,493,760 reserved bytes.
+At 8,266 tokens it peaks at 68,952,779,776 allocated and 81,797,316,608 reserved, leaving only
+3,296,460,800 bytes of physical headroom. Both peaks are owned by the later ordinary
+`selected_attribution_contribution` phase, not by the stop-gradient selected-attribution path.
+Continue Level 1 only against that measured owner; move genuinely reusable sequence state to host
+RAM under Level 2 when local lifetime and projection changes no longer provide enough capacity.
 
 ## Intended memory model
 
@@ -732,6 +736,60 @@ it uses only three heterogeneous workloads and is not a launch guarantee. Ten th
 not projected to fit safely on an A100 under this profile. The next Level 1 targets are the
 stop-gradient selected-layer forward live set and phase-scoped allocator/cache release; Level 2
 host-backed streaming remains the planned route once those local reductions stop paying.
+
+### Level 1k measured checkpoint: prefix-stop selected-attribution forwards
+
+Execution commit `6e9c89ac12ef27f84fb09faf1618b14716ede611` adds an explicit
+`full_model_v1` versus `prefix_stop_v1` strategy for stop-gradient selected-attribution forwards.
+The candidate executes the embedding and decoder prefix only through the selected MLP input and
+captures that input before the selected down projection. It does not execute the selected down
+projection, decoder suffix, final norm, LM head, or logits. The historical full-model strategy
+remains the default.
+
+Sequential A100 jobs `15130871` and `15131428` ran the frozen 2,951-token target. The canonical
+zero-tolerance report passes exact identity, ordered execution receipts, 3,094 nodes, 2,366 edges,
+and every saved target, node, edge, and candidate-profile value. Prefix-stop reduced trace wall
+time from 139.598 to 134.264 seconds and peak allocated memory from 30,616,958,976 to
+29,801,943,552 bytes. Peak reserved memory remained 34,613,493,760 bytes, so this is an exact local
+live-set reduction rather than additional allocator headroom.
+
+Job `15131443` then completed the 8,266-token artifact without an OOM or allocator retry but failed
+the 8 GiB headroom gate. The run peaked at 68,952,779,776 allocated and 81,797,316,608 reserved
+bytes and left 3,296,460,800 bytes of physical headroom. Prefix-stop reduced its own selected
+forward peak to 44,454,334,464 allocated bytes, retiring that path as the owner. The later ordinary
+selected-attribution/contribution phase became the measured global owner.
+
+### Level 1l measured checkpoint: terminal stop-gradient projection storage
+
+Execution commit `80f5393835fbfa47c179f6f410cd12cdc57aa98c` adds a storage strategy after
+the unchanged FP32 selected-attribution projection and source-token indexing. Historical
+`graph_retaining_v1` remains the default; opt-in `terminal_detached_v1` shares the compact
+projection's storage but removes its autograd edge before retention. This does not claim to release
+every local reference or the entire selected forward graph.
+
+Sequential A100 jobs `15133602` and `15133654` ran the frozen 2,951-token target on the same node.
+The canonical report at
+`.../qualification-reports/context-2501-4000-graph-retaining-vs-terminal-detached-exact-v1.json`
+passes every required gate at zero tolerance: topology is exactly 3,094 nodes and 2,366 edges,
+all saved values are exact, all 26 ordered workloads match, the reference retains 26 projection
+graphs, and the candidate detaches all 26 and retains none. Trace time was 137.090 versus 134.465
+seconds. Both runs nevertheless had the same 29,801,943,552 allocated and 34,613,493,760 reserved
+global peaks.
+
+Job `15133678` completed the candidate's 8,266-token artifact and then failed only the unchanged
+headroom gate. All 20 compact projections were detached and none retained a graph. Relative to the
+historical graph-retaining artifact, the candidate reduced the stop-gradient selected phase-final
+live allocation by 8,508,037,120 bytes and the stop-gradient embedding contribution-VJP peak by
+8,509,245,952 bytes. The effect mostly disappeared across later fresh forwards, however, and the
+ordinary selected phase began at the same 25,092,750,336 allocated bytes on both runs. Global peak
+allocated, peak reserved, and headroom were byte-for-byte unchanged at 68,952,779,776,
+81,797,316,608, and 3,296,460,800 bytes; trace time was 348.878 versus 347.375 seconds.
+
+The next Level 1 target is therefore the ordinary target-logit live set. That path currently
+materializes `[batch, sequence, vocabulary]` logits and the corresponding selected-logit backward
+workspace although the trace consumes only explicitly selected positions and token IDs. Qualify a
+named full-logits reference against a selected-position LM-head projection before moving this
+owner to Level 2 streaming or recomputation.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 
