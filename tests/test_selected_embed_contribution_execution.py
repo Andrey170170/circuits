@@ -13,8 +13,10 @@ import circuits.tracing.contribution_execution as contribution_execution_module
 import pytest
 import torch
 from circuits.tracing.attribution import (
+    DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE,
     _get_neuron_attr_and_contrib,
     _get_neuron_attr_and_contrib_ig,
+    resolve_selected_attribution_neuron_lane_chunk_size,
 )
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.contribution_execution import (
@@ -271,6 +273,7 @@ def _run_toy(
     embed_width: int | None,
     neuron_width: int | None,
     ig: bool,
+    attr_width: int = 2,
 ):
     kwargs = {
         "model": model,
@@ -281,13 +284,121 @@ def _run_toy(
         "focus_positions": [1, 2],
         "focus_logits": [[2, 3], [2, 3]],
         "attention_masks": torch.ones(2, 3),
-        "neuron_chunk_size": 2,
+        "neuron_chunk_size": attr_width,
         "embed_contribution_target_lane_chunk_size": embed_width,
         "contribution_target_lane_chunk_size": neuron_width,
     }
     if ig:
         return _get_neuron_attr_and_contrib_ig(**kwargs, ig_steps=2)
     return _get_neuron_attr_and_contrib(**kwargs)
+
+
+def test_selected_attribution_config_resolves_default_and_loads_legacy_state() -> None:
+    config = ADAGConfig(
+        device="cpu",
+        selected_attribution_neuron_lane_chunk_size=3,
+    )
+    assert asdict(config)["selected_attribution_neuron_lane_chunk_size"] == 3
+    assert (
+        resolve_selected_attribution_neuron_lane_chunk_size(None)
+        == DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE
+        == 50
+    )
+    assert resolve_selected_attribution_neuron_lane_chunk_size(7) == 7
+
+    restored = ADAGConfig.__new__(ADAGConfig)
+    restored.__setstate__({"device": "cpu"})
+    assert restored.selected_attribution_neuron_lane_chunk_size is None
+    assert (
+        resolve_selected_attribution_neuron_lane_chunk_size(
+            restored.selected_attribution_neuron_lane_chunk_size
+        )
+        == 50
+    )
+
+    for invalid in (0, -1, True, False, 1.5, "2"):
+        with pytest.raises(ValueError, match="positive integer or None"):
+            resolve_selected_attribution_neuron_lane_chunk_size(  # type: ignore[arg-type]
+                invalid
+            )
+        with pytest.raises(ValueError, match="positive integer or None"):
+            ADAGConfig(
+                selected_attribution_neuron_lane_chunk_size=invalid  # type: ignore[arg-type]
+            )
+
+
+@pytest.mark.parametrize("attr_width", [1, 2, 3, 50])
+def test_selected_attribution_neuron_lane_width_is_exact_and_preserves_order(
+    attr_width: int,
+) -> None:
+    torch.manual_seed(79)
+    reference_model = _ToyModel()
+    candidate_model = _ToyModel()
+    candidate_model.load_state_dict(reference_model.state_dict())
+    reference = _run_toy(
+        reference_model,
+        embed_width=1,
+        neuron_width=1,
+        ig=False,
+        attr_width=50,
+    )
+    candidate = _run_toy(
+        candidate_model,
+        embed_width=1,
+        neuron_width=1,
+        ig=False,
+        attr_width=attr_width,
+    )
+
+    for expected, actual in zip(reference[:3], candidate[:3], strict=True):
+        torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    assert candidate[3] == reference[3]
+    assert candidate[3][0] == candidate[3][2]
+    torch.testing.assert_close(candidate[0][0], candidate[0][2], atol=0, rtol=0)
+
+
+def test_selected_attribution_neuron_lane_telemetry_reports_resolved_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    @contextmanager
+    def capture_stage(_instrumentation, name, *, metadata):
+        copied = dict(metadata)
+        calls.append((name, copied))
+        yield SimpleNamespace(metadata=copied)
+
+    monkeypatch.setattr(
+        attribution_module, "cuda_memory_instrumentation_stage", capture_stage
+    )
+    monkeypatch.setattr(
+        attribution_module, "cuda_memory_observation_stage", capture_stage
+    )
+    _run_toy(
+        _ToyModel(),
+        embed_width=1,
+        neuron_width=1,
+        ig=False,
+        attr_width=1,
+    )
+
+    vjp = [metadata for name, metadata in calls if name == "selected_attribution_vjp"]
+    projection = [
+        metadata
+        for name, metadata in calls
+        if name == "selected_attribution_chunk_projection"
+    ]
+    assert [metadata["chunk_index"] for metadata in vjp] == [0, 1, 2]
+    assert [metadata["chunk_start"] for metadata in vjp] == [0, 1, 2]
+    assert all(metadata["chunk_count"] == 3 for metadata in vjp)
+    assert all(metadata["neuron_lane_chunk_size_resolved"] == 1 for metadata in vjp)
+    assert all(metadata["chunk_neuron_count"] == 1 for metadata in vjp)
+    assert all(metadata["lane_count"] == 2 for metadata in vjp)
+    assert len(projection) == 3
+    assert all(
+        metadata["terminal_projection_detached"] is True for metadata in projection
+    )
+    assert all(metadata["projected_requires_grad"] is False for metadata in projection)
 
 
 @pytest.mark.parametrize("ig", [False, True])
@@ -315,8 +426,11 @@ def test_end_to_end_widths_are_independent_and_exact(
     assert candidate[3] == reference[3]
 
 
+@pytest.mark.parametrize(("attr_width", "expected_calls"), [(1, 3), (2, 2)])
 def test_selected_attribution_raw_vjp_dies_before_next_backward(
     monkeypatch: pytest.MonkeyPatch,
+    attr_width: int,
+    expected_calls: int,
 ) -> None:
     original_grad = torch.autograd.grad
     raw_refs: list[weakref.ReferenceType[torch.Tensor]] = []
@@ -329,7 +443,7 @@ def test_selected_attribution_raw_vjp_dies_before_next_backward(
             assert raw_refs[-1]() is None
             raw_refs.clear()
         result = original_grad(*args, **kwargs)
-        if observed_attribution_calls < 2:
+        if observed_attribution_calls < expected_calls:
             raw_refs.append(weakref.ref(result[0]))
             observed_attribution_calls += 1
         return result
@@ -340,10 +454,11 @@ def test_selected_attribution_raw_vjp_dies_before_next_backward(
         embed_width=1,
         neuron_width=1,
         ig=False,
+        attr_width=attr_width,
     )
 
     gc.collect()
-    assert observed_attribution_calls == 2
+    assert observed_attribution_calls == expected_calls
     assert raw_refs == []
     assert all(tensor.requires_grad is False for tensor in result[:3])
 

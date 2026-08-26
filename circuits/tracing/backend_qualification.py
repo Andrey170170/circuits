@@ -54,6 +54,9 @@ SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
     "artifact_identity.adag_config.selected_neuron_contribution_target_lane_chunk_size",
 )
 SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_STRATEGIES = (None, 1)
+SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
+)
 SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS = (
     "artifact_identity.adag_config.selected_embed_contribution_target_lane_chunk_size",
 )
@@ -83,6 +86,7 @@ _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "artifact_identity.adag_config.selected_embed_contribution_target_lane_chunk_size",
     "artifact_identity.adag_config."
     "stop_gradient_embed_contribution_target_lane_chunk_size",
+    "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -235,8 +239,8 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
         ):
             raise ValueError(
                 "identity difference may only allow the stop-gradient attention "
-                "backend, stop-gradient contribution execution or target-lane "
-                "chunk size, CUDA allocator policy, embedding-edge "
+                "backend, contribution execution or lane chunk size, CUDA "
+                "allocator policy, embedding-edge "
                 "materialization, cross-layer Jacobian execution, or fields under "
                 "code_revision/runtime_environment: "
                 f"{path!r}"
@@ -2056,6 +2060,7 @@ def compare_execution_artifacts(
             "selected_embed_contribution_target_lane_chunk_size",
             "artifact_identity.adag_config."
             "stop_gradient_embed_contribution_target_lane_chunk_size",
+            "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",

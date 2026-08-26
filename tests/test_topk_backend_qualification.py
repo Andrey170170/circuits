@@ -12,6 +12,7 @@ from circuits.tracing.backend_qualification import (
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+    SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
@@ -43,6 +44,7 @@ def _manifest(
     selected_neuron_contribution_target_lane_chunk_size: object = _UNSET,
     selected_embed_contribution_target_lane_chunk_size: object = _UNSET,
     stop_gradient_embed_contribution_target_lane_chunk_size: object = _UNSET,
+    selected_attribution_neuron_lane_chunk_size: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
     manifest = {
@@ -115,6 +117,10 @@ def _manifest(
         manifest["artifact_identity"]["adag_config"][
             "stop_gradient_embed_contribution_target_lane_chunk_size"
         ] = stop_gradient_embed_contribution_target_lane_chunk_size
+    if selected_attribution_neuron_lane_chunk_size is not _UNSET:
+        manifest["artifact_identity"]["adag_config"][
+            "selected_attribution_neuron_lane_chunk_size"
+        ] = selected_attribution_neuron_lane_chunk_size
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -227,6 +233,8 @@ def _save_pair(
     candidate_selected_embed_receipts: list[dict] | None = None,
     reference_stop_gradient_embed_chunk_size: object = _UNSET,
     candidate_stop_gradient_embed_chunk_size: object = _UNSET,
+    reference_selected_attribution_chunk_size: object = _UNSET,
+    candidate_selected_attribution_chunk_size: object = _UNSET,
     reference_stop_gradient_embed_receipts: list[dict] | None = None,
     candidate_stop_gradient_embed_receipts: list[dict] | None = None,
     reference_dtype: str = "bfloat16",
@@ -346,6 +354,9 @@ def _save_pair(
             stop_gradient_embed_contribution_target_lane_chunk_size=(
                 reference_stop_gradient_embed_chunk_size
             ),
+            selected_attribution_neuron_lane_chunk_size=(
+                reference_selected_attribution_chunk_size
+            ),
         ),
     )
     save_topk_compact_trace(
@@ -370,6 +381,9 @@ def _save_pair(
             ),
             stop_gradient_embed_contribution_target_lane_chunk_size=(
                 candidate_stop_gradient_embed_chunk_size
+            ),
+            selected_attribution_neuron_lane_chunk_size=(
+                candidate_selected_attribution_chunk_size
             ),
         ),
     )
@@ -495,6 +509,45 @@ def test_backend_qualification_rejects_wildcard_for_scalar_strategy(
             candidate,
             allowed_identity_difference_paths=[
                 "artifact_identity.adag_config.stop_gradient_contribution_execution.*"
+            ],
+        )
+
+
+def test_backend_qualification_can_allow_selected_attribution_width_difference(
+    tmp_path,
+) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_selected_attribution_chunk_size=None,
+        candidate_selected_attribution_chunk_size=1,
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=[
+            *_allowed_paths(),
+            *SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS,
+        ],
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+    )
+
+    assert report["validation_passed"] is True
+    assert report["schema_version"] == "bonafide-execution-qualification/v1"
+    allowed = report["identity"]["artifact_identity"]["allowed_differences"]
+    assert {difference["path"] for difference in allowed} >= {
+        "artifact_identity.adag_config.stop_gradient_attention_backend",
+        "artifact_identity.adag_config.selected_attribution_neuron_lane_chunk_size",
+    }
+
+    with pytest.raises(ValueError, match="exact path"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config."
+                "selected_attribution_neuron_lane_chunk_size.*"
             ],
         )
 

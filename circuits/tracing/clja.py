@@ -13,12 +13,14 @@ import torch
 from transformers import PreTrainedTokenizer
 
 from circuits.tracing.attribution import (
+    DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE,
     _get_global_important_neurons_mask,
     _get_grad_attributions_from_logits,
     _get_ig_attributions_from_logits,
     _get_neuron_attr_and_contrib,
     _get_neuron_attr_and_contrib_ig,
     _get_neuron_attr_and_contrib_with_stop_grad_on_mlps,
+    resolve_selected_attribution_neuron_lane_chunk_size,
 )
 from circuits.tracing.candidates import (
     CandidateLogitAxis,
@@ -152,6 +154,8 @@ class ADAGConfig:
     selected_neuron_contribution_target_lane_chunk_size: int | None = None
     selected_embed_contribution_target_lane_chunk_size: int | None = None
     stop_gradient_embed_contribution_target_lane_chunk_size: int | None = None
+    # Ordinary selected-attribution VJP neuron lanes only. None preserves 50.
+    selected_attribution_neuron_lane_chunk_size: int | None = None
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
@@ -171,6 +175,9 @@ class ADAGConfig:
         )
         resolve_stop_gradient_embed_contribution_target_lane_chunk_size(
             self.stop_gradient_embed_contribution_target_lane_chunk_size
+        )
+        resolve_selected_attribution_neuron_lane_chunk_size(
+            self.selected_attribution_neuron_lane_chunk_size
         )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -197,6 +204,8 @@ class ADAGConfig:
             self.selected_embed_contribution_target_lane_chunk_size = None
         if "stop_gradient_embed_contribution_target_lane_chunk_size" not in state:
             self.stop_gradient_embed_contribution_target_lane_chunk_size = None
+        if "selected_attribution_neuron_lane_chunk_size" not in state:
+            self.selected_attribution_neuron_lane_chunk_size = None
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
@@ -214,6 +223,9 @@ class ADAGConfig:
         )
         resolve_stop_gradient_embed_contribution_target_lane_chunk_size(
             self.stop_gradient_embed_contribution_target_lane_chunk_size
+        )
+        resolve_selected_attribution_neuron_lane_chunk_size(
+            self.selected_attribution_neuron_lane_chunk_size
         )
 
 
@@ -347,6 +359,14 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
     stop_gradient_embed_contribution_target_lane_chunk_size = (
         config.stop_gradient_embed_contribution_target_lane_chunk_size
     )
+    selected_attribution_neuron_lane_chunk_size_requested = (
+        config.selected_attribution_neuron_lane_chunk_size
+    )
+    selected_attribution_neuron_lane_chunk_size_resolved = (
+        resolve_selected_attribution_neuron_lane_chunk_size(
+            selected_attribution_neuron_lane_chunk_size_requested
+        )
+    )
     embedding_edge_materialization = config.embedding_edge_materialization
     cross_layer_jacobian_execution = config.cross_layer_jacobian_execution
     if instrumentation is not None:
@@ -373,6 +393,14 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "stop_gradient_embed_contribution_target_lane_chunk_size",
             stop_gradient_embed_contribution_target_lane_chunk_size,
+        )
+        instrumentation.set_counter(
+            "selected_attribution_neuron_lane_chunk_size_requested",
+            selected_attribution_neuron_lane_chunk_size_requested,
+        )
+        instrumentation.set_counter(
+            "selected_attribution_neuron_lane_chunk_size_resolved",
+            selected_attribution_neuron_lane_chunk_size_resolved,
         )
         instrumentation.set_counter(
             "embedding_edge_materialization",
@@ -612,7 +640,12 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         layer: global_important_neurons_mask[layer].nonzero(as_tuple=False).tolist()
         for layer in range(max(start_layer, 0), end_layer)
     }
-    attribution_chunk_size = 50 if ig_steps is None else 20
+    attribution_chunk_size = (
+        selected_attribution_neuron_lane_chunk_size_resolved if ig_steps is None else 20
+    )
+    jacobian_target_chunk_size = (
+        DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE if ig_steps is None else 20
+    )
     record_selection_predictors(
         instrumentation,
         neuron_cfg,
@@ -620,6 +653,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         start_layer=start_layer,
         end_layer=end_layer,
         selected_attribution_chunk_size=attribution_chunk_size,
+        jacobian_target_chunk_size=jacobian_target_chunk_size,
         use_stop_grad_on_mlps=(not disable_stop_grad and use_stop_grad_on_mlps),
         ig_steps=ig_steps,
     )
@@ -668,7 +702,9 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                         attn_mask_final,
                         disable_stop_grad=disable_stop_grad,
                         center_logits=center_logits,
-                        neuron_chunk_size=50,
+                        neuron_chunk_size=(
+                            selected_attribution_neuron_lane_chunk_size_resolved
+                        ),
                         verbose=verbose,
                         instrumentation=instrumentation,
                         contribution_target_lane_chunk_size=(

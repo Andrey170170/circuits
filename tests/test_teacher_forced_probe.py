@@ -90,7 +90,10 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(
         "tokenizer": FakeChatTokenizer(),
         "cis": [[1, 2, 3, 4]],
         "config": ADAGConfig(
-            device="cpu", disable_stop_grad=True, skip_attr_contrib=True
+            device="cpu",
+            disable_stop_grad=True,
+            skip_attr_contrib=True,
+            selected_attribution_neuron_lane_chunk_size=3,
         ),
         "src_tokens": [0, 1, 2],
         "tgt_tokens": [2],
@@ -110,6 +113,21 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(
     ]
     assert graph_calls == 0
     assert "graph_expansion" not in probe_instrumentation.snapshot()["stages"]
+    probe_snapshot = probe_instrumentation.snapshot()
+    assert (
+        probe_snapshot["counters"][
+            "selected_attribution_neuron_lane_chunk_size_requested"
+        ]
+        == 3
+    )
+    assert (
+        probe_snapshot["counters"][
+            "selected_attribution_neuron_lane_chunk_size_resolved"
+        ]
+        == 3
+    )
+    assert probe_snapshot["early_predictors"]["selected_attribution_chunk_size"] == 3
+    assert probe_snapshot["early_predictors"]["jacobian_target_chunk_size"] == 50
 
     full_instrumentation = TraceInstrumentation(device="cpu")
     assert get_all_pairs_cl_ja_effects_with_attributions(

@@ -502,6 +502,7 @@ def record_selection_predictors(
     start_layer: int,
     end_layer: int,
     selected_attribution_chunk_size: int,
+    jacobian_target_chunk_size: int,
     use_stop_grad_on_mlps: bool,
     ig_steps: int | None,
 ) -> None:
@@ -509,6 +510,8 @@ def record_selection_predictors(
 
     if instrumentation is None:
         return
+    if selected_attribution_chunk_size <= 0 or jacobian_target_chunk_size <= 0:
+        raise ValueError("attribution and Jacobian chunk sizes must be positive")
     keep = set(keep_tokens)
     selected_by_layer: dict[int, list[list[int]]] = {
         int(layer): [pair for pair in pairs if int(pair[0]) in keep]
@@ -548,7 +551,7 @@ def record_selection_predictors(
             eligible_pairs.append({"src_layer": src_layer, "tgt_layer": tgt_layer})
             candidate_edges += selected_counts[src_layer] * tgt_count
             jacobian_target_chunks_per_pass += math.ceil(
-                tgt_count / selected_attribution_chunk_size
+                tgt_count / jacobian_target_chunk_size
             )
 
     selected_total = sum(selected_counts.values())
@@ -590,7 +593,7 @@ def record_selection_predictors(
         "planned_active_layer_pairs": eligible_pairs,
         "planned_active_layer_pair_count": len(eligible_pairs),
         "candidate_mlp_edge_count": candidate_edges,
-        "jacobian_target_chunk_size": selected_attribution_chunk_size,
+        "jacobian_target_chunk_size": jacobian_target_chunk_size,
         "jacobian_target_chunks_per_pass": jacobian_target_chunks_per_pass,
         "jacobian_pass_count": ig_execution_count,
         "planned_jacobian_target_chunk_executions": (

@@ -85,6 +85,20 @@ a positive integer opts into bounded target-axis chunks. Treat this option as
 an engineering candidate until a frozen same-code `None` versus width-one A100
 qualification passes exact projected-receipt and compact-artifact gates.
 
+`ADAGConfig.selected_attribution_neuron_lane_chunk_size` independently bounds
+the neuron lanes materialized by each ordinary selected-attribution batched
+VJP. `None` resolves to the historical width of 50; a positive integer is an
+opt-in execution width. Every chunk retains canonical selected-neuron order,
+including duplicate occurrences, and is projected into compact terminal
+source-attribution storage before the next traversal. This field does not
+change the 50-neuron cross-layer Jacobian width, the 20-neuron integrated-
+gradients width, the 10-neuron stop-gradient selected-attribution width, or any
+contribution target-lane width. Requested and resolved widths are recorded in
+trace counters, while each VJP record carries its resolved width and chunk
+index. Treat non-default widths as unqualified engineering candidates until a
+frozen same-target, same-GPU artifact comparison passes the declared exactness
+and resource gates.
+
 `ADAGConfig.selected_embed_contribution_target_lane_chunk_size` independently
 bounds the ordinary embedding contribution VJP. Direct execution projects each
 raw chunk immediately into canonical `(source, batch, target)` contributions;

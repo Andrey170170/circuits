@@ -274,6 +274,7 @@ def test_selection_predictors_match_planned_pair_math() -> None:
         start_layer=-1,
         end_layer=4,
         selected_attribution_chunk_size=2,
+        jacobian_target_chunk_size=2,
         use_stop_grad_on_mlps=False,
         ig_steps=None,
     )
@@ -314,6 +315,7 @@ def test_selection_predictors_count_ig_and_stop_grad_passes() -> None:
         start_layer=-1,
         end_layer=2,
         selected_attribution_chunk_size=20,
+        jacobian_target_chunk_size=20,
         use_stop_grad_on_mlps=True,
         ig_steps=2,
     )
@@ -338,6 +340,7 @@ def test_selection_predictors_match_non_default_layer_pair_bounds() -> None:
         start_layer=1,
         end_layer=4,
         selected_attribution_chunk_size=50,
+        jacobian_target_chunk_size=50,
         use_stop_grad_on_mlps=False,
         ig_steps=None,
     )
@@ -350,6 +353,34 @@ def test_selection_predictors_match_non_default_layer_pair_bounds() -> None:
     assert predictors["planned_active_layer_pair_count"] == 1
     assert predictors["candidate_mlp_edge_count"] == 3
     assert predictors["jacobian_target_chunks_per_pass"] == 1
+
+
+def test_selection_predictors_keep_attribution_and_jacobian_widths_independent() -> (
+    None
+):
+    recorder = TraceInstrumentation(device="cpu")
+    record_selection_predictors(
+        recorder,
+        {
+            1: [[0, neuron] for neuron in range(11)],
+            2: [[0, neuron] for neuron in range(11)],
+        },
+        keep_tokens=[0],
+        start_layer=0,
+        end_layer=3,
+        selected_attribution_chunk_size=3,
+        jacobian_target_chunk_size=50,
+        use_stop_grad_on_mlps=True,
+        ig_steps=None,
+    )
+
+    predictors = recorder.snapshot()["early_predictors"]
+    assert predictors["selected_attribution_chunk_size"] == 3
+    assert predictors["selected_attribution_chunks_per_pass"] == 8
+    assert predictors["jacobian_target_chunk_size"] == 50
+    assert predictors["jacobian_target_chunks_per_pass"] == 1
+    assert predictors["stop_grad_mlp_attribution_chunk_size"] == 10
+    assert predictors["stop_grad_mlp_attribution_chunks_per_pass"] == 4
 
 
 def test_stage_does_not_synchronize_while_unwinding_original_error(monkeypatch) -> None:

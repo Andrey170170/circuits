@@ -37,6 +37,32 @@ from circuits.tracing.instrumentation import (
 )
 from circuits.tracing.utils import NeuronIdx
 
+DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE = 50
+
+
+def resolve_selected_attribution_neuron_lane_chunk_size(
+    chunk_size: int | None,
+) -> int:
+    """Resolve the ordinary selected-attribution VJP neuron-lane width.
+
+    ``None`` preserves the historical 50-neuron execution.  The resolved
+    width controls only the batched VJP over selected neuron activations; it
+    does not affect stop-gradient attribution or contribution target lanes.
+    """
+
+    if chunk_size is None:
+        return DEFAULT_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE
+    if (
+        isinstance(chunk_size, bool)
+        or not isinstance(chunk_size, int)
+        or chunk_size <= 0
+    ):
+        raise ValueError(
+            "selected-attribution neuron-lane chunk size must be a "
+            "positive integer or None"
+        )
+    return chunk_size
+
 
 def _nonempty_neuron_layers(
     neuron_cfg: dict[int, list[list[int]]],
@@ -1172,7 +1198,7 @@ def _get_neuron_attr_and_contrib(
     neuron_tags: list[NeuronIdx] = []
 
     # Process neurons in chunks to avoid OOM with large identity matrices
-    chunk_size = neuron_chunk_size
+    chunk_size = resolve_selected_attribution_neuron_lane_chunk_size(neuron_chunk_size)
 
     for lid, pairs in tqdm(
         neuron_cfg.items(), desc="Computing neuron attributions", disable=not verbose
@@ -1186,9 +1212,11 @@ def _get_neuron_attr_and_contrib(
         all_pairs = list(pairs)
         layer_attr_chunks = []
         layer_neuron_acts_chunks = []
+        layer_chunk_count = (len(all_pairs) + chunk_size - 1) // chunk_size
 
         for chunk_start in range(0, len(all_pairs), chunk_size):
             chunk_pairs = all_pairs[chunk_start : chunk_start + chunk_size]
+            chunk_index = chunk_start // chunk_size
 
             layer_neuron_acts = []
             layer_neuron_tags = []
@@ -1217,6 +1245,9 @@ def _get_neuron_attr_and_contrib(
                     "operation_kind": "batched_vjp",
                     "layer": lid,
                     "chunk_start": chunk_start,
+                    "chunk_index": chunk_index,
+                    "chunk_count": layer_chunk_count,
+                    "neuron_lane_chunk_size_resolved": chunk_size,
                     "chunk_neuron_count": n_chunk,
                     "lane_count": n_chunk * batch,
                     "differentiated_output_shape": list(layer_neuron_acts.shape),
@@ -1242,6 +1273,9 @@ def _get_neuron_attr_and_contrib(
                     "operation_kind": "terminal_projection",
                     "layer": lid,
                     "chunk_start": chunk_start,
+                    "chunk_index": chunk_index,
+                    "chunk_count": layer_chunk_count,
+                    "neuron_lane_chunk_size_resolved": chunk_size,
                     "chunk_neuron_count": n_chunk,
                     "raw_vjp_result_shape": list(layer_grad_attr.shape),
                     "source_token_count": len(src_tokens),

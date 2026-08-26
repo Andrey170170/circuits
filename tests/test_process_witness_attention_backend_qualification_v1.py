@@ -64,6 +64,7 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE",
         "EXPECTED_SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE",
         "EXPECTED_STOP_GRADIENT_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE",
+        "EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
         "EXPECTED_EMBEDDING_EDGE_MATERIALIZATION",
         "EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION",
@@ -75,12 +76,16 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "run config selected-neuron target-lane chunk size disagrees",
         "run config selected-embed target-lane chunk size disagrees",
         "run config stop-gradient-embed target-lane chunk size disagrees",
+        "run config selected-attribution neuron-lane chunk size disagrees",
+        "legacy-unbound qualification config unexpectedly declares selected-attribution neuron-lane chunk size",
         "saved artifact allocator identity disagrees",
         "saved artifact contribution execution identity disagrees",
         "saved artifact target-lane chunk size identity disagrees",
         "saved artifact selected-neuron target-lane chunk size identity disagrees",
         "saved artifact selected-embed target-lane chunk size identity disagrees",
         "saved artifact stop-gradient-embed target-lane chunk size identity disagrees",
+        "saved artifact selected-attribution neuron-lane chunk size identity disagrees",
+        "legacy-unbound artifact unexpectedly declares selected-attribution neuron-lane chunk size",
         "chunk_size_field not in artifact_adag",
         "saved artifact lacks the exact requested allocator runtime receipt",
         "run config embedding-edge materialization disagrees",
@@ -328,6 +333,47 @@ def test_stop_gradient_embed_target_lane_configs_differ_only_by_width() -> None:
         del copied["adag_config"][field]
         normalized.append(copied)
     assert normalized[0] == normalized[1] == normalized[2]
+
+
+def test_selected_attribution_neuron_lane_configs_differ_only_by_width() -> None:
+    field = "selected_attribution_neuron_lane_chunk_size"
+    source = json.loads(
+        (
+            CONFIG_ROOT / "qwen3_4b_thinking_stop_gradient_embed_target_lane_chunk_"
+            "qualification_1_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    configs = []
+    for suffix, expected_width in (("none", None), ("1", 1)):
+        path = (
+            CONFIG_ROOT / "qwen3_4b_thinking_selected_attribution_neuron_lane_chunk_"
+            f"qualification_{suffix}_v1.json"
+        )
+        config = json.loads(path.read_text(encoding="utf-8"))
+        assert config["adag_config"][field] == expected_width
+        assert (
+            config["adag_config"][
+                "stop_gradient_embed_contribution_target_lane_chunk_size"
+            ]
+            == 1
+        )
+        assert (
+            config["artifact_root"]
+            == "results/bonafide/process-witness-selected-attribution-"
+            "neuron-lane-chunk-qualification-v1"
+        )
+        normalized_source_clone = json.loads(json.dumps(config))
+        del normalized_source_clone["adag_config"][field]
+        normalized_source_clone["artifact_root"] = source["artifact_root"]
+        assert normalized_source_clone == source
+        configs.append(config)
+
+    normalized = []
+    for config in configs:
+        copied = json.loads(json.dumps(config))
+        del copied["adag_config"][field]
+        normalized.append(copied)
+    assert normalized[0] == normalized[1]
 
 
 def test_backend_configs_clone_frozen_v4_except_for_explicit_backend() -> None:
