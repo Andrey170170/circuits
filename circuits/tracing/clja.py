@@ -67,6 +67,7 @@ from circuits.tracing.grad import (
 from circuits.tracing.instrumentation import (
     TraceInstrumentation,
     instrumentation_stage,
+    record_cuda_allocator_snapshot,
     record_selection_predictors,
 )
 from circuits.tracing.selected_target_logit_execution import (
@@ -739,6 +740,18 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             last_non_zero_layer = max(last_non_zero_layer, layer)
     end_layer = min(end_layer, last_non_zero_layer + 1)
 
+    record_cuda_allocator_snapshot(
+        instrumentation,
+        "after_important_mask_selection",
+        metadata={
+            "selected_neuron_count": sum(
+                len(neurons) for neurons in neuron_cfg.values()
+            ),
+            "effective_start_layer": start_layer,
+            "effective_end_layer": end_layer,
+        },
+    )
+
     if probe_only:
         return CLJAProbeSelection(
             selected_occurrences=_selected_probe_occurrences(
@@ -821,6 +834,17 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
                         ),
                     )
                 )
+
+        record_cuda_allocator_snapshot(
+            instrumentation,
+            "after_selected_attribution_contribution",
+            metadata={
+                "integrated_gradients_enabled": ig_steps is not None,
+                "integrated_gradients_execution_count": (
+                    ig_steps + 1 if ig_steps is not None else 1
+                ),
+            },
+        )
 
         if verbose:
             print(

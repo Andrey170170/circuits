@@ -99,7 +99,10 @@ def test_topk_runtime_identity_binds_explicit_instrumentation_policy() -> None:
     }
     base_config = _cpu_config()
     profiling_config = deepcopy(base_config)
-    profiling_config["instrumentation"] = {"cuda_memory_telemetry": True}
+    profiling_config["instrumentation"] = {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": True,
+    }
 
     base_id, base_identity = topk_runtime_artifact_identity(
         config=base_config, **common
@@ -110,7 +113,10 @@ def test_topk_runtime_identity_binds_explicit_instrumentation_policy() -> None:
 
     assert profiling_id != base_id
     assert "instrumentation" not in base_identity
-    assert profiling_identity["instrumentation"] == {"cuda_memory_telemetry": True}
+    assert profiling_identity["instrumentation"] == {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": True,
+    }
 
 
 def test_topk_runtime_identity_binds_explicit_cuda_allocator_policy() -> None:

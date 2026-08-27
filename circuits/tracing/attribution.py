@@ -34,6 +34,7 @@ from circuits.tracing.instrumentation import (
     TraceInstrumentation,
     cuda_memory_instrumentation_stage,
     cuda_memory_observation_stage,
+    record_cuda_allocator_snapshot,
 )
 from circuits.tracing.selected_target_logit_execution import (
     DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION,
@@ -1343,6 +1344,21 @@ def _get_neuron_attr_and_contrib(
             grad_outputs = torch.eye(
                 n_chunk * batch, device=device
             )  # (n_chunk * batch, n_chunk * batch)
+            allocator_snapshot_metadata = {
+                "execution_index": contribution_execution_index,
+                "layer": lid,
+                "chunk_index": chunk_index,
+                "chunk_count": layer_chunk_count,
+                "chunk_neuron_count": n_chunk,
+                "lane_count": n_chunk * batch,
+            }
+            record_cuda_allocator_snapshot(
+                instrumentation,
+                "before_first_selected_attribution_vjp",
+                metadata=allocator_snapshot_metadata,
+                once=True,
+                once_key=contribution_execution_index,
+            )
 
             # attribution to inputs for this layer chunk
             embeds.grad = None
@@ -1374,6 +1390,16 @@ def _get_neuron_attr_and_contrib(
                     vjp_measurement.metadata["vjp_result_shape"] = list(
                         layer_grad_attr.shape
                     )
+            record_cuda_allocator_snapshot(
+                instrumentation,
+                "after_first_selected_attribution_vjp_raw_result",
+                metadata={
+                    **allocator_snapshot_metadata,
+                    "vjp_result_shape": list(layer_grad_attr.shape),
+                },
+                once=True,
+                once_key=contribution_execution_index,
+            )
             with cuda_memory_observation_stage(
                 instrumentation,
                 "selected_attribution_chunk_projection",

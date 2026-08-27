@@ -29,6 +29,7 @@ from scripts.bonafide.runner import (
     RUN_CONFIG_SCHEMA,
     _completed_artifact_matches,
     collect_runtime_environment,
+    normalized_instrumentation,
     normalized_trace_warmup,
     run_wave,
     runtime_artifact_identity,
@@ -461,8 +462,33 @@ def test_run_config_validates_cuda_memory_instrumentation_policy() -> None:
         validate_run_config(config)
     validate_run_config(config, allow_instrumentation=True)
 
-    config["instrumentation"]["cuda_memory_telemetry"] = "yes"
+    assert normalized_instrumentation(config) == {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": False,
+    }
+
+    config["instrumentation"]["cuda_allocator_snapshot_telemetry"] = True
+    validate_run_config(config, allow_instrumentation=True)
+    assert normalized_instrumentation(config) == {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": True,
+    }
+
+    config["instrumentation"]["cuda_memory_telemetry"] = False
+    with pytest.raises(ValueError, match="requires cuda_memory_telemetry=true"):
+        validate_run_config(config, allow_instrumentation=True)
+
+    config["instrumentation"] = {"cuda_memory_telemetry": "yes"}
     with pytest.raises(ValueError, match="cuda_memory_telemetry must be boolean"):
+        validate_run_config(config, allow_instrumentation=True)
+
+    config["instrumentation"] = {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": "yes",
+    }
+    with pytest.raises(
+        ValueError, match="cuda_allocator_snapshot_telemetry must be boolean"
+    ):
         validate_run_config(config, allow_instrumentation=True)
 
     config["instrumentation"] = {"cuda_memory_telemetry": True, "typo": False}

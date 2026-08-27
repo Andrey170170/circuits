@@ -6,11 +6,14 @@ import json
 
 import pytest
 from circuits.tracing.instrumentation import (
+    CUDA_ALLOCATOR_SNAPSHOT_SCHEMA_VERSION,
     CUDA_MEMORY_SCHEMA_VERSION,
     SCHEMA_VERSION,
     TraceInstrumentation,
+    _summarize_cuda_allocator_snapshot,
     cuda_memory_instrumentation_stage,
     cuda_memory_observation_stage,
+    record_cuda_allocator_snapshot,
     record_selection_predictors,
 )
 
@@ -117,6 +120,228 @@ def test_cuda_telemetry_is_opt_in(monkeypatch) -> None:
     snapshot = recorder.snapshot()
     assert "cuda_memory" not in snapshot
     assert "call_measurements" not in snapshot["stages"]["work"]
+
+
+def test_allocator_snapshot_summary_math_and_device_filtering() -> None:
+    mib = 1 << 20
+    gib = 1 << 30
+    summary = _summarize_cuda_allocator_snapshot(
+        [
+            {
+                "device": 0,
+                "total_size": 80 * mib,
+                "blocks": [
+                    {
+                        "state": "active_allocated",
+                        "size": 64 * mib,
+                        "requested_size": 60 * mib,
+                    },
+                    {"state": "active_allocated", "size": 4 * mib},
+                    {"state": "inactive", "size": 12 * mib},
+                ],
+            },
+            {
+                "device": 0,
+                "total_size": 2 * gib + 8 * mib,
+                "blocks": [
+                    {"state": "inactive", "size": 2 * gib},
+                    {"state": "inactive", "size": 8 * mib},
+                ],
+            },
+            {
+                "device": 0,
+                "total_size": 48 * mib,
+                "blocks": [
+                    {"state": "active_pending_free", "size": 32 * mib},
+                    {"state": "active_awaiting_free", "size": 16 * mib},
+                ],
+            },
+            {
+                "device": 1,
+                "total_size": 999,
+                "blocks": [{"state": "inactive", "size": 999}],
+            },
+        ],
+        device_index=0,
+    )
+
+    assert summary["segment_count"] == 3
+    assert summary["block_count"] == 7
+    assert summary["total_segment_bytes"] == 2 * gib + 136 * mib
+    assert summary["block_states"] == {
+        "active_allocated": {"block_count": 2, "bytes": 68 * mib},
+        "active_pending_free": {"block_count": 2, "bytes": 48 * mib},
+        "inactive": {"block_count": 3, "bytes": 2 * gib + 20 * mib},
+    }
+    assert summary["largest_inactive_block_bytes"] == 2 * gib
+    assert summary["fully_inactive_segment_count"] == 1
+    assert summary["fully_inactive_segment_bytes"] == 2 * gib + 8 * mib
+    assert summary["mixed_segment_count"] == 1
+    assert summary["inactive_blocks_in_mixed_segments"] == 1
+    assert summary["inactive_bytes_in_mixed_segments"] == 12 * mib
+    assert summary["active_allocated_requested_bytes"] == 60 * mib
+    assert summary["active_allocated_size_minus_requested_bytes"] == 4 * mib
+    assert summary["active_allocated_missing_requested_size_count"] == 1
+    buckets = {
+        record["bucket"]: record for record in summary["inactive_block_size_buckets"]
+    }
+    assert buckets["gt_1_mib_le_16_mib"] == {
+        "bucket": "gt_1_mib_le_16_mib",
+        "block_count": 2,
+        "bytes": 20 * mib,
+    }
+    assert buckets["gt_1_gib"] == {
+        "bucket": "gt_1_gib",
+        "block_count": 1,
+        "bytes": 2 * gib,
+    }
+
+
+def test_allocator_snapshot_is_opt_in_and_helper_is_noop(monkeypatch) -> None:
+    def unexpected_snapshot():
+        raise AssertionError("disabled allocator snapshot telemetry captured")
+
+    monkeypatch.setattr("torch.cuda.memory_snapshot", unexpected_snapshot)
+    recorder = TraceInstrumentation(device="cuda:0")
+
+    assert record_cuda_allocator_snapshot(None, "disabled") is None
+    assert record_cuda_allocator_snapshot(recorder, "disabled") is None
+    assert "cuda_allocator_snapshots" not in recorder.snapshot()
+
+
+def test_allocator_snapshot_requires_cuda_memory_telemetry() -> None:
+    with pytest.raises(ValueError, match="requires CUDA memory telemetry"):
+        TraceInstrumentation(device="cuda:0", cuda_allocator_snapshot_telemetry=True)
+
+
+def test_allocator_snapshots_are_compact_ordered_and_do_not_synchronize(
+    monkeypatch,
+) -> None:
+    _install_fake_cuda(monkeypatch)
+    raw_segments = [
+        {
+            "device": 0,
+            "address": 987654321,
+            "total_size": 100,
+            "frames": [{"filename": "secret_frame.py"}],
+            "blocks": [
+                {
+                    "address": 987654321,
+                    "state": "active_allocated",
+                    "size": 60,
+                    "requested_size": 55,
+                    "frames": [{"filename": "secret_block_frame.py"}],
+                },
+                {"state": "inactive", "size": 40},
+            ],
+        }
+    ]
+    snapshot_calls = 0
+
+    def fake_memory_snapshot():
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        return raw_segments
+
+    monkeypatch.setattr("torch.cuda.memory_snapshot", fake_memory_snapshot)
+    monkeypatch.setattr("torch.cuda.mem_get_info", lambda _device=None: (300, 400))
+    recorder = TraceInstrumentation(
+        device="cuda:0",
+        synchronize_cuda=True,
+        cuda_memory_telemetry=True,
+        cuda_allocator_snapshot_telemetry=True,
+    )
+
+    def unexpected_synchronize() -> None:
+        raise AssertionError("allocator snapshot explicitly synchronized CUDA")
+
+    monkeypatch.setattr(recorder, "_synchronize", unexpected_synchronize)
+    first = record_cuda_allocator_snapshot(
+        recorder,
+        "before_first_vjp",
+        metadata={"execution_index": 0, "shape": (1, 2)},
+        once=True,
+        once_key=0,
+    )
+    duplicate = record_cuda_allocator_snapshot(
+        recorder,
+        "before_first_vjp",
+        metadata={"execution_index": 0},
+        once=True,
+        once_key=0,
+    )
+    second = record_cuda_allocator_snapshot(
+        recorder,
+        "before_first_vjp",
+        metadata={"execution_index": 1},
+        once=True,
+        once_key=1,
+    )
+
+    assert first is not None
+    assert duplicate is None
+    assert second is not None
+    assert snapshot_calls == 2
+    snapshot = recorder.snapshot()
+    allocator_snapshots = snapshot["cuda_allocator_snapshots"]
+    assert allocator_snapshots["schema_version"] == (
+        CUDA_ALLOCATOR_SNAPSHOT_SCHEMA_VERSION
+    )
+    assert allocator_snapshots["capture_semantics"] == {
+        "allocator_history_enabled_by_instrumentation": False,
+        "raw_snapshot_retained": False,
+        "explicit_cuda_synchronization": False,
+        "active_pending_free_raw_state_aliases": [
+            "active_pending_free",
+            "active_awaiting_free",
+        ],
+        "mixed_segment_inactive_bytes_semantics": (
+            "fragmentation_risk_diagnostic_reuse_and_release_are_allocator_"
+            "policy_dependent_v1"
+        ),
+        "largest_inactive_block_semantics": (
+            "diagnostic_not_allocation_success_guarantee_v1"
+        ),
+    }
+    captures = allocator_snapshots["captures"]
+    assert [capture["capture_index"] for capture in captures] == [0, 1]
+    assert [capture["metadata"]["execution_index"] for capture in captures] == [
+        0,
+        1,
+    ]
+    assert captures[0]["metadata"]["shape"] == [1, 2]
+    assert captures[0]["device_free_bytes"] == 300
+    assert captures[0]["device_total_bytes"] == 400
+    assert captures[0]["capture_wall_seconds"] >= 0
+    assert captures[0]["elapsed_since_trace_start_seconds"] >= 0
+    serialized = json.dumps(snapshot, allow_nan=False)
+    for raw_only_value in (
+        "address",
+        "frames",
+        "secret_frame.py",
+        "secret_block_frame.py",
+        "987654321",
+    ):
+        assert raw_only_value not in serialized
+
+
+def test_allocator_snapshot_malformed_input_fails_closed(monkeypatch) -> None:
+    _install_fake_cuda(monkeypatch)
+    monkeypatch.setattr(
+        "torch.cuda.memory_snapshot",
+        lambda: [{"total_size": 100, "blocks": []}],
+    )
+    monkeypatch.setattr("torch.cuda.mem_get_info", lambda _device=None: (300, 400))
+    recorder = TraceInstrumentation(
+        device="cuda:0",
+        cuda_memory_telemetry=True,
+        cuda_allocator_snapshot_telemetry=True,
+    )
+
+    with pytest.raises(ValueError, match="lacks device identity"):
+        recorder.record_cuda_allocator_snapshot("malformed")
+
+    assert recorder.snapshot()["cuda_allocator_snapshots"]["captures"] == []
 
 
 def test_cuda_telemetry_preserves_nested_and_repeated_stage_peaks(monkeypatch) -> None:

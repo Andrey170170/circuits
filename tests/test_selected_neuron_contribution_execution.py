@@ -7,6 +7,7 @@ import weakref
 from dataclasses import asdict
 from types import SimpleNamespace
 
+import circuits.tracing.attribution as attribution_module
 import pytest
 import torch
 from circuits.tracing.attribution import (
@@ -332,3 +333,46 @@ def test_direct_and_integrated_gradient_paths_forward_target_logit_strategy_exac
     for expected, actual in zip(reference[:3], candidate[:3], strict=True):
         torch.testing.assert_close(actual, expected, atol=0, rtol=0)
     assert candidate[3] == reference[3]
+
+
+def test_allocator_snapshot_call_sites_are_once_per_attribution_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted_calls: list[tuple[str, int | None, int | None]] = []
+    seen: set[tuple[str, int | None]] = set()
+
+    def capture_once(
+        _instrumentation,
+        point: str,
+        *,
+        metadata,
+        once: bool,
+        once_key: int | None,
+    ) -> None:
+        key = (point, once_key)
+        if once and key in seen:
+            return
+        seen.add(key)
+        accepted_calls.append((point, metadata["execution_index"], once_key))
+
+    monkeypatch.setattr(
+        attribution_module, "record_cuda_allocator_snapshot", capture_once
+    )
+
+    _run_toy(_ToyModel(), chunk_size=1, ig=False)
+    assert accepted_calls == [
+        ("before_first_selected_attribution_vjp", None, None),
+        ("after_first_selected_attribution_vjp_raw_result", None, None),
+    ]
+
+    accepted_calls.clear()
+    seen.clear()
+    _run_toy(_ToyModel(), chunk_size=1, ig=True)
+    assert accepted_calls == [
+        ("before_first_selected_attribution_vjp", 0, 0),
+        ("after_first_selected_attribution_vjp_raw_result", 0, 0),
+        ("before_first_selected_attribution_vjp", 1, 1),
+        ("after_first_selected_attribution_vjp_raw_result", 1, 1),
+        ("before_first_selected_attribution_vjp", 2, 2),
+        ("after_first_selected_attribution_vjp_raw_result", 2, 2),
+    ]

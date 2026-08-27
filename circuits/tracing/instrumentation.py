@@ -19,6 +19,16 @@ import torch
 
 SCHEMA_VERSION = "adag.trace-instrumentation.v1"
 CUDA_MEMORY_SCHEMA_VERSION = "adag.cuda-memory-telemetry.v1"
+CUDA_ALLOCATOR_SNAPSHOT_SCHEMA_VERSION = "adag.cuda-allocator-fragmentation-snapshot.v1"
+
+_INACTIVE_BLOCK_SIZE_BUCKETS = (
+    (1 << 20, "le_1_mib"),
+    (16 << 20, "gt_1_mib_le_16_mib"),
+    (64 << 20, "gt_16_mib_le_64_mib"),
+    (256 << 20, "gt_64_mib_le_256_mib"),
+    (1 << 30, "gt_256_mib_le_1_gib"),
+    (None, "gt_1_gib"),
+)
 
 
 def _json_safe(value: Any) -> Any:
@@ -35,6 +45,141 @@ def _json_safe(value: Any) -> Any:
     if hasattr(value, "item"):
         return _json_safe(value.item())
     raise TypeError(f"instrumentation value is not JSON serializable: {type(value)!r}")
+
+
+def _summarize_cuda_allocator_snapshot(
+    segments: list[dict[str, Any]], *, device_index: int
+) -> dict[str, Any]:
+    """Reduce one allocator snapshot to compact, device-local diagnostics.
+
+    Inactive bytes in mixed segments are a fragmentation-risk signal, not a
+    claim that the allocator cannot reuse those blocks for a fitting request.
+    PyTorch has emitted both ``active_pending_free`` and
+    ``active_awaiting_free`` for the same allocator state; both are reported
+    canonically as ``active_pending_free``.
+    """
+
+    device_segments: list[dict[str, Any]] = []
+    for segment in segments:
+        if "device" not in segment:
+            raise ValueError("CUDA allocator snapshot segment lacks device identity")
+        if int(segment["device"]) == device_index:
+            device_segments.append(segment)
+
+    state_totals = {
+        "active_allocated": {"block_count": 0, "bytes": 0},
+        "active_pending_free": {"block_count": 0, "bytes": 0},
+        "inactive": {"block_count": 0, "bytes": 0},
+    }
+    inactive_buckets = {
+        name: {"block_count": 0, "bytes": 0}
+        for _upper_bound, name in _INACTIVE_BLOCK_SIZE_BUCKETS
+    }
+    block_count = 0
+    largest_inactive_block_bytes = 0
+    fully_inactive_segment_count = 0
+    fully_inactive_segment_bytes = 0
+    mixed_segment_count = 0
+    inactive_blocks_in_mixed_segments = 0
+    inactive_bytes_in_mixed_segments = 0
+    active_allocated_requested_bytes = 0
+    active_allocated_size_minus_requested_bytes = 0
+    active_allocated_missing_requested_size_count = 0
+    active_allocated_requested_size_exceeds_block_size_count = 0
+
+    for segment in device_segments:
+        blocks = segment.get("blocks")
+        if not isinstance(blocks, list):
+            raise ValueError("CUDA allocator snapshot segment blocks are invalid")
+        block_count += len(blocks)
+        segment_states: set[str] = set()
+        segment_inactive_count = 0
+        segment_inactive_bytes = 0
+        for block in blocks:
+            raw_state = block.get("state")
+            state = (
+                "active_pending_free"
+                if raw_state in {"active_pending_free", "active_awaiting_free"}
+                else raw_state
+            )
+            if state not in state_totals:
+                raise ValueError(
+                    f"unsupported CUDA allocator block state: {raw_state!r}"
+                )
+            size = block.get("size")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                raise ValueError("CUDA allocator snapshot block size is invalid")
+            state_totals[state]["block_count"] += 1
+            state_totals[state]["bytes"] += size
+            segment_states.add(state)
+            if state == "inactive":
+                segment_inactive_count += 1
+                segment_inactive_bytes += size
+                largest_inactive_block_bytes = max(largest_inactive_block_bytes, size)
+                for upper_bound, name in _INACTIVE_BLOCK_SIZE_BUCKETS:
+                    if upper_bound is None or size <= upper_bound:
+                        inactive_buckets[name]["block_count"] += 1
+                        inactive_buckets[name]["bytes"] += size
+                        break
+            elif state == "active_allocated":
+                requested_size = block.get("requested_size")
+                if isinstance(requested_size, bool) or not isinstance(
+                    requested_size, int
+                ):
+                    active_allocated_missing_requested_size_count += 1
+                else:
+                    active_allocated_requested_bytes += requested_size
+                    if requested_size > size:
+                        active_allocated_requested_size_exceeds_block_size_count += 1
+                    else:
+                        active_allocated_size_minus_requested_bytes += (
+                            size - requested_size
+                        )
+
+        total_size = segment.get("total_size")
+        if (
+            isinstance(total_size, bool)
+            or not isinstance(total_size, int)
+            or total_size < 0
+        ):
+            raise ValueError("CUDA allocator snapshot segment total_size is invalid")
+        if blocks and segment_states == {"inactive"}:
+            fully_inactive_segment_count += 1
+            fully_inactive_segment_bytes += total_size
+        elif segment_inactive_count and segment_states - {"inactive"}:
+            mixed_segment_count += 1
+            inactive_blocks_in_mixed_segments += segment_inactive_count
+            inactive_bytes_in_mixed_segments += segment_inactive_bytes
+
+    return {
+        "device_index": device_index,
+        "segment_count": len(device_segments),
+        "block_count": block_count,
+        "total_segment_bytes": sum(
+            int(segment["total_size"]) for segment in device_segments
+        ),
+        "block_states": state_totals,
+        "largest_inactive_block_bytes": largest_inactive_block_bytes,
+        "fully_inactive_segment_count": fully_inactive_segment_count,
+        "fully_inactive_segment_bytes": fully_inactive_segment_bytes,
+        "mixed_segment_count": mixed_segment_count,
+        "inactive_blocks_in_mixed_segments": inactive_blocks_in_mixed_segments,
+        "inactive_bytes_in_mixed_segments": inactive_bytes_in_mixed_segments,
+        "active_allocated_requested_bytes": active_allocated_requested_bytes,
+        "active_allocated_size_minus_requested_bytes": (
+            active_allocated_size_minus_requested_bytes
+        ),
+        "active_allocated_missing_requested_size_count": (
+            active_allocated_missing_requested_size_count
+        ),
+        "active_allocated_requested_size_exceeds_block_size_count": (
+            active_allocated_requested_size_exceeds_block_size_count
+        ),
+        "inactive_block_size_buckets": [
+            {"bucket": name, **inactive_buckets[name]}
+            for _upper_bound, name in _INACTIVE_BLOCK_SIZE_BUCKETS
+        ],
+    }
 
 
 @dataclass
@@ -65,10 +210,16 @@ class TraceInstrumentation:
         device: str | torch.device | None = None,
         synchronize_cuda: bool = False,
         cuda_memory_telemetry: bool = False,
+        cuda_allocator_snapshot_telemetry: bool = False,
     ) -> None:
         self.device = str(device) if device is not None else None
         self.synchronize_cuda = bool(synchronize_cuda)
         self.cuda_memory_telemetry = bool(cuda_memory_telemetry)
+        self.cuda_allocator_snapshot_telemetry = bool(cuda_allocator_snapshot_telemetry)
+        if self.cuda_allocator_snapshot_telemetry and not self.cuda_memory_telemetry:
+            raise ValueError(
+                "CUDA allocator snapshot telemetry requires CUDA memory telemetry"
+            )
         self._started = time.perf_counter()
         self._stages: dict[str, dict[str, Any]] = {}
         self._counters: dict[str, Any] = {}
@@ -80,6 +231,8 @@ class TraceInstrumentation:
         self._cuda_device: torch.device | None = None
         self._cuda_overall_start: dict[str, int | float] | None = None
         self._cuda_overall_peak: dict[str, int] = {}
+        self._cuda_allocator_snapshots: list[dict[str, Any]] = []
+        self._cuda_allocator_snapshot_once_keys: set[str] = set()
         if self.cuda_memory_telemetry:
             device_value = (
                 torch.device(self.device) if self.device is not None else None
@@ -94,6 +247,70 @@ class TraceInstrumentation:
             torch.cuda.reset_peak_memory_stats(self._cuda_device)
             self._cuda_overall_start = self._cuda_metrics()
             self._update_overall_peak(self._cuda_overall_start)
+
+    def record_cuda_allocator_snapshot(
+        self,
+        point: str,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        once: bool = False,
+        once_key: Any = None,
+    ) -> dict[str, Any] | None:
+        """Capture and immediately summarize allocator structure without a sync.
+
+        ``once_key`` scopes recorder-owned de-duplication. This lets an
+        integrated-gradients run capture the first VJP of each execution while
+        suppressing later chunks within that execution.
+        """
+
+        if not self.cuda_allocator_snapshot_telemetry:
+            return None
+        if self._cuda_device is None:
+            raise RuntimeError("allocator snapshot telemetry lacks a CUDA device")
+        if not isinstance(point, str) or not point:
+            raise ValueError("allocator snapshot point must be a non-empty string")
+        safe_once_key = _json_safe(once_key)
+        deduplication_key = json.dumps(
+            [point, safe_once_key], sort_keys=True, separators=(",", ":")
+        )
+        if once and deduplication_key in self._cuda_allocator_snapshot_once_keys:
+            return None
+
+        device_index = self._cuda_device.index
+        if device_index is None:
+            device_index = int(torch.cuda.current_device())
+        started = time.perf_counter()
+        raw_segments = torch.cuda.memory_snapshot()
+        if not isinstance(raw_segments, list):
+            raise ValueError("CUDA allocator snapshot is not a segment list")
+        summary = _summarize_cuda_allocator_snapshot(
+            raw_segments, device_index=device_index
+        )
+        device_free_bytes, device_total_bytes = torch.cuda.mem_get_info(
+            self._cuda_device
+        )
+        current_allocator_stats = self._cuda_metrics()
+        capture_wall_seconds = time.perf_counter() - started
+        safe_metadata = _json_safe(dict(metadata or {}))
+        if not isinstance(safe_metadata, dict):
+            raise RuntimeError("allocator snapshot metadata is not an object")
+        record = {
+            "capture_index": len(self._cuda_allocator_snapshots),
+            "point": point,
+            "metadata": safe_metadata,
+            "elapsed_since_trace_start_seconds": started - self._started,
+            "capture_wall_seconds": capture_wall_seconds,
+            "device_free_bytes": int(device_free_bytes),
+            "device_total_bytes": int(device_total_bytes),
+            "current_allocator_stats": current_allocator_stats,
+            **summary,
+        }
+        # Retain only the compact summary. The raw segment/block/address graph
+        # is deliberately allowed to fall out of scope here.
+        self._cuda_allocator_snapshots.append(record)
+        if once:
+            self._cuda_allocator_snapshot_once_keys.add(deduplication_key)
+        return record
 
     def _synchronize(self) -> None:
         if not self.synchronize_cuda:
@@ -438,6 +655,32 @@ class TraceInstrumentation:
                 "layer_pairs": self._layer_pairs,
                 "execution_records": self._execution_records,
                 **({"cuda_memory": cuda_memory} if cuda_memory is not None else {}),
+                **(
+                    {
+                        "cuda_allocator_snapshots": {
+                            "schema_version": (CUDA_ALLOCATOR_SNAPSHOT_SCHEMA_VERSION),
+                            "capture_semantics": {
+                                "allocator_history_enabled_by_instrumentation": False,
+                                "raw_snapshot_retained": False,
+                                "explicit_cuda_synchronization": False,
+                                "active_pending_free_raw_state_aliases": [
+                                    "active_pending_free",
+                                    "active_awaiting_free",
+                                ],
+                                "mixed_segment_inactive_bytes_semantics": (
+                                    "fragmentation_risk_diagnostic_reuse_and_release_"
+                                    "are_allocator_policy_dependent_v1"
+                                ),
+                                "largest_inactive_block_semantics": (
+                                    "diagnostic_not_allocation_success_guarantee_v1"
+                                ),
+                            },
+                            "captures": self._cuda_allocator_snapshots,
+                        }
+                    }
+                    if self.cuda_allocator_snapshot_telemetry
+                    else {}
+                ),
             }
         )
         # Keep the guarantee local rather than relying on the artifact writer.
@@ -491,6 +734,26 @@ def cuda_memory_observation_stage(
         name,
         metadata=observation_metadata,
         synchronize=False,
+    )
+
+
+def record_cuda_allocator_snapshot(
+    instrumentation: TraceInstrumentation | None,
+    point: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+    once: bool = False,
+    once_key: Any = None,
+) -> dict[str, Any] | None:
+    """Record a compact allocator snapshot or no-op when it is not enabled."""
+
+    if instrumentation is None:
+        return None
+    return instrumentation.record_cuda_allocator_snapshot(
+        point,
+        metadata=metadata,
+        once=once,
+        once_key=once_key,
     )
 
 

@@ -108,7 +108,10 @@ def normalized_instrumentation(config: Mapping[str, Any]) -> dict[str, bool]:
     raw = config.get("instrumentation", {})
     if not isinstance(raw, Mapping):
         raise ValueError("run config instrumentation must be an object")
-    allowed = {"cuda_memory_telemetry"}
+    allowed = {
+        "cuda_memory_telemetry",
+        "cuda_allocator_snapshot_telemetry",
+    }
     unknown = set(raw) - allowed
     if unknown:
         raise ValueError(
@@ -120,7 +123,23 @@ def normalized_instrumentation(config: Mapping[str, Any]) -> dict[str, bool]:
         raise ValueError(
             "run config instrumentation.cuda_memory_telemetry must be boolean"
         )
-    return {"cuda_memory_telemetry": cuda_memory_telemetry}
+    cuda_allocator_snapshot_telemetry = raw.get(
+        "cuda_allocator_snapshot_telemetry", False
+    )
+    if not isinstance(cuda_allocator_snapshot_telemetry, bool):
+        raise ValueError(
+            "run config instrumentation.cuda_allocator_snapshot_telemetry "
+            "must be boolean"
+        )
+    if cuda_allocator_snapshot_telemetry and not cuda_memory_telemetry:
+        raise ValueError(
+            "run config instrumentation.cuda_allocator_snapshot_telemetry "
+            "requires cuda_memory_telemetry=true"
+        )
+    return {
+        "cuda_memory_telemetry": cuda_memory_telemetry,
+        "cuda_allocator_snapshot_telemetry": (cuda_allocator_snapshot_telemetry),
+    }
 
 
 def validate_run_config(

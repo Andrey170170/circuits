@@ -85,6 +85,26 @@ equivalent to earlier unsynchronized benchmarks. A stage interrupted by an excep
 unsynchronized host elapsed time and increments `failed_calls`; it never attempts a CUDA
 synchronization while unwinding, because that could mask the original tracing error.
 
+Allocator-layout telemetry is a separate, explicit profiling option. Set both
+`instrumentation.cuda_memory_telemetry=true` and
+`instrumentation.cuda_allocator_snapshot_telemetry=true` in a new run config to record compact
+`adag.cuda-allocator-fragmentation-snapshot.v1` summaries. The policy is part of the runtime
+artifact identity and defaults to disabled. It uses history-free `torch.cuda.memory_snapshot()`
+calls at four allocation boundaries: after important-mask selection, immediately before the first
+selected-attribution VJP, while that first raw VJP result is live, and after the complete selected
+attribution/contribution phase. Integrated-gradients runs capture the two VJP boundaries once per
+IG execution rather than once per neuron chunk.
+
+Each checkpoint records its capture cost and trace-relative time, device free/total bytes,
+ordinary allocator counters, segment and block totals, active/pending-free/inactive bytes, the
+largest inactive block, fully inactive segments, inactive bytes in mixed segments, allocation
+rounding slack, and fixed inactive-block size buckets. Raw allocator addresses, frames, and
+history are not retained, and the checkpoint helper adds no explicit CUDA synchronization. Treat
+inactive bytes in mixed segments as a fragmentation-risk diagnostic, not as proof that those bytes
+are unusable or unreleasable: reuse and release behavior depends on request size, stream state, and
+the configured allocator policy. The largest inactive block is likewise diagnostic rather than a
+guarantee that a future allocation will succeed.
+
 ## Required trace semantics
 
 For a frozen response with tokens `y[0], ..., y[n-1]`, target response position `i` means:

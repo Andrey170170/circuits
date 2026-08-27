@@ -534,6 +534,9 @@ def run_topk_wave(
                 device=device,
                 synchronize_cuda=uses_cuda,
                 cuda_memory_telemetry=(instrumentation_policy["cuda_memory_telemetry"]),
+                cuda_allocator_snapshot_telemetry=(
+                    instrumentation_policy["cuda_allocator_snapshot_telemetry"]
+                ),
             )
             config_before = _model_config_sha256(model)
             started = time.perf_counter()
