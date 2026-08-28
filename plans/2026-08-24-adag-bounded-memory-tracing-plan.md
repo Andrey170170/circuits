@@ -13,8 +13,10 @@ at 8,266 tokens but does not move the later ordinary selected-attribution/contri
 Level 1m projects only the selected LM-head positions and is exact-qualified. Allocator-aware
 telemetry then showed that the 8,266-token run completed without retries or OOMs and was near the
 capacity boundary rather than certain to fail. Level 1n, post-selection discovery-state
-compaction, is implemented and CPU-qualified but remains GPU-unqualified. None completes Level 1
-or authorizes broader tracing runs by itself.
+compaction, is exact-qualified on the 2,951-token A100 reference and comfortable at 8,266 tokens.
+The frozen 9,397-token endpoint completes, but one allocator retry and less than 8 GiB of physical
+headroom make it near-capacity evidence rather than a capacity-qualified result. None authorizes
+broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -821,13 +823,36 @@ normal-trace adapter.
 
 Receipts bind strategy, coordinate order and hash, compact value shape, dtype, raw hash and bytes,
 logical input/retained/released bytes, placement, and allocator state immediately before and after
-the storage transition. This implementation has passed focused CPU algebra, lifecycle,
-integration, adversarial receipt, and launcher tests. It remains unaccepted until sequential A100
-jobs establish strict dense/compact parity and measured memory behavior on the 2,951-token target.
-Only after that gate may the candidate advance one job at a time through 8,266 and the frozen
-9,397-token near-10k target. The immutable qualification-v4 manifest contains no actual 10,000-
-token item; an exact 10k proof would require a new versioned manifest rather than editing the
-frozen one.
+the storage transition. Implementation commit `55e7bcf` and checkpoint-contract fix `e536b6a`
+passed focused CPU algebra, lifecycle, integration, adversarial receipt, and launcher tests.
+
+Sequential A100 jobs `15348279` (`dense_v1`) and `15351183` (`compact_cpu_v1`) qualified the frozen
+2,951-token reference. The zero-tolerance report passes exact 3,094-node/2,366-edge topology and
+every target, node, edge, and candidate-profile value; its SHA-256 is
+`1e6e16a67fe7bf94ba0f1941ff00132266b4fc7b09b80db7251c3fab04b837b2`. Compact storage released
+5,182,427,882 logical bytes and reduced peak allocated memory from 26,723,485,696 to
+23,726,469,632 bytes while reservation stayed 34,613,493,760 bytes. Trace time was 132.940 versus
+132.640 seconds.
+
+Job `15356053` then completed the frozen 8,266-token candidate in 343.508 seconds. It released
+14,516,418,376 logical bytes, peaked at 51,873,096,704 allocated and 81,797,316,608 reserved bytes,
+recorded zero retries/OOMs, and retained 22,972,558,336 bytes of conservative allocator-aware
+headroom. This point is `comfortable`.
+
+Job `15356095` completed the largest frozen item, 9,397 actual context tokens, in 298.132 seconds.
+It released 16,502,635,380 logical bytes and peaked at 57,800,285,696 allocated and
+78,741,766,144 reserved bytes. It did not OOM, but one allocator retry makes the receipt `critical`:
+conservative headroom was 9,053,827,584 bytes and legacy physical headroom was only
+6,352,011,264 bytes. Its lower runtime is workload-specific (70 selected occurrences and 597
+edges) and is not evidence that longer traces are faster. Initial attribution is now the measured
+57.80-GB global owner; selected attribution/contribution peaks at 50.02 GB and stop-gradient work
+at 47.74 GB.
+
+The next narrow gate is therefore a same-commit 9,397-token `default_v1` versus
+`expandable_segments_v1` allocator A/B while retaining `compact_cpu_v1`. It must eliminate the
+retry and pass the strict allocator comparator before 9,397 is called capacity-qualified. The
+immutable qualification-v4 manifest contains no actual 10,000-token item; an exact 10k proof
+would require a new versioned manifest rather than editing the frozen one.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 
@@ -962,12 +987,12 @@ is useful scaling evidence but does not authorize a full tracing campaign.
 
 ## Implementation order
 
-1. Qualify Level 1n post-selection compaction with a strict sequential dense/compact 2,951-token
-   A100 comparison.
-2. If exact, run the compact candidate sequentially at 8,266 and 9,397 tokens, stopping at the
-   first correctness, memory, runtime, or provenance failure; refresh the owner/runtime table.
-3. If Level 1n does not provide sufficient A100 capacity, add the synchronous host boundary store
-   and source-group scheduler.
+1. Run the same-commit compact 9,397-token default-versus-expandable allocator A/B and require
+   strict scientific equality plus zero retries/OOMs.
+2. If expandable segments qualifies, freeze it as an optional near-capacity policy and create a
+   new immutable actual-10k target before making a 10k claim.
+3. If the allocator A/B remains critical, target the newly measured initial-attribution owner or
+   add the synchronous host boundary store and source-group scheduler.
 4. Qualify synchronous Level 2, then add double-buffered prefetch and qualify it independently.
 5. Run the A100 ladder until a new measured owner or failure appears.
 6. Add Level 3 checkpoint/window profiles only where Level 2 telemetry shows retained state or host

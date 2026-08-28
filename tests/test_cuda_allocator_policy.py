@@ -18,6 +18,14 @@ SOURCE_CONFIG = (
     CONFIG_ROOT
     / "qwen3_4b_thinking_contribution_source_leaf_profiling_flash_sdpa_causal_v1.json"
 )
+COMPACT_DEFAULT_CONFIG = (
+    CONFIG_ROOT
+    / "qwen3_4b_thinking_post_selection_state_storage_qualification_compact_cpu_v1.json"
+)
+COMPACT_EXPANDABLE_CONFIG = (
+    CONFIG_ROOT
+    / "qwen3_4b_thinking_post_selection_state_storage_compact_cpu_allocator_qualification_expandable_segments_v1.json"
+)
 
 
 def _config(policy: str) -> dict:
@@ -31,6 +39,15 @@ def test_allocator_configs_clone_source_leaf_except_for_explicit_policy() -> Non
         config = _config(policy)
         assert config.pop("cuda_allocator_policy") == policy
         assert config == source
+
+
+def test_compact_allocator_configs_differ_only_by_explicit_policy() -> None:
+    default = json.loads(COMPACT_DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    expandable = json.loads(COMPACT_EXPANDABLE_CONFIG.read_text(encoding="utf-8"))
+
+    assert default.pop("cuda_allocator_policy") == "default_v1"
+    assert expandable.pop("cuda_allocator_policy") == "expandable_segments_v1"
+    assert expandable == default
 
 
 def test_policy_environment_and_runtime_receipt_are_exact() -> None:

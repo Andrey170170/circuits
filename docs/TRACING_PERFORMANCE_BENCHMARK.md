@@ -1,6 +1,6 @@
 # Target-aware tracing performance benchmark
 
-Status: implementation contract for the first ADAG–BonaFide GPU run.
+Status: active benchmark and qualification record through the 9,397-token Level 1n A100 endpoint.
 
 ## Purpose
 
@@ -203,6 +203,51 @@ estimate crossed the convention while the denser joint observation retained abou
 the trace completed without allocator trouble, and exact scientific parity held. This threshold
 was a useful warning boundary here, not a failure boundary. Legacy configs that omit the policy
 and action remain `peak_reserved_v1` plus `stop`, and retain their old artifact identity.
+
+### Post-selection discovery-state compaction (live-qualified 2026-08-28)
+
+Implementation commit `55e7bcf` adds explicit `dense_v1` and `compact_cpu_v1` storage adapters
+behind a strategy-independent discovery-state interface. Checkpoint-contract fix `e536b6a`
+admits only a complete, correctly ordered before/after storage snapshot pair into allocator-aware
+headroom evidence. The compact adapter retains ordered selected coordinates and their raw-dtype
+initial-attribution values on CPU, then releases dense discovery activations, attributions, and
+the global mask from its retained GPU state. Probe and return-only modes bypass the adapter.
+
+Sequential A100 jobs `15348279` and `15351183` ran the frozen 2,951-token reference. The strict
+report at
+`.../qualification-reports/context-2501-4000-dense-vs-compact-cpu-exact-v1.json` passes all gates
+at zero tolerance: exact 3,094-node/2,366-edge topology, every saved target/node/edge value, all
+15,470 candidate-profile values, selected-coordinate order and hash, and selected BF16 values and
+hash. Its SHA-256 is
+`1e6e16a67fe7bf94ba0f1941ff00132266b4fc7b09b80db7251c3fab04b837b2`.
+
+At 2,951 tokens, compact storage released 5,182,427,882 logical bytes; allocator active blocks
+dropped 5,184,588,800 bytes across the storage boundary. Peak allocated CUDA memory fell from
+26,723,485,696 to 23,726,469,632 bytes (11.2%), while peak reservation remained
+34,613,493,760 bytes. Trace wall time was 132.940 versus 132.640 seconds, so this pair shows no
+material runtime cost.
+
+The sequential compact ladder then produced:
+
+| Actual context tokens | Job | Selected occurrences | Nodes / edges | Trace seconds | Peak allocated | Peak reserved | Logical bytes released | Retry / OOM | Allocator-aware result |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 8,266 | `15356053` | 92 | 8,362 / 1,046 | 343.508 | 51,873,096,704 | 81,797,316,608 | 14,516,418,376 | 0 / 0 | `comfortable`; 22,972,558,336-byte conservative headroom |
+| 9,397 | `15356095` | 70 | 9,471 / 597 | 298.132 | 57,800,285,696 | 78,741,766,144 | 16,502,635,380 | 1 / 0 | `critical`; 9,053,827,584-byte conservative headroom |
+
+The 8,266-token result is capacity-feasible under the frozen plan. The 9,397-token artifact is a
+successful scientific trace and useful near-10k evidence, but it is not capacity-qualified: one
+allocator retry occurred, and the legacy physical-headroom estimate was only 6,352,011,264 bytes.
+Its shorter runtime reflects a different selected-neuron/pair topology and must not be interpreted
+as favorable length scaling.
+
+Compaction changes the measured owner. At 9,397 tokens, `initial_attribution` owns the 57.80-GB
+global active peak; selected attribution/contribution peaks at 50.02 GB, stop-gradient
+attribution/contribution at 47.74 GB, and cross-layer expansion at 35.17 GB. The retry is first
+visible in important-mask selection, where inactive-split pressure peaks near 9.96 GB; the
+run-wide inactive-split maximum is 17.69 GB. The next controlled gate is a same-commit compact
+`default_v1` versus `expandable_segments_v1` allocator A/B on the same 9,397-token item. No exact
+10,000-token item exists in qualification-v4, so these results do not establish an exact-10k
+claim.
 
 ## Required trace semantics
 
