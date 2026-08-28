@@ -217,6 +217,42 @@ def test_allocator_policy_counts_live_mixed_and_external_pressure() -> None:
     )
 
 
+def test_allocator_policy_accepts_post_selection_storage_checkpoint_pair() -> None:
+    instrumentation = _instrumentation()
+    captures = instrumentation["cuda_allocator_snapshots"]["captures"]
+    for capture in captures[1:]:
+        capture["capture_index"] += 2
+    captures[1:1] = [
+        _capture(
+            index=1,
+            point="before_post_selection_state_storage",
+            free=150,
+            segments=700,
+            active=400,
+            mixed_inactive=80,
+        ),
+        _capture(
+            index=2,
+            point="after_post_selection_state_storage_release",
+            free=150,
+            segments=700,
+            active=400,
+            mixed_inactive=80,
+        ),
+    ]
+
+    receipt = assess_cuda_headroom(
+        policy=ALLOCATOR_DENSE_JOINT_POLICY,
+        threshold_bytes=180,
+        action="warn",
+        device_total_bytes=1_000,
+        peak_reserved_bytes=900,
+        instrumentation=instrumentation,
+    )
+
+    assert receipt["evidence"]["capture_count"] == 6
+
+
 def test_allocator_retry_is_critical_but_warn_action_continues() -> None:
     instrumentation = _instrumentation()
     instrumentation["cuda_memory"]["overall"]["allocator_activity_delta"][

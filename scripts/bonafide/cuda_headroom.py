@@ -212,20 +212,27 @@ def _allocator_capture_assessment(
 def _validate_checkpoint_contract(
     captures: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    expected_points = {
+    required_points = {
         "after_important_mask_selection",
         "before_first_selected_attribution_vjp",
         "after_first_selected_attribution_vjp_raw_result",
         "after_selected_attribution_contribution",
     }
+    post_selection_storage_points = (
+        "before_post_selection_state_storage",
+        "after_post_selection_state_storage_release",
+    )
+    expected_points = required_points | set(post_selection_storage_points)
     point_groups = {point: [] for point in expected_points}
-    for capture in captures:
+    point_positions = {point: [] for point in expected_points}
+    for position, capture in enumerate(captures):
         point = capture.get("point")
         if point not in expected_points:
             raise ValueError(
                 f"allocator headroom has unsupported checkpoint: {point!r}"
             )
         point_groups[point].append(capture)
+        point_positions[point].append(position)
 
     for point in (
         "after_important_mask_selection",
@@ -289,7 +296,30 @@ def _validate_checkpoint_contract(
                 "integrated-gradients metadata"
             )
         observed[point] = indexes
-    if len(captures) != 2 + 2 * execution_count:
+
+    post_selection_counts = [
+        len(point_groups[point]) for point in post_selection_storage_points
+    ]
+    post_selection_checkpoint_count = 0
+    if any(post_selection_counts):
+        if post_selection_counts != [1, 1]:
+            raise ValueError(
+                "allocator headroom requires a complete post-selection storage "
+                "checkpoint pair"
+            )
+        ordered_positions = (
+            point_positions["after_important_mask_selection"][0],
+            point_positions[post_selection_storage_points[0]][0],
+            point_positions[post_selection_storage_points[1]][0],
+            min(point_positions["before_first_selected_attribution_vjp"]),
+        )
+        if tuple(sorted(ordered_positions)) != ordered_positions:
+            raise ValueError(
+                "allocator headroom post-selection storage checkpoints are out of order"
+            )
+        post_selection_checkpoint_count = 2
+
+    if len(captures) != 2 + 2 * execution_count + post_selection_checkpoint_count:
         raise ValueError("allocator headroom checkpoint count is inconsistent")
 
     return {
