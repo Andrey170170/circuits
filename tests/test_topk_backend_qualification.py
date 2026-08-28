@@ -11,6 +11,7 @@ from circuits.tracing.backend_qualification import (
     CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
+    CUDA_ALLOCATOR_SNAPSHOT_TELEMETRY_IDENTITY_PATH,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
     SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
@@ -2598,6 +2599,117 @@ def test_execution_qualification_allows_exact_allocator_policy_only(
             allowed_identity_difference_paths=[
                 "artifact_identity.cuda_allocator_policy.*"
             ],
+        )
+
+
+def test_execution_qualification_allows_only_snapshot_telemetry_and_code_revision(
+    tmp_path,
+) -> None:
+    reference = _topk_trace()
+    candidate = deepcopy(reference)
+    _complete_trace_metadata(reference)
+    _complete_trace_metadata(candidate)
+    reference_manifest = _manifest("eager", code_revision="reference-commit")
+    candidate_manifest = _manifest("eager", code_revision="candidate-commit")
+    reference_manifest["artifact_identity"]["instrumentation"] = {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": False,
+    }
+    candidate_manifest["artifact_identity"]["instrumentation"] = {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": True,
+    }
+    reference_path = tmp_path / "snapshot-telemetry-disabled"
+    candidate_path = tmp_path / "snapshot-telemetry-enabled"
+    save_topk_compact_trace(
+        reference_path,
+        reference,
+        manifest=_rehash_manifest(reference_manifest),
+    )
+    save_topk_compact_trace(
+        candidate_path,
+        candidate,
+        manifest=_rehash_manifest(candidate_manifest),
+    )
+
+    report = compare_execution_artifacts(
+        reference_path,
+        candidate_path,
+        allowed_identity_difference_paths=(
+            CUDA_ALLOCATOR_SNAPSHOT_TELEMETRY_IDENTITY_PATH,
+            "artifact_identity.code_revision.*",
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+    )
+
+    assert report["validation_passed"] is True
+    assert {gate["gate"] for gate in report["gates"] if gate["required"]} >= {
+        "same_gpu_model",
+        "exact_node_topology",
+        "exact_edge_topology",
+        *(f"{group}_numeric_tolerance" for group in TOLERANCE_GROUPS),
+    }
+    allowed = report["identity"]["artifact_identity"]["allowed_differences"]
+    assert {difference["path"] for difference in allowed} == {
+        CUDA_ALLOCATOR_SNAPSHOT_TELEMETRY_IDENTITY_PATH,
+        "artifact_identity.code_revision.git_commit",
+    }
+
+
+def test_execution_qualification_rejects_arbitrary_instrumentation_difference(
+    tmp_path,
+) -> None:
+    reference = _topk_trace()
+    candidate = deepcopy(reference)
+    _complete_trace_metadata(reference)
+    _complete_trace_metadata(candidate)
+    reference_manifest = _manifest("eager", code_revision="same-commit")
+    candidate_manifest = _manifest("eager", code_revision="same-commit")
+    reference_manifest["artifact_identity"]["instrumentation"] = {
+        "cuda_memory_telemetry": False,
+        "cuda_allocator_snapshot_telemetry": False,
+    }
+    candidate_manifest["artifact_identity"]["instrumentation"] = {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": True,
+    }
+    reference_path = tmp_path / "instrumentation-reference"
+    candidate_path = tmp_path / "instrumentation-candidate"
+    save_topk_compact_trace(
+        reference_path,
+        reference,
+        manifest=_rehash_manifest(reference_manifest),
+    )
+    save_topk_compact_trace(
+        candidate_path,
+        candidate,
+        manifest=_rehash_manifest(candidate_manifest),
+    )
+
+    report = compare_execution_artifacts(
+        reference_path,
+        candidate_path,
+        allowed_identity_difference_paths=(
+            CUDA_ALLOCATOR_SNAPSHOT_TELEMETRY_IDENTITY_PATH,
+        ),
+    )
+
+    assert report["validation_passed"] is False
+    disallowed = report["identity"]["artifact_identity"]["unallowed_differences"]
+    assert {difference["path"] for difference in disallowed} == {
+        "artifact_identity.instrumentation.cuda_memory_telemetry"
+    }
+    with pytest.raises(ValueError, match="may only allow"):
+        compare_execution_artifacts(
+            reference_path,
+            candidate_path,
+            allowed_identity_difference_paths=["artifact_identity.instrumentation.*"],
         )
 
 

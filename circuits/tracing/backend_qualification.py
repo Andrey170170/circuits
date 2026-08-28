@@ -30,6 +30,9 @@ from circuits.tracing.artifact import (
 REPORT_SCHEMA = "bonafide-attention-backend-qualification/v1"
 EXECUTION_REPORT_SCHEMA = "bonafide-execution-qualification/v1"
 TOLERANCE_GROUPS = ("target", "node", "edge", "candidate_profile")
+CUDA_ALLOCATOR_SNAPSHOT_TELEMETRY_IDENTITY_PATH = (
+    "artifact_identity.instrumentation.cuda_allocator_snapshot_telemetry"
+)
 CUDA_ALLOCATOR_AB_IDENTITY_PATHS = (
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.runtime_environment.cuda_allocator_policy.intended_policy_id",
@@ -103,6 +106,7 @@ CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
 )
 
 _ALLOWABLE_SCALAR_IDENTITY_RULES = (
+    CUDA_ALLOCATOR_SNAPSHOT_TELEMETRY_IDENTITY_PATH,
     "artifact_identity.adag_config.stop_gradient_attention_backend",
     "artifact_identity.adag_config.stop_gradient_contribution_execution",
     "artifact_identity.adag_config.stop_gradient_contribution_target_lane_chunk_size",
@@ -269,7 +273,7 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
                 "identity difference may only allow the stop-gradient attention "
                 "backend, contribution execution, selected-attribution forward "
                 "execution or storage, lane chunk size, CUDA "
-                "allocator policy, embedding-edge "
+                "allocator policy or snapshot telemetry, embedding-edge "
                 "materialization, cross-layer Jacobian execution, or fields under "
                 "code_revision/runtime_environment: "
                 f"{path!r}"

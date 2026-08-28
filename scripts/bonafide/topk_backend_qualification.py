@@ -211,8 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Explicit artifact_identity path allowed to differ. Suffix .* allows "
             "a subtree. Only named execution strategies, the CUDA allocator "
-            "policy, code_revision, and runtime_environment paths are accepted. "
-            "Repeat as needed."
+            "policy, allocator snapshot telemetry boolean, code_revision, and "
+            "runtime_environment paths are accepted. Repeat as needed."
         ),
     )
     parser.add_argument("--require-same-gpu-family", action="store_true")
