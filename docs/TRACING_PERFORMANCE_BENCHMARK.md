@@ -105,6 +105,38 @@ are unusable or unreleasable: reuse and release behavior depends on request size
 the configured allocator policy. The largest inactive block is likewise diagnostic rather than a
 guarantee that a future allocation will succeed.
 
+### Allocator snapshot telemetry qualification (2026-08-27)
+
+Implementation commit `dcac9dd` and strict-comparator commit `c130663` qualified the opt-in
+telemetry on the same A100 model and frozen trace items used by the selected-position-logit
+optimization. Job `15168827` completed the 2,951-token smoke in 132.89 seconds, versus 132.61
+seconds for its telemetry-off reference. Both runs had byte-identical 26,723,487,232-byte peak
+allocation and 34,613,493,760-byte peak reservation. Its four captures took 11.85 milliseconds in
+total. The strict report required exact node and edge topology plus zero tolerance for target,
+node, edge, and candidate-profile values, and passed all gates.
+
+Job `15169634` completed and saved the 8,266-token pressure artifact in 342.94 seconds before the
+existing 8-GiB post-run headroom gate intentionally stopped the wave and produced Slurm exit 1.
+Its peak allocation and reservation were byte-identical to the telemetry-off reference
+(59,592,814,592 and 81,797,316,608 bytes), and all four snapshots took 8.85 milliseconds in total.
+Its separate strict zero-tolerance report also passed every gate. At the four checkpoints, the
+native allocator reported:
+
+| Checkpoint | Allocated GiB | Reserved GiB | Inactive GiB | Fully inactive segment GiB | Inactive in mixed segments GiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| After important-mask selection | 23.37 | 76.18 | 52.81 | 44.56 | 8.25 |
+| Before first selected-attribution VJP | 54.82 | 76.18 | 21.36 | 10.22 | 11.14 |
+| First raw selected-attribution VJP live | 54.86 | 76.18 | 21.32 | 10.22 | 11.10 |
+| After selected attribution/contribution | 53.63 | 65.96 | 12.33 | 0.07 | 12.25 |
+
+This establishes that the 76.18-GiB reservation after mask selection was mostly cached memory in
+wholly inactive segments, not mostly inactive bytes interleaved with live allocations. By the
+first selected-attribution VJP, the live allocation had genuinely risen to about 54.8 GiB and the
+inactive remainder was split roughly evenly between wholly inactive and mixed segments. This is
+evidence against treating the large reserved value alone as an OOM or fragmentation diagnosis;
+request-size-aware failure analysis must use the block layout and allocator retry/OOM counters as
+well.
+
 ## Required trace semantics
 
 For a frozen response with tokens `y[0], ..., y[n-1]`, target response position `i` means:
