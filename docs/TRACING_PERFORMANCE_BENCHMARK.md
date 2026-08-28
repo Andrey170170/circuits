@@ -137,7 +137,7 @@ evidence against treating the large reserved value alone as an OOM or fragmentat
 request-size-aware failure analysis must use the block layout and allocator retry/OOM counters as
 well.
 
-### Dense allocator-aware CUDA headroom diagnostic (staged, not yet live-qualified)
+### Dense allocator-aware CUDA headroom diagnostic (live-qualified 2026-08-28)
 
 The opt-in `allocator_dense_joint_v1` policy requires
 `instrumentation.cuda_dense_joint_pressure_telemetry=true` in addition to CUDA-memory and
@@ -169,20 +169,40 @@ warning while continuing; `stop` retains the frozen hard-stop behavior. Missing 
 requested evidence fails closed regardless of action. A trace that actually raises OOM remains
 governed separately by `stop_on_oom`.
 
+Commit `332a1a8d2d6b87f3a19ecf229f53f1d17a60f5fe` was live-qualified on one NVIDIA A100
+80GB PCIe in job `15324627`. Slurm reported `COMPLETED` with exit `0:0` and 6:46 elapsed; the
+trace wall time was 341.43673443305306 seconds. The receipt retained 2,044 joint samples with
+1.1856326239649206 seconds of cumulative sampling wall time, about 0.35% of trace wall time.
+That ratio measures time spent inside the sampling calls, not the counterfactual runtime cost of
+enabling telemetry, and must not be interpreted as a causal overhead estimate.
+
+The limiting dense sample was
+`allocator_snapshot:before_first_selected_attribution_vjp`: 58,862,236,160 active bytes,
+11,958,586,880 inactive-split bytes, and 552,468,480 external bytes, for 71,373,291,520 bytes
+of joint pressure and 13,720,485,888 bytes of observed headroom (about 12.78 GiB). The
+independent-max composite reported 7,280,496,128 bytes of headroom (about 6.78 GiB), while the
+legacy peak-reserved calculation reported 3,296,460,800 bytes (about 3.07 GiB). No allocator
+retry or OOM counter increased. The resulting receipt was `watch` with action `warn` and
+`should_stop=false`, so the completed item produced a durable warning and continued successfully.
+
+Strict comparison to the prior accepted artifact found exact `df_node` and `df_edge` equality and
+equality for every other checked scientific payload field: 8,362 nodes, 1,046 edges, and five
+candidates. The prior trace wall time was 342.9395004948601 seconds, so this single pair shows no
+visible slowdown; it is not a causal runtime comparison. The immutable artifact and execution
+summary are rooted at
+`/scratch/general/vast/u1653998/circuits/results/bonafide/process-witness-smart-headroom-qualification-v1-332a1a8`.
+
 The 8-GiB number is a convention, not an empirically calibrated failure threshold. The July
 benchmark introduced a 4-GiB floor in commit `2f86c5f`. Commit `39b4a21` (2026-08-20, “Add strict
 T5 resource calibration ladder”) first raised it to exactly 8 GiB, and the August 21 Qwen Thinking
 A100 qualification configs copied it without documenting a rationale. On the A100 receipt's
 reported 79.25-GiB device total, 8 GiB is about 10.1%. It should therefore be read as a diagnostic
-“watch this run” margin unless a frozen config explicitly chooses the stopping action.
-
-Retrospectively, the four sparse structural checkpoints for the 8,266-token trace observed about
-12.78 GiB minimum joint headroom, while the independent-max composite reported about 6.78 GiB;
-the legacy peak-reserved estimate was only about 3.07 GiB. Under the staged advisory contract this
-is `watch` and continue, not evidence that the trace was destined to fail. The exact denser joint
-value remains unknown until a fresh strict qualification run records the new boundary samples.
-Legacy configs that omit the policy and action remain `peak_reserved_v1` plus `stop`, and retain
-their old artifact identity.
+“watch this run” margin unless a frozen config explicitly chooses the stopping action. The live
+8,266-token qualification now confirms that interpretation for this item: its independent-max
+estimate crossed the convention while the denser joint observation retained about 12.78 GiB,
+the trace completed without allocator trouble, and exact scientific parity held. This threshold
+was a useful warning boundary here, not a failure boundary. Legacy configs that omit the policy
+and action remain `peak_reserved_v1` plus `stop`, and retain their old artifact identity.
 
 ## Required trace semantics
 
