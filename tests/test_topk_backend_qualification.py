@@ -13,6 +13,7 @@ from circuits.tracing.backend_qualification import (
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_SNAPSHOT_TELEMETRY_IDENTITY_PATH,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+    POST_SELECTION_STATE_STORAGE_AB_IDENTITY_PATHS,
     SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
@@ -53,6 +54,7 @@ def _manifest(
     stop_gradient_selected_attribution_forward_execution: object = _UNSET,
     stop_gradient_selected_attribution_storage: object = _UNSET,
     selected_target_logit_execution: object = _UNSET,
+    post_selection_state_storage: object = _UNSET,
     selected_target_logit_ig_steps: object = _UNSET,
     code_revision: str | None = None,
 ) -> dict:
@@ -149,6 +151,10 @@ def _manifest(
                 else selected_target_logit_ig_steps
             )
         manifest["artifact_identity"]["adag_config"]["center_logits"] = False
+    if post_selection_state_storage is not _UNSET:
+        manifest["artifact_identity"]["adag_config"]["post_selection_state_storage"] = (
+            post_selection_state_storage
+        )
     if embedding_edge_materialization is not None:
         manifest["artifact_identity"]["adag_config"][
             "embedding_edge_materialization"
@@ -279,6 +285,10 @@ def _save_pair(
     candidate_selected_target_logit_ig_steps: object = _UNSET,
     reference_selected_target_logit_instrumentation: dict | None = None,
     candidate_selected_target_logit_instrumentation: dict | None = None,
+    reference_post_selection_state_storage: object = _UNSET,
+    candidate_post_selection_state_storage: object = _UNSET,
+    reference_post_selection_state_instrumentation: dict | None = None,
+    candidate_post_selection_state_instrumentation: dict | None = None,
     reference_stop_gradient_embed_receipts: list[dict] | None = None,
     candidate_stop_gradient_embed_receipts: list[dict] | None = None,
     reference_dtype: str = "bfloat16",
@@ -405,6 +415,14 @@ def _save_pair(
         candidate.circuit_data.trace_metadata["instrumentation"] = (
             candidate_selected_target_logit_instrumentation
         )
+    if reference_post_selection_state_instrumentation is not None:
+        reference.circuit_data.trace_metadata["instrumentation"] = (
+            reference_post_selection_state_instrumentation
+        )
+    if candidate_post_selection_state_instrumentation is not None:
+        candidate.circuit_data.trace_metadata["instrumentation"] = (
+            candidate_post_selection_state_instrumentation
+        )
     reference_path = tmp_path / "reference"
     candidate_path = tmp_path / "candidate"
     save_topk_compact_trace(
@@ -441,6 +459,7 @@ def _save_pair(
             ),
             selected_target_logit_execution=(reference_selected_target_logit_execution),
             selected_target_logit_ig_steps=reference_selected_target_logit_ig_steps,
+            post_selection_state_storage=reference_post_selection_state_storage,
         ),
     )
     save_topk_compact_trace(
@@ -477,6 +496,7 @@ def _save_pair(
             ),
             selected_target_logit_execution=(candidate_selected_target_logit_execution),
             selected_target_logit_ig_steps=candidate_selected_target_logit_ig_steps,
+            post_selection_state_storage=candidate_post_selection_state_storage,
         ),
     )
     return reference_path, candidate_path
@@ -487,6 +507,237 @@ def _allowed_paths() -> list[str]:
         "artifact_identity.adag_config.stop_gradient_attention_backend",
         "artifact_identity.code_revision.*",
     ]
+
+
+def _post_selection_state_instrumentation(strategy: str) -> dict:
+    dense = strategy == "dense_v1"
+    selected_values_bytes = 4
+    selected_coordinates_bytes = 48
+    retained_bytes = 1000 if dense else 4
+    released_bytes = 0 if dense else 996
+    record = {
+        "strategy": strategy,
+        "selected_occurrence_count": 2,
+        "active_layers": [0, 1],
+        "selected_values_shape": [2, 1, 1],
+        "selected_values_dtype": "torch.bfloat16",
+        "selected_values_bytes": selected_values_bytes,
+        "selected_values_raw_sha256": "a" * 64,
+        "selected_coordinates_shape": [2, 3],
+        "selected_coordinates_dtype": "torch.int64",
+        "selected_coordinates_bytes": selected_coordinates_bytes,
+        "selected_coordinates_raw_sha256": "b" * 64,
+        "logical_input_bytes": 1000,
+        "logical_retained_bytes": retained_bytes,
+        "logical_released_bytes": released_bytes,
+        "retains_dense_mlp_final_attributions": dense,
+        "retains_dense_important_neuron_mask": dense,
+        "retains_unused_mlp_final_acts": dense,
+        "retains_unused_embed_final_acts": dense,
+        "state_values_device": "cuda:0" if dense else "cpu",
+    }
+    return {
+        "counters": {
+            "post_selection_state_storage": strategy,
+            "post_selection_state_storage_execution_count": 1,
+            "post_selection_state_selected_occurrence_count": 2,
+        },
+        "execution_records": {"post_selection_state_storage": [record]},
+        "cuda_allocator_snapshots": {
+            "captures": [
+                {
+                    "capture_index": 0,
+                    "point": "before_post_selection_state_storage",
+                    "metadata": {
+                        "strategy": strategy,
+                        "logical_input_bytes": 1000,
+                    },
+                    "current_allocator_stats": {"active_bytes": 2000},
+                    "block_states": {"active_allocated": {"bytes": 2000}},
+                },
+                {
+                    "capture_index": 1,
+                    "point": "after_post_selection_state_storage_release",
+                    "metadata": {
+                        "strategy": strategy,
+                        "logical_input_bytes": 1000,
+                        "logical_retained_bytes": retained_bytes,
+                        "logical_released_bytes": released_bytes,
+                    },
+                    "current_allocator_stats": {
+                        "active_bytes": 2000 if dense else 1000
+                    },
+                    "block_states": {
+                        "active_allocated": {"bytes": 2000 if dense else 1000}
+                    },
+                },
+            ]
+        },
+    }
+
+
+def test_post_selection_state_storage_ab_is_strict_and_receipt_bound(tmp_path) -> None:
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="flash_sdpa_causal_v1",
+        candidate_backend="flash_sdpa_causal_v1",
+        reference_post_selection_state_storage="dense_v1",
+        candidate_post_selection_state_storage="compact_cpu_v1",
+        reference_post_selection_state_instrumentation=(
+            _post_selection_state_instrumentation("dense_v1")
+        ),
+        candidate_post_selection_state_instrumentation=(
+            _post_selection_state_instrumentation("compact_cpu_v1")
+        ),
+    )
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            POST_SELECTION_STATE_STORAGE_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        require_canonical_post_selection_state_storage_ab=True,
+    )
+
+    assert report["validation_passed"] is True
+    assert report["post_selection_state_storage_ab_contract"]["passed"] is True
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--reference",
+            str(reference),
+            "--candidate",
+            str(candidate),
+            "--output",
+            str(tmp_path / "report.json"),
+            "--post-selection-state-storage-ab",
+        ]
+    )
+    options = comparison_options(args)
+    assert options["allowed_identity_difference_paths"] == (
+        POST_SELECTION_STATE_STORAGE_AB_IDENTITY_PATHS
+    )
+    assert options["require_canonical_post_selection_state_storage_ab"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_snapshots",
+        "compact_cuda_placement",
+        "bad_values_rank",
+        "bad_batch_width",
+        "bad_target_width",
+        "bad_identity_dtype",
+        "bad_coordinate_dtype",
+        "bad_value_bytes",
+        "zero_release",
+        "unequal_input_bytes",
+        "reversed_snapshots",
+        "insufficient_active_allocated_drop",
+        "nondecreasing_compact_active_bytes",
+    ],
+)
+def test_post_selection_state_storage_ab_rejects_malformed_evidence(
+    tmp_path, mutation: str
+) -> None:
+    reference_instrumentation = _post_selection_state_instrumentation("dense_v1")
+    candidate_instrumentation = _post_selection_state_instrumentation("compact_cpu_v1")
+    candidate_record = candidate_instrumentation["execution_records"][
+        "post_selection_state_storage"
+    ][0]
+    candidate_captures = candidate_instrumentation["cuda_allocator_snapshots"][
+        "captures"
+    ]
+    if mutation == "missing_snapshots":
+        del candidate_instrumentation["cuda_allocator_snapshots"]
+    elif mutation == "compact_cuda_placement":
+        candidate_record["state_values_device"] = "cuda:0"
+    elif mutation == "bad_values_rank":
+        candidate_record["selected_values_shape"] = [2, 1]
+    elif mutation in {"bad_batch_width", "bad_target_width"}:
+        candidate_record["selected_values_shape"] = (
+            [2, 2, 1] if mutation == "bad_batch_width" else [2, 1, 2]
+        )
+        candidate_record["selected_values_bytes"] = 8
+        candidate_record["logical_retained_bytes"] = 8
+        candidate_record["logical_released_bytes"] = 992
+        candidate_captures[1]["metadata"]["logical_retained_bytes"] = 8
+        candidate_captures[1]["metadata"]["logical_released_bytes"] = 992
+    elif mutation == "bad_identity_dtype":
+        candidate_record["selected_values_dtype"] = "torch.float16"
+    elif mutation == "bad_coordinate_dtype":
+        candidate_record["selected_coordinates_dtype"] = "torch.int32"
+    elif mutation == "bad_value_bytes":
+        candidate_record["selected_values_bytes"] = 5
+    elif mutation == "zero_release":
+        candidate_record["logical_retained_bytes"] = 1000
+        candidate_record["logical_released_bytes"] = 0
+        candidate_captures[1]["metadata"]["logical_retained_bytes"] = 1000
+        candidate_captures[1]["metadata"]["logical_released_bytes"] = 0
+    elif mutation == "unequal_input_bytes":
+        candidate_record["logical_input_bytes"] = 1001
+        candidate_record["logical_released_bytes"] = 949
+        candidate_captures[0]["metadata"]["logical_input_bytes"] = 1001
+        candidate_captures[1]["metadata"]["logical_input_bytes"] = 1001
+        candidate_captures[1]["metadata"]["logical_released_bytes"] = 949
+    elif mutation == "reversed_snapshots":
+        candidate_captures.reverse()
+    elif mutation == "insufficient_active_allocated_drop":
+        candidate_captures[1]["block_states"]["active_allocated"]["bytes"] = 1100
+    elif mutation == "nondecreasing_compact_active_bytes":
+        candidate_captures[1]["current_allocator_stats"]["active_bytes"] = 2000
+    else:  # pragma: no cover - guards the test table
+        raise AssertionError(mutation)
+
+    reference, candidate = _save_pair(
+        tmp_path,
+        reference_backend="flash_sdpa_causal_v1",
+        candidate_backend="flash_sdpa_causal_v1",
+        reference_post_selection_state_storage="dense_v1",
+        candidate_post_selection_state_storage="compact_cpu_v1",
+        reference_post_selection_state_instrumentation=reference_instrumentation,
+        candidate_post_selection_state_instrumentation=candidate_instrumentation,
+    )
+
+    report = compare_execution_artifacts(
+        reference,
+        candidate,
+        allowed_identity_difference_paths=(
+            POST_SELECTION_STATE_STORAGE_AB_IDENTITY_PATHS
+        ),
+        tolerances={
+            group: NumericTolerance(absolute=0.0, relative=0.0)
+            for group in TOLERANCE_GROUPS
+        },
+        require_same_gpu_model=True,
+        require_exact_node_topology=True,
+        require_exact_edge_topology=True,
+        require_canonical_post_selection_state_storage_ab=True,
+    )
+
+    assert report["validation_passed"] is False
+    assert report["post_selection_state_storage_ab_contract"]["passed"] is False
+
+
+def test_post_selection_state_storage_allowlist_is_scalar_only(tmp_path) -> None:
+    reference, candidate = _save_pair(tmp_path)
+    with pytest.raises(ValueError, match="scalar execution-strategy"):
+        compare_execution_artifacts(
+            reference,
+            candidate,
+            allowed_identity_difference_paths=[
+                "artifact_identity.adag_config.post_selection_state_storage.*"
+            ],
+        )
 
 
 def test_backend_qualification_passes_explicit_gates_and_reports_resources(

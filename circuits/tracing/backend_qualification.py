@@ -99,6 +99,16 @@ SELECTED_TARGET_LOGIT_EXECUTION_AB_STRATEGIES = (
     "full_logits_v1",
     "selected_position_logits_v1",
 )
+POST_SELECTION_STATE_STORAGE_AB_IDENTITY_PATHS = (
+    "artifact_identity.adag_config.post_selection_state_storage",
+)
+POST_SELECTION_STATE_STORAGE_AB_STRATEGIES = ("dense_v1", "compact_cpu_v1")
+_POST_SELECTION_VALUE_DTYPE_BYTES = {
+    "torch.bfloat16": 2,
+    "torch.float16": 2,
+    "torch.float32": 4,
+    "torch.float64": 8,
+}
 CROSS_LAYER_JACOBIAN_RECEIPT_NAMES = (
     "selected_source_activations",
     "selected_target_activations",
@@ -119,6 +129,7 @@ _ALLOWABLE_SCALAR_IDENTITY_RULES = (
     "stop_gradient_selected_attribution_forward_execution",
     "artifact_identity.adag_config.stop_gradient_selected_attribution_storage",
     "artifact_identity.adag_config.selected_target_logit_execution",
+    "artifact_identity.adag_config.post_selection_state_storage",
     "artifact_identity.cuda_allocator_policy",
     "artifact_identity.adag_config.embedding_edge_materialization",
     "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -272,7 +283,7 @@ def _validate_allowed_identity_paths(paths: Sequence[str]) -> tuple[str, ...]:
             raise ValueError(
                 "identity difference may only allow the stop-gradient attention "
                 "backend, contribution execution, selected-attribution forward "
-                "execution or storage, lane chunk size, CUDA "
+                "execution or storage, post-selection state storage, lane chunk size, CUDA "
                 "allocator policy or snapshot telemetry, embedding-edge "
                 "materialization, cross-layer Jacobian execution, or fields under "
                 "code_revision/runtime_environment: "
@@ -1894,6 +1905,453 @@ def _stop_gradient_selected_attribution_storage_contract(
     }
 
 
+def post_selection_state_expected_values_identity(
+    artifact_identity: Any,
+) -> dict[str, Any]:
+    """Derive the selected-values identity expected by runtime qualification."""
+
+    if not isinstance(artifact_identity, Mapping):
+        return {
+            "expected_batch_width": None,
+            "expected_target_width": None,
+            "expected_values_dtype": None,
+        }
+    target_selection = artifact_identity.get("source_target_selection")
+    positions = (
+        target_selection.get("response_token_positions")
+        if isinstance(target_selection, Mapping)
+        else None
+    )
+    model = artifact_identity.get("model")
+    raw_dtype = model.get("dtype") if isinstance(model, Mapping) else None
+    expected_dtype = (
+        raw_dtype
+        if isinstance(raw_dtype, str) and raw_dtype.startswith("torch.")
+        else f"torch.{raw_dtype}"
+        if isinstance(raw_dtype, str)
+        else None
+    )
+    return {
+        "expected_batch_width": artifact_identity.get("batch_size"),
+        "expected_target_width": len(positions)
+        if isinstance(positions, list)
+        else None,
+        "expected_values_dtype": expected_dtype,
+    }
+
+
+def validate_post_selection_state_storage_runtime(
+    raw: Any,
+    *,
+    expected_strategy: str,
+    expected_batch_width: Any,
+    expected_target_width: Any,
+    expected_values_dtype: Any,
+) -> tuple[bool, dict[str, Any]]:
+    """Validate one fail-closed post-selection state runtime receipt.
+
+    Compact release uses allocator block-state evidence rather than assuming
+    that ``active_bytes`` maps byte-for-byte to live tensor ownership. PyTorch
+    may retain pending frees in that counter, while allocator-rounded
+    ``active_allocated`` blocks leave that state when ownership is released.
+    The conservative contract therefore requires the active-allocated block
+    drop to be at least the logical released bytes; a larger drop is allowed
+    because allocator blocks can exceed requested tensor sizes.
+    """
+
+    namespace = "post_selection_state_storage"
+    if expected_strategy not in POST_SELECTION_STATE_STORAGE_AB_STRATEGIES:
+        raise ValueError(
+            "unsupported post-selection state storage qualification strategy: "
+            f"{expected_strategy!r}"
+        )
+    expected_identity_valid = (
+        type(expected_batch_width) is int
+        and expected_batch_width > 0
+        and type(expected_target_width) is int
+        and expected_target_width > 0
+        and expected_values_dtype in _POST_SELECTION_VALUE_DTYPE_BYTES
+    )
+    counters = raw.get("counters") if isinstance(raw, Mapping) else None
+    execution_records = (
+        raw.get("execution_records") if isinstance(raw, Mapping) else None
+    )
+    records = (
+        execution_records.get(namespace)
+        if isinstance(execution_records, Mapping)
+        else None
+    )
+    record = records[0] if isinstance(records, list) and len(records) == 1 else None
+    selected_count = (
+        record.get("selected_occurrence_count") if isinstance(record, Mapping) else None
+    )
+    values_shape = (
+        record.get("selected_values_shape") if isinstance(record, Mapping) else None
+    )
+    coordinates_shape = (
+        record.get("selected_coordinates_shape")
+        if isinstance(record, Mapping)
+        else None
+    )
+    values_dtype = (
+        record.get("selected_values_dtype") if isinstance(record, Mapping) else None
+    )
+    coordinates_dtype = (
+        record.get("selected_coordinates_dtype")
+        if isinstance(record, Mapping)
+        else None
+    )
+    values_bytes = (
+        record.get("selected_values_bytes") if isinstance(record, Mapping) else None
+    )
+    coordinates_bytes = (
+        record.get("selected_coordinates_bytes")
+        if isinstance(record, Mapping)
+        else None
+    )
+    logical_input_bytes = (
+        record.get("logical_input_bytes") if isinstance(record, Mapping) else None
+    )
+    logical_retained_bytes = (
+        record.get("logical_retained_bytes") if isinstance(record, Mapping) else None
+    )
+    logical_released_bytes = (
+        record.get("logical_released_bytes") if isinstance(record, Mapping) else None
+    )
+    hash_fields = (
+        "selected_values_raw_sha256",
+        "selected_coordinates_raw_sha256",
+    )
+    hashes_valid = isinstance(record, Mapping) and all(
+        isinstance(record.get(field), str)
+        and len(record[field]) == 64
+        and all(character in "0123456789abcdef" for character in record[field])
+        for field in hash_fields
+    )
+    retains_dense = expected_strategy == "dense_v1"
+    lifetime_fields = (
+        "retains_dense_mlp_final_attributions",
+        "retains_dense_important_neuron_mask",
+        "retains_unused_mlp_final_acts",
+        "retains_unused_embed_final_acts",
+    )
+    lifetime_valid = isinstance(record, Mapping) and all(
+        record.get(field) is retains_dense for field in lifetime_fields
+    )
+    shape_valid = (
+        isinstance(record, Mapping)
+        and type(selected_count) is int
+        and selected_count > 0
+        and isinstance(values_shape, list)
+        and len(values_shape) == 3
+        and all(type(dimension) is int for dimension in values_shape)
+        and values_shape[0] == selected_count
+        and values_shape[1] == expected_batch_width
+        and values_shape[2] == expected_target_width
+        and coordinates_shape == [selected_count, 3]
+    )
+    dtype_and_tensor_bytes_valid = (
+        isinstance(record, Mapping)
+        and values_dtype in _POST_SELECTION_VALUE_DTYPE_BYTES
+        and values_dtype == expected_values_dtype
+        and coordinates_dtype == "torch.int64"
+        and type(values_bytes) is int
+        and type(coordinates_bytes) is int
+        and shape_valid
+        and values_bytes
+        == selected_count
+        * values_shape[1]
+        * values_shape[2]
+        * _POST_SELECTION_VALUE_DTYPE_BYTES[values_dtype]
+        and coordinates_bytes == selected_count * 3 * 8
+    )
+    byte_counts_valid = (
+        isinstance(record, Mapping)
+        and type(logical_input_bytes) is int
+        and type(logical_retained_bytes) is int
+        and type(logical_released_bytes) is int
+        and logical_input_bytes > 0
+        and dtype_and_tensor_bytes_valid
+        and (
+            (
+                retains_dense
+                and logical_retained_bytes == logical_input_bytes
+                and logical_released_bytes == 0
+            )
+            or (
+                not retains_dense
+                and logical_retained_bytes == values_bytes
+                and logical_released_bytes
+                == logical_input_bytes - logical_retained_bytes
+                and logical_released_bytes > 0
+            )
+        )
+    )
+    state_values_device = (
+        record.get("state_values_device") if isinstance(record, Mapping) else None
+    )
+    placement_valid = isinstance(state_values_device, str) and (
+        state_values_device.startswith("cuda")
+        if retains_dense
+        else state_values_device == "cpu"
+    )
+    counters_valid = (
+        isinstance(counters, Mapping)
+        and counters.get(namespace) == expected_strategy
+        and counters.get(f"{namespace}_execution_count") == 1
+        and counters.get("post_selection_state_selected_occurrence_count")
+        == selected_count
+    )
+    strategy_valid = (
+        isinstance(record, Mapping) and record.get("strategy") == expected_strategy
+    )
+    allocator_snapshots = (
+        raw.get("cuda_allocator_snapshots") if isinstance(raw, Mapping) else None
+    )
+    captures = (
+        allocator_snapshots.get("captures")
+        if isinstance(allocator_snapshots, Mapping)
+        else None
+    )
+    before_snapshots = (
+        [
+            (position, capture)
+            for position, capture in enumerate(captures)
+            if isinstance(capture, Mapping)
+            and capture.get("point") == "before_post_selection_state_storage"
+        ]
+        if isinstance(captures, list)
+        else []
+    )
+    after_snapshots = (
+        [
+            (position, capture)
+            for position, capture in enumerate(captures)
+            if isinstance(capture, Mapping)
+            and capture.get("point") == "after_post_selection_state_storage_release"
+        ]
+        if isinstance(captures, list)
+        else []
+    )
+    before_position, before = (
+        before_snapshots[0] if len(before_snapshots) == 1 else (None, None)
+    )
+    after_position, after = (
+        after_snapshots[0] if len(after_snapshots) == 1 else (None, None)
+    )
+    before_metadata = before.get("metadata") if isinstance(before, Mapping) else None
+    after_metadata = after.get("metadata") if isinstance(after, Mapping) else None
+    before_stats = (
+        before.get("current_allocator_stats") if isinstance(before, Mapping) else None
+    )
+    after_stats = (
+        after.get("current_allocator_stats") if isinstance(after, Mapping) else None
+    )
+    before_active_bytes = (
+        before_stats.get("active_bytes") if isinstance(before_stats, Mapping) else None
+    )
+    after_active_bytes = (
+        after_stats.get("active_bytes") if isinstance(after_stats, Mapping) else None
+    )
+    before_block_states = (
+        before.get("block_states") if isinstance(before, Mapping) else None
+    )
+    after_block_states = (
+        after.get("block_states") if isinstance(after, Mapping) else None
+    )
+    before_active_allocated = (
+        before_block_states.get("active_allocated")
+        if isinstance(before_block_states, Mapping)
+        else None
+    )
+    after_active_allocated = (
+        after_block_states.get("active_allocated")
+        if isinstance(after_block_states, Mapping)
+        else None
+    )
+    before_active_allocated_bytes = (
+        before_active_allocated.get("bytes")
+        if isinstance(before_active_allocated, Mapping)
+        else None
+    )
+    after_active_allocated_bytes = (
+        after_active_allocated.get("bytes")
+        if isinstance(after_active_allocated, Mapping)
+        else None
+    )
+    active_allocated_drop_bytes = (
+        before_active_allocated_bytes - after_active_allocated_bytes
+        if type(before_active_allocated_bytes) is int
+        and type(after_active_allocated_bytes) is int
+        else None
+    )
+    allocator_snapshots_valid = (
+        isinstance(before, Mapping)
+        and isinstance(after, Mapping)
+        and type(before.get("capture_index")) is int
+        and type(after.get("capture_index")) is int
+        and type(before_position) is int
+        and type(after_position) is int
+        and before_position < after_position
+        and before["capture_index"] < after["capture_index"]
+        and isinstance(before_metadata, Mapping)
+        and before_metadata.get("strategy") == expected_strategy
+        and before_metadata.get("logical_input_bytes") == logical_input_bytes
+        and isinstance(after_metadata, Mapping)
+        and after_metadata.get("strategy") == expected_strategy
+        and after_metadata.get("logical_input_bytes") == logical_input_bytes
+        and after_metadata.get("logical_retained_bytes") == logical_retained_bytes
+        and after_metadata.get("logical_released_bytes") == logical_released_bytes
+        and type(before_active_bytes) is int
+        and type(after_active_bytes) is int
+        and before_active_bytes >= 0
+        and after_active_bytes >= 0
+        and type(before_active_allocated_bytes) is int
+        and type(after_active_allocated_bytes) is int
+        and before_active_allocated_bytes >= 0
+        and after_active_allocated_bytes >= 0
+        and (
+            retains_dense
+            or (
+                after_active_bytes < before_active_bytes
+                and type(active_allocated_drop_bytes) is int
+                and type(logical_released_bytes) is int
+                and active_allocated_drop_bytes >= logical_released_bytes
+            )
+        )
+    )
+    checks = {
+        "strategy_and_counters": strategy_valid and counters_valid,
+        "identity_bound_values": expected_identity_valid and shape_valid,
+        "exact_receipts": (
+            hashes_valid
+            and shape_valid
+            and dtype_and_tensor_bytes_valid
+            and placement_valid
+        ),
+        "logical_bytes": byte_counts_valid,
+        "lifecycle": lifetime_valid,
+        "ordered_allocator_snapshots": allocator_snapshots_valid,
+    }
+    return all(checks.values()), {
+        "strategy": expected_strategy,
+        "selected_occurrence_count": selected_count,
+        "selected_values_shape": values_shape,
+        "selected_values_dtype": values_dtype,
+        "selected_values_bytes": values_bytes,
+        "selected_values_raw_sha256": (
+            record.get("selected_values_raw_sha256")
+            if isinstance(record, Mapping)
+            else None
+        ),
+        "selected_coordinates_shape": coordinates_shape,
+        "selected_coordinates_dtype": coordinates_dtype,
+        "selected_coordinates_bytes": coordinates_bytes,
+        "selected_coordinates_raw_sha256": (
+            record.get("selected_coordinates_raw_sha256")
+            if isinstance(record, Mapping)
+            else None
+        ),
+        "logical_input_bytes": logical_input_bytes,
+        "logical_retained_bytes": logical_retained_bytes,
+        "logical_released_bytes": logical_released_bytes,
+        "state_values_device": state_values_device,
+        "expected_values_identity": {
+            "batch_width": expected_batch_width,
+            "target_width": expected_target_width,
+            "dtype": expected_values_dtype,
+        },
+        "allocator_active_bytes": {
+            "before": before_active_bytes,
+            "after": after_active_bytes,
+        },
+        "allocator_release_evidence": {
+            "semantics": ("active_allocated_block_drop_gte_logical_released_bytes_v1"),
+            "before_active_allocated_bytes": before_active_allocated_bytes,
+            "after_active_allocated_bytes": after_active_allocated_bytes,
+            "active_allocated_drop_bytes": active_allocated_drop_bytes,
+            "required_logical_released_bytes": logical_released_bytes,
+        },
+        "checks": checks,
+    }
+
+
+def _post_selection_state_storage_contract(
+    reference: TopKCompactTraceArtifact,
+    candidate: TopKCompactTraceArtifact,
+) -> dict[str, Any]:
+    """Require canonical storage identities and exact selected-state receipts."""
+
+    namespace = "post_selection_state_storage"
+
+    def identity_strategy(artifact: TopKCompactTraceArtifact) -> Any:
+        identity = artifact.manifest.get("artifact_identity")
+        adag_config = (
+            identity.get("adag_config") if isinstance(identity, Mapping) else None
+        )
+        return adag_config.get(namespace) if isinstance(adag_config, Mapping) else None
+
+    def instrumentation(artifact: TopKCompactTraceArtifact) -> Any:
+        return artifact.topk_trace.circuit_data.trace_metadata.get("instrumentation")
+
+    def expected_values_identity(
+        artifact: TopKCompactTraceArtifact,
+    ) -> dict[str, Any]:
+        return post_selection_state_expected_values_identity(
+            artifact.manifest.get("artifact_identity")
+        )
+
+    reference_strategy = identity_strategy(reference)
+    candidate_strategy = identity_strategy(candidate)
+    reference_valid, reference_runtime = validate_post_selection_state_storage_runtime(
+        instrumentation(reference),
+        expected_strategy=POST_SELECTION_STATE_STORAGE_AB_STRATEGIES[0],
+        **expected_values_identity(reference),
+    )
+    candidate_valid, candidate_runtime = validate_post_selection_state_storage_runtime(
+        instrumentation(candidate),
+        expected_strategy=POST_SELECTION_STATE_STORAGE_AB_STRATEGIES[1],
+        **expected_values_identity(candidate),
+    )
+    exact_cross_side_fields = (
+        "selected_occurrence_count",
+        "selected_values_shape",
+        "selected_values_dtype",
+        "selected_values_bytes",
+        "selected_values_raw_sha256",
+        "selected_coordinates_shape",
+        "selected_coordinates_dtype",
+        "selected_coordinates_bytes",
+        "selected_coordinates_raw_sha256",
+        "logical_input_bytes",
+    )
+    receipts_equal = (
+        reference_valid
+        and candidate_valid
+        and all(
+            reference_runtime[field] == candidate_runtime[field]
+            for field in exact_cross_side_fields
+        )
+    )
+    checks = {
+        "canonical_identity_strategies": (
+            reference_strategy == POST_SELECTION_STATE_STORAGE_AB_STRATEGIES[0]
+            and candidate_strategy == POST_SELECTION_STATE_STORAGE_AB_STRATEGIES[1]
+        ),
+        "reference_dense_lifecycle": reference_valid,
+        "candidate_compact_lifecycle": candidate_valid,
+        "cross_side_exact_selected_state": receipts_equal,
+    }
+    return {
+        "reference_strategy": reference_strategy,
+        "candidate_strategy": candidate_strategy,
+        "reference_runtime": reference_runtime,
+        "candidate_runtime": candidate_runtime,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def _selected_target_logit_execution_contract(
     reference: TopKCompactTraceArtifact,
     candidate: TopKCompactTraceArtifact,
@@ -2580,6 +3038,7 @@ def compare_execution_artifacts(
     require_canonical_cross_layer_jacobian_ab: bool = False,
     require_canonical_stop_gradient_selected_attribution_forward_ab: bool = False,
     require_canonical_stop_gradient_selected_attribution_storage_ab: bool = False,
+    require_canonical_post_selection_state_storage_ab: bool = False,
     require_canonical_selected_target_logit_execution_ab: bool = False,
     require_canonical_selected_attribution_neuron_lane_chunk_ab: bool = False,
     require_canonical_selected_neuron_contribution_target_lane_chunk_ab: bool = False,
@@ -2828,6 +3287,18 @@ def compare_execution_artifacts(
                 ),
                 "required": True,
                 "passed": stop_gradient_selected_attribution_storage_contract["passed"],
+            }
+        )
+    post_selection_state_storage_contract = None
+    if require_canonical_post_selection_state_storage_ab:
+        post_selection_state_storage_contract = _post_selection_state_storage_contract(
+            reference, candidate
+        )
+        gates.append(
+            {
+                "gate": "canonical_post_selection_state_storage_ab_pair",
+                "required": True,
+                "passed": post_selection_state_storage_contract["passed"],
             }
         )
     selected_target_logit_execution_contract = None
@@ -3245,6 +3716,7 @@ def compare_execution_artifacts(
             "stop_gradient_selected_attribution_forward_execution",
             "artifact_identity.adag_config.stop_gradient_selected_attribution_storage",
             "artifact_identity.adag_config.selected_target_logit_execution",
+            "artifact_identity.adag_config.post_selection_state_storage",
             "artifact_identity.cuda_allocator_policy",
             "artifact_identity.adag_config.embedding_edge_materialization",
             "artifact_identity.adag_config.cross_layer_jacobian_execution",
@@ -3300,6 +3772,9 @@ def compare_execution_artifacts(
         ),
         "stop_gradient_selected_attribution_storage_ab_contract": (
             stop_gradient_selected_attribution_storage_contract
+        ),
+        "post_selection_state_storage_ab_contract": (
+            post_selection_state_storage_contract
         ),
         "selected_target_logit_execution_ab_contract": (
             selected_target_logit_execution_contract

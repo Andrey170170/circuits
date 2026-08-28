@@ -70,6 +70,13 @@ from circuits.tracing.instrumentation import (
     record_cuda_allocator_snapshot,
     record_selection_predictors,
 )
+from circuits.tracing.selected_discovery_state import (
+    DEFAULT_POST_SELECTION_STATE_STORAGE,
+    PostSelectionStateStorage,
+    SelectedDiscoveryState,
+    resolve_post_selection_state_storage,
+    store_selected_discovery_state,
+)
 from circuits.tracing.selected_target_logit_execution import (
     DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION,
     SelectedTargetLogitExecution,
@@ -180,6 +187,10 @@ class ADAGConfig:
     selected_target_logit_execution: SelectedTargetLogitExecution = (
         DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION
     )
+    # Post-selection discovery-buffer lifetime only.
+    post_selection_state_storage: PostSelectionStateStorage = (
+        DEFAULT_POST_SELECTION_STATE_STORAGE
+    )
 
     def __post_init__(self) -> None:
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
@@ -213,6 +224,7 @@ class ADAGConfig:
             self.selected_target_logit_execution,
             center_logits=self.center_logits,
         )
+        resolve_post_selection_state_storage(self.post_selection_state_storage)
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Load artifacts pickled before stop-gradient strategies were explicit."""
@@ -252,6 +264,8 @@ class ADAGConfig:
             self.selected_target_logit_execution = (
                 DEFAULT_SELECTED_TARGET_LOGIT_EXECUTION
             )
+        if "post_selection_state_storage" not in state:
+            self.post_selection_state_storage = DEFAULT_POST_SELECTION_STATE_STORAGE
         resolve_stop_gradient_attention_backend(self.stop_gradient_attention_backend)
         resolve_stop_gradient_contribution_execution(
             self.stop_gradient_contribution_execution
@@ -283,6 +297,7 @@ class ADAGConfig:
             self.selected_target_logit_execution,
             center_logits=self.center_logits,
         )
+        resolve_post_selection_state_storage(self.post_selection_state_storage)
 
 
 @dataclass(frozen=True)
@@ -430,6 +445,7 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         config.stop_gradient_selected_attribution_storage
     )
     selected_target_logit_execution = config.selected_target_logit_execution
+    post_selection_state_storage = config.post_selection_state_storage
     embedding_edge_materialization = config.embedding_edge_materialization
     cross_layer_jacobian_execution = config.cross_layer_jacobian_execution
     if instrumentation is not None:
@@ -476,6 +492,10 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
         instrumentation.set_counter(
             "selected_target_logit_execution",
             selected_target_logit_execution,
+        )
+        instrumentation.set_counter(
+            "post_selection_state_storage",
+            post_selection_state_storage,
         )
         instrumentation.set_counter(
             "embedding_edge_materialization",
@@ -771,6 +791,45 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             embed_final_acts,
         )
 
+    post_selection_logical_input_bytes = sum(
+        tensor.numel() * tensor.element_size()
+        for tensor in (
+            mlp_final_attributions,
+            global_important_neurons_mask,
+            mlp_final_acts,
+            embed_final_acts,
+        )
+    )
+    record_cuda_allocator_snapshot(
+        instrumentation,
+        "before_post_selection_state_storage",
+        metadata={
+            "strategy": post_selection_state_storage,
+            "logical_input_bytes": post_selection_logical_input_bytes,
+        },
+    )
+    selected_discovery_state = store_selected_discovery_state(
+        mlp_final_attributions,
+        global_important_neurons_mask,
+        mlp_final_acts,
+        embed_final_acts,
+        neuron_cfg=neuron_cfg,
+        strategy=post_selection_state_storage,
+        instrumentation=instrumentation,
+    )
+    del mlp_final_attributions, global_important_neurons_mask
+    del mlp_final_acts, embed_final_acts
+    record_cuda_allocator_snapshot(
+        instrumentation,
+        "after_post_selection_state_storage_release",
+        metadata={
+            "strategy": post_selection_state_storage,
+            "logical_input_bytes": selected_discovery_state.logical_input_bytes,
+            "logical_retained_bytes": selected_discovery_state.logical_retained_bytes,
+            "logical_released_bytes": selected_discovery_state.logical_released_bytes,
+        },
+    )
+
     # get attributions and contributions for important neurons (same as original)
     if not skip_attr_contrib:
         with instrumentation_stage(
@@ -935,10 +994,13 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             model = revert_stop_nonlinear_grad(model)
 
     if verbose:
-        print(f"Global important neurons mask: {global_important_neurons_mask.sum()}")
+        print(
+            "Global important neurons mask: "
+            f"{len(selected_discovery_state.ordered_occurrences)}"
+        )
         print(
             f"Global important (layer, token): "
-            f"{len(global_important_neurons_mask.sum(dim=-1).nonzero())}"
+            f"{len({(item.layer, item.token) for item in selected_discovery_state.ordered_occurrences})}"
         )
 
     # cross-layer jacobian edge tracing
@@ -947,9 +1009,8 @@ def _get_all_pairs_cl_ja_effects_with_attributions_impl(
             model,
             tokenizer,
             cis,
-            mlp_final_attributions,
+            selected_discovery_state,
             embed_final_attributions,
-            global_important_neurons_mask,
             neuron_attr_map,
             neuron_contrib_map,
             device,
@@ -1054,9 +1115,8 @@ def _get_cl_ja_based_edges(
     model,
     tokenizer: PreTrainedTokenizer,
     cis: list[list[int]],
-    mlp_final_attributions: torch.Tensor,
+    selected_discovery_state: SelectedDiscoveryState,
     embed_final_attributions: torch.Tensor,
-    global_important_neurons_mask: torch.Tensor,
     neuron_attr_map,
     neuron_contrib_map,
     device: str = "cuda:0",
@@ -1317,11 +1377,8 @@ def _get_cl_ja_based_edges(
         else None
     )
     for layer in range(max(start_layer, 0), end_layer):
-        important_positions = global_important_neurons_mask[layer].nonzero(
-            as_tuple=False
-        )
-        for pos_neuron in important_positions:
-            token_pos, neuron_idx = pos_neuron.tolist()
+        for occurrence in selected_discovery_state.occurrences_for_layer(layer):
+            token_pos, neuron_idx = occurrence.token, occurrence.neuron
             if token_pos in keep_tokens:
                 neuron_key = NeuronIdx(layer=layer, token=token_pos, neuron=neuron_idx)
                 activation = neurons_LBTI[layer][
@@ -1330,16 +1387,13 @@ def _get_cl_ja_based_edges(
                 # get attribution scores (already on CPU from earlier)
                 attr_map = neuron_attr_map.get(neuron_key, None)
                 contrib_map = neuron_contrib_map.get(neuron_key, None)
-                final_attribution = mlp_final_attributions[
-                    layer, :, token_pos, neuron_idx, :
-                ]
                 nodes.append(
                     Node(
                         layer=layer,
                         token=token_pos,
                         neuron=neuron_idx,
                         activation=activation.float().cpu(),
-                        final_attribution=final_attribution.float().cpu(),
+                        final_attribution=occurrence.final_attribution.float().cpu(),
                         attr_map=attr_map if attr_map is not None else None,
                         contrib_map=contrib_map if contrib_map is not None else None,
                     )
@@ -1350,8 +1404,7 @@ def _get_cl_ja_based_edges(
         instrumentation.set_counter("mlp_node_delta", len(nodes) - mlp_nodes_before)
         instrumentation.set_counter("mlp_edge_delta", len(edges) - mlp_edges_before)
 
-    # Clean up after creating MLP nodes
-    del mlp_final_attributions
+    # Preserve the historical allocator boundary after MLP node materialization.
     torch.cuda.empty_cache()
 
     # creating embedding nodes and ordered edge sources
@@ -1492,10 +1545,11 @@ def _get_cl_ja_based_edges(
             "cross_layer_retained_edge_count",
         ):
             instrumentation.set_counter(counter_name, 0)
+    selected_active_layers = set(selected_discovery_state.active_layers)
     active_cross_layer_layers = tuple(
         layer
         for layer in range(start_layer + 1, end_layer)
-        if global_important_neurons_mask[layer].any()
+        if layer in selected_active_layers
     )
     if cross_layer_jacobian_execution == "cached_range_v1" and ig_steps is not None:
         raise ValueError(
@@ -1531,12 +1585,12 @@ def _get_cl_ja_based_edges(
             instrumentation.set_counter(counter_name, None)
     for tgt_layer in range(end_layer - 1, start_layer + 1, -1):
         # if there is no important neurons in the target layer, skip
-        if not global_important_neurons_mask[tgt_layer].any():
+        if tgt_layer not in selected_active_layers:
             continue
         # layers before the target layer only
         for src_layer in range(tgt_layer - 1, start_layer, -1):
             # Skip if no important neurons in source layer (or embeddings)
-            if not global_important_neurons_mask[src_layer].any():
+            if src_layer not in selected_active_layers:
                 continue
 
             frozen_pair_edges = None
@@ -1550,29 +1604,27 @@ def _get_cl_ja_based_edges(
                     continue
 
             # get the fixed neuron lists
-            src_positions = global_important_neurons_mask[src_layer].nonzero(
-                as_tuple=False
-            )
             src_neuron_list = [
-                (pos[0].item(), pos[1].item())
-                for pos in src_positions
-                if pos[0].item() in keep_tokens
+                (occurrence.token, occurrence.neuron)
+                for occurrence in selected_discovery_state.occurrences_for_layer(
+                    src_layer
+                )
+                if occurrence.token in keep_tokens
                 and (
                     frozen_pair_edges is None
-                    or NeuronIdx(src_layer, pos[0].item(), pos[1].item())
+                    or NeuronIdx(src_layer, occurrence.token, occurrence.neuron)
                     in {edge[0] for edge in frozen_pair_edges}
                 )
             ]
-            tgt_positions = global_important_neurons_mask[tgt_layer].nonzero(
-                as_tuple=False
-            )
             tgt_neuron_list = [
-                (pos[0].item(), pos[1].item())
-                for pos in tgt_positions
-                if pos[0].item() in keep_tokens
+                (occurrence.token, occurrence.neuron)
+                for occurrence in selected_discovery_state.occurrences_for_layer(
+                    tgt_layer
+                )
+                if occurrence.token in keep_tokens
                 and (
                     frozen_pair_edges is None
-                    or NeuronIdx(tgt_layer, pos[0].item(), pos[1].item())
+                    or NeuronIdx(tgt_layer, occurrence.token, occurrence.neuron)
                     in {edge[1] for edge in frozen_pair_edges}
                 )
             ]

@@ -51,12 +51,74 @@ def _selected_target_logit_record(
     }
 
 
+def _post_selection_state_instrumentation() -> dict:
+    return {
+        "counters": {
+            "post_selection_state_storage": "compact_cpu_v1",
+            "post_selection_state_storage_execution_count": 1,
+            "post_selection_state_selected_occurrence_count": 2,
+        },
+        "execution_records": {
+            "post_selection_state_storage": [
+                {
+                    "strategy": "compact_cpu_v1",
+                    "selected_occurrence_count": 2,
+                    "active_layers": [0, 1],
+                    "selected_values_shape": [2, 1, 1],
+                    "selected_values_dtype": "torch.bfloat16",
+                    "selected_values_bytes": 4,
+                    "selected_values_raw_sha256": "a" * 64,
+                    "selected_coordinates_shape": [2, 3],
+                    "selected_coordinates_dtype": "torch.int64",
+                    "selected_coordinates_bytes": 48,
+                    "selected_coordinates_raw_sha256": "b" * 64,
+                    "logical_input_bytes": 1000,
+                    "logical_retained_bytes": 4,
+                    "logical_released_bytes": 996,
+                    "retains_dense_mlp_final_attributions": False,
+                    "retains_dense_important_neuron_mask": False,
+                    "retains_unused_mlp_final_acts": False,
+                    "retains_unused_embed_final_acts": False,
+                    "state_values_device": "cpu",
+                }
+            ]
+        },
+        "cuda_allocator_snapshots": {
+            "captures": [
+                {
+                    "capture_index": 0,
+                    "point": "before_post_selection_state_storage",
+                    "metadata": {
+                        "strategy": "compact_cpu_v1",
+                        "logical_input_bytes": 1000,
+                    },
+                    "current_allocator_stats": {"active_bytes": 2000},
+                    "block_states": {"active_allocated": {"bytes": 2000}},
+                },
+                {
+                    "capture_index": 1,
+                    "point": "after_post_selection_state_storage_release",
+                    "metadata": {
+                        "strategy": "compact_cpu_v1",
+                        "logical_input_bytes": 1000,
+                        "logical_retained_bytes": 4,
+                        "logical_released_bytes": 996,
+                    },
+                    "current_allocator_stats": {"active_bytes": 1000},
+                    "block_states": {"active_allocated": {"bytes": 1000}},
+                },
+            ]
+        },
+    }
+
+
 def _run_launcher_postflight(
     tmp_path: Path,
     record: dict,
     *,
     lm_head_position_rows: int | None = None,
     tamper_headroom_evidence: bool = False,
+    post_selection_mutation: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     launcher = LAUNCHER.read_text(encoding="utf-8")
     start_marker = "    'import json,pathlib,sys\n"
@@ -65,7 +127,7 @@ def _run_launcher_postflight(
     postflight = launcher[start:end]
 
     artifact_root = tmp_path / "artifact"
-    artifact_root.mkdir()
+    artifact_root.mkdir(parents=True)
     device_total_bytes = 85899345920
     peak_reserved_bytes = 76235669504
     runtime_environment = {
@@ -88,12 +150,16 @@ def _run_launcher_postflight(
         "stop_gradient_contribution_execution": "source_leaf_v1",
         "stop_gradient_contribution_target_lane_chunk_size": None,
         "selected_target_logit_execution": strategy,
+        "post_selection_state_storage": "compact_cpu_v1",
         "center_logits": False,
         "ig_steps": None,
     }
     manifest = {
         "artifact_identity": {
             "adag_config": adag_config,
+            "batch_size": 1,
+            "source_target_selection": {"response_token_positions": [0]},
+            "model": {"dtype": "bfloat16"},
             "runtime_environment": runtime_environment,
         },
         "runtime_environment": runtime_environment,
@@ -114,6 +180,49 @@ def _run_launcher_postflight(
             "selected_target_logit_lm_head_position_rows": observed_rows,
         },
     }
+    post_selection = _post_selection_state_instrumentation()
+    state_record = post_selection["execution_records"]["post_selection_state_storage"][
+        0
+    ]
+    snapshots = post_selection["cuda_allocator_snapshots"]["captures"]
+    if post_selection_mutation == "missing_snapshots":
+        del post_selection["cuda_allocator_snapshots"]
+    elif post_selection_mutation == "compact_cuda_placement":
+        state_record["state_values_device"] = "cuda:0"
+    elif post_selection_mutation == "bad_values_rank":
+        state_record["selected_values_shape"] = [2, 1]
+    elif post_selection_mutation in {"bad_batch_width", "bad_target_width"}:
+        state_record["selected_values_shape"] = (
+            [2, 2, 1] if post_selection_mutation == "bad_batch_width" else [2, 1, 2]
+        )
+        state_record["selected_values_bytes"] = 8
+        state_record["logical_retained_bytes"] = 8
+        state_record["logical_released_bytes"] = 992
+        snapshots[1]["metadata"]["logical_retained_bytes"] = 8
+        snapshots[1]["metadata"]["logical_released_bytes"] = 992
+    elif post_selection_mutation == "bad_identity_dtype":
+        state_record["selected_values_dtype"] = "torch.float16"
+    elif post_selection_mutation == "bad_coordinate_dtype":
+        state_record["selected_coordinates_dtype"] = "torch.int32"
+    elif post_selection_mutation == "bad_value_bytes":
+        state_record["selected_values_bytes"] = 5
+    elif post_selection_mutation == "zero_release":
+        state_record["logical_retained_bytes"] = 1000
+        state_record["logical_released_bytes"] = 0
+        snapshots[1]["metadata"]["logical_retained_bytes"] = 1000
+        snapshots[1]["metadata"]["logical_released_bytes"] = 0
+    elif post_selection_mutation == "nondecreasing_compact_active_bytes":
+        snapshots[1]["current_allocator_stats"]["active_bytes"] = 2000
+    elif post_selection_mutation == "insufficient_active_allocated_drop":
+        snapshots[1]["block_states"]["active_allocated"]["bytes"] = 1100
+    elif post_selection_mutation is not None:
+        raise AssertionError(post_selection_mutation)
+    instrumentation["counters"].update(post_selection["counters"])
+    instrumentation["execution_records"].update(post_selection["execution_records"])
+    if "cuda_allocator_snapshots" in post_selection:
+        instrumentation["cuda_allocator_snapshots"] = post_selection[
+            "cuda_allocator_snapshots"
+        ]
     cuda_headroom_receipt = {
         "schema_version": "bonafide.cuda-headroom-gate.v1",
         "policy": cuda_headroom_policy,
@@ -177,6 +286,7 @@ def _run_launcher_postflight(
             "legacy_unbound",
             "legacy_unbound",
             strategy,
+            "compact_cpu_v1",
             cuda_headroom_policy,
             cuda_headroom_action,
         ],
@@ -232,6 +342,7 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION",
         "EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE",
         "EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION",
+        "EXPECTED_POST_SELECTION_STATE_STORAGE",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
         "EXPECTED_CUDA_HEADROOM_POLICY",
         "EXPECTED_CUDA_HEADROOM_ACTION",
@@ -253,6 +364,8 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "legacy-unbound qualification config unexpectedly declares stop-gradient selected-attribution storage",
         "run config selected target-logit execution disagrees",
         "legacy-unbound qualification config unexpectedly declares selected target-logit execution",
+        "run config post-selection state storage disagrees",
+        "legacy-unbound qualification config unexpectedly declares post-selection state storage",
         "saved artifact allocator identity disagrees",
         "saved artifact CUDA headroom gate identity disagrees",
         "saved CUDA headroom gate receipt is invalid",
@@ -272,6 +385,8 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "saved artifact lacks exact stop-gradient selected-attribution storage receipts",
         "saved artifact graph-lifetime receipts disagree",
         "saved artifact selected target-logit execution identity disagrees",
+        "saved artifact post-selection state storage identity disagrees",
+        "saved artifact post-selection state storage receipt disagrees",
         "saved artifact selected target-logit qualification requires center_logits=false",
         "saved artifact lacks exact selected target-logit execution receipts",
         "saved artifact selected target-logit execution lacks explicit ig_steps",
@@ -314,6 +429,39 @@ def test_launcher_postflight_accepts_bound_headroom_gate(tmp_path: Path) -> None
     completed = _run_launcher_postflight(tmp_path, _selected_target_logit_record())
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_launcher_postflight_accepts_bound_post_selection_state_receipt(
+    tmp_path: Path,
+) -> None:
+    completed = _run_launcher_postflight(tmp_path, _selected_target_logit_record())
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_launcher_postflight_rejects_malformed_post_selection_state_evidence(
+    tmp_path: Path,
+) -> None:
+    for mutation in (
+        "missing_snapshots",
+        "compact_cuda_placement",
+        "bad_values_rank",
+        "bad_batch_width",
+        "bad_target_width",
+        "bad_identity_dtype",
+        "bad_coordinate_dtype",
+        "bad_value_bytes",
+        "zero_release",
+        "insufficient_active_allocated_drop",
+        "nondecreasing_compact_active_bytes",
+    ):
+        completed = _run_launcher_postflight(
+            tmp_path / mutation,
+            _selected_target_logit_record(),
+            post_selection_mutation=mutation,
+        )
+        assert completed.returncode != 0, mutation
+        assert "post-selection state storage" in completed.stderr, mutation
 
 
 def test_launcher_postflight_rejects_tampered_headroom_evidence(
@@ -792,6 +940,45 @@ def test_selected_target_logit_execution_configs_are_exact_optimized_pair() -> N
         del copied["adag_config"][field]
         normalized.append(copied)
     assert normalized[0] == normalized[1]
+
+
+def test_post_selection_state_storage_configs_clone_smart_headroom_exactly() -> None:
+    field = "post_selection_state_storage"
+    source = json.loads(
+        (
+            CONFIG_ROOT / "qwen3_4b_thinking_allocator_snapshot_telemetry_"
+            "smart_headroom_qualification_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    configs = []
+    expected = (
+        (
+            "dense_v1",
+            "results/bonafide/process-witness-post-selection-state-storage-"
+            "dense-qualification-v1",
+        ),
+        (
+            "compact_cpu_v1",
+            "results/bonafide/process-witness-post-selection-state-storage-"
+            "compact-cpu-qualification-v1",
+        ),
+    )
+    for strategy, artifact_root in expected:
+        path = (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_post_selection_state_storage_qualification_"
+            f"{strategy}.json"
+        )
+        config = json.loads(path.read_text(encoding="utf-8"))
+        assert config["adag_config"][field] == strategy
+        assert config["artifact_root"] == artifact_root
+        normalized = json.loads(json.dumps(config))
+        del normalized["adag_config"][field]
+        normalized["artifact_root"] = source["artifact_root"]
+        assert normalized == source
+        configs.append(config)
+
+    assert configs[0]["artifact_root"] != configs[1]["artifact_root"]
 
 
 def test_backend_configs_clone_frozen_v4_except_for_explicit_backend() -> None:

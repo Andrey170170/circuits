@@ -81,6 +81,7 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(
         return [], []
 
     monkeypatch.setattr(clja_module, "_get_cl_ja_based_edges", fake_graph)
+    monkeypatch.setattr(clja_module, "revert_stop_nonlinear_grad", lambda value: value)
     model = SimpleNamespace(
         config=SimpleNamespace(num_hidden_layers=layers, _name_or_path="fake/model"),
         to=lambda _device: model,
@@ -94,6 +95,7 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(
             disable_stop_grad=True,
             skip_attr_contrib=True,
             selected_attribution_neuron_lane_chunk_size=3,
+            post_selection_state_storage="compact_cpu_v1",
         ),
         "src_tokens": [0, 1, 2],
         "tgt_tokens": [2],
@@ -138,12 +140,45 @@ def test_low_level_probe_matches_full_selection_and_skips_graph_work(
     )
     assert probe_snapshot["early_predictors"]["selected_attribution_chunk_size"] == 3
     assert probe_snapshot["early_predictors"]["jacobian_target_chunk_size"] == 50
+    assert probe_snapshot["counters"]["post_selection_state_storage"] == (
+        "compact_cpu_v1"
+    )
+    assert "post_selection_state_storage" not in probe_snapshot["execution_records"]
+
+    return_only_instrumentation = TraceInstrumentation(device="cpu")
+    return_only_common = {
+        **common,
+        "config": ADAGConfig(
+            device="cpu",
+            disable_stop_grad=True,
+            skip_attr_contrib=True,
+            return_only_important_neurons=True,
+            post_selection_state_storage="compact_cpu_v1",
+        ),
+    }
+    return_only_result = get_all_pairs_cl_ja_effects_with_attributions(
+        **return_only_common,
+        instrumentation=return_only_instrumentation,
+    )
+    assert len(return_only_result) == 4
+    assert graph_calls == 0
+    assert (
+        "post_selection_state_storage"
+        not in return_only_instrumentation.snapshot()["execution_records"]
+    )
 
     full_instrumentation = TraceInstrumentation(device="cpu")
     assert get_all_pairs_cl_ja_effects_with_attributions(
         **common, instrumentation=full_instrumentation
     ) == ([], [])
     assert graph_calls == 1
+    full_snapshot = full_instrumentation.snapshot()
+    assert (
+        full_snapshot["execution_records"]["post_selection_state_storage"][0][
+            "strategy"
+        ]
+        == "compact_cpu_v1"
+    )
     assert _predictor_without_clock(
         probe_instrumentation.snapshot()
     ) == _predictor_without_clock(full_instrumentation.snapshot())

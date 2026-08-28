@@ -9,8 +9,12 @@ selected-attribution neuron lanes and establishes a measured A100 safety bracket
 7,796 tokens for that optimized profile. Level 1k removes the unused decoder suffix from
 stop-gradient selected-attribution forwards, and Level 1l releases the compact projection's
 autograd edge immediately. The latter lowers the intermediate stop-gradient live set by 8.51 GB
-at 8,266 tokens but does not move the later ordinary selected-attribution/contribution peak. None
-completes Level 1 or authorizes broader tracing runs by itself.
+at 8,266 tokens but does not move the later ordinary selected-attribution/contribution peak.
+Level 1m projects only the selected LM-head positions and is exact-qualified. Allocator-aware
+telemetry then showed that the 8,266-token run completed without retries or OOMs and was near the
+capacity boundary rather than certain to fail. Level 1n, post-selection discovery-state
+compaction, is implemented and CPU-qualified but remains GPU-unqualified. None completes Level 1
+or authorizes broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -76,12 +80,18 @@ Current stage allocation peaks:
 
 Width-one target-lane execution reduced the measured dense contribution-VJP workspaces from about
 13.45 GB to 2.69-2.75 GB without changing target selection or compact topology. The current
-Level 1l 2,951-token profile peaks at 29,801,943,552 allocated and 34,613,493,760 reserved bytes.
-At 8,266 tokens it peaks at 68,952,779,776 allocated and 81,797,316,608 reserved, leaving only
-3,296,460,800 bytes of physical headroom. Both peaks are owned by the later ordinary
-`selected_attribution_contribution` phase, not by the stop-gradient selected-attribution path.
-Continue Level 1 only against that measured owner; move genuinely reusable sequence state to host
-RAM under Level 2 when local lifetime and projection changes no longer provide enough capacity.
+Level 1m 2,951-token selected-position profile peaks at 26,723,487,232 allocated and
+34,613,493,760 reserved bytes and completes tracing in 132.615 seconds. At 8,266 tokens it peaks at
+59,592,814,592 allocated and 81,797,316,608 reserved bytes and completes tracing in 341.097
+seconds.
+
+The allocator-aware 8,266-token diagnostic measured 54.82 GiB active allocation, 11.14 GiB
+inactive-split reservation, and 0.51 GiB external pressure at the limiting boundary. The observed
+joint state left 12.78 GiB of physical headroom; the deliberately conservative independent-max
+estimate left 6.78 GiB. There were no allocator retries or OOMs. Its classification is `watch`
+with a warning action: useful diagnostic evidence, not a prediction that the next allocation must
+fail. Continue Level 1 only against measured live owners; move genuinely reusable sequence state
+to host RAM under Level 2 when local lifetime reductions no longer provide enough capacity.
 
 ## Intended memory model
 
@@ -785,11 +795,39 @@ ordinary selected phase began at the same 25,092,750,336 allocated bytes on both
 allocated, peak reserved, and headroom were byte-for-byte unchanged at 68,952,779,776,
 81,797,316,608, and 3,296,460,800 bytes; trace time was 348.878 versus 347.375 seconds.
 
-The next Level 1 target is therefore the ordinary target-logit live set. That path currently
-materializes `[batch, sequence, vocabulary]` logits and the corresponding selected-logit backward
-workspace although the trace consumes only explicitly selected positions and token IDs. Qualify a
-named full-logits reference against a selected-position LM-head projection before moving this
-owner to Level 2 streaming or recomputation.
+### Level 1m measured checkpoint: selected-position target logits
+
+Execution commit `907e52c` adds a named `full_logits_v1` reference and
+`selected_position_logits_v1` candidate. Sequential A100 jobs `15146889` and `15150153` ran the
+frozen 2,951-token target. The candidate reduced LM-head projection rows from 2,951 to 5 and peak
+allocated CUDA memory from 29,801,940,992 to 26,723,487,232 bytes; peak reservation remained
+34,613,493,760 bytes. The strict report passes exact 3,094-node and 2,366-edge topology plus every
+saved value, with SHA-256
+`2d8dd1bf775a2c987c745a696a79b61e44183a837ee022dbd61dd7621734a14b`.
+
+Job `15164818` then completed the 8,266-token selected-position artifact with 8,362 nodes and 1,046
+edges and no allocator retry or OOM. Target-logit projection is therefore no longer the next
+owner.
+
+### Level 1n qualification checkpoint: post-selection discovery state
+
+The next target is dense discovery state retained after important-neuron selection. The selectable
+`dense_v1` reference preserves the historical lifetime. The `compact_cpu_v1` candidate preserves
+ordered selected coordinates and their raw-dtype initial-attribution values on CPU, drives graph
+expansion through a strategy-independent state interface, and releases the unused dense
+`mlp_final_acts`, `mlp_final_attributions`, `embed_final_acts`, and global mask from the candidate's
+retained device state. Probe and return-only modes retain their historical behavior and bypass this
+normal-trace adapter.
+
+Receipts bind strategy, coordinate order and hash, compact value shape, dtype, raw hash and bytes,
+logical input/retained/released bytes, placement, and allocator state immediately before and after
+the storage transition. This implementation has passed focused CPU algebra, lifecycle,
+integration, adversarial receipt, and launcher tests. It remains unaccepted until sequential A100
+jobs establish strict dense/compact parity and measured memory behavior on the 2,951-token target.
+Only after that gate may the candidate advance one job at a time through 8,266 and the frozen
+9,397-token near-10k target. The immutable qualification-v4 manifest contains no actual 10,000-
+token item; an exact 10k proof would require a new versioned manifest rather than editing the
+frozen one.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 
@@ -924,10 +962,12 @@ is useful scaling evidence but does not authorize a full tracing campaign.
 
 ## Implementation order
 
-1. Add sparse selected-coordinate source injection behind the current contribution and cross-layer
-   seams.
-2. Qualify Level 1 and refresh the memory-owner/runtime table.
-3. Add the synchronous host boundary store and source-group scheduler.
+1. Qualify Level 1n post-selection compaction with a strict sequential dense/compact 2,951-token
+   A100 comparison.
+2. If exact, run the compact candidate sequentially at 8,266 and 9,397 tokens, stopping at the
+   first correctness, memory, runtime, or provenance failure; refresh the owner/runtime table.
+3. If Level 1n does not provide sufficient A100 capacity, add the synchronous host boundary store
+   and source-group scheduler.
 4. Qualify synchronous Level 2, then add double-buffered prefetch and qualify it independently.
 5. Run the A100 ladder until a new measured owner or failure appears.
 6. Add Level 3 checkpoint/window profiles only where Level 2 telemetry shows retained state or host

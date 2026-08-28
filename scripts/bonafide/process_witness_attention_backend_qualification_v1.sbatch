@@ -52,6 +52,7 @@ EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE="${EXPECTED_SELECTED_ATTRIB
 EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION="${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION:-legacy_unbound}"
 EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE="${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE:-legacy_unbound}"
 EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION="${EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION:-legacy_unbound}"
+EXPECTED_POST_SELECTION_STATE_STORAGE="${EXPECTED_POST_SELECTION_STATE_STORAGE:-legacy_unbound}"
 
 for path_name in CONFIG MANIFEST ARTIFACT_ROOT UV_PROJECT_ENVIRONMENT; do
     path_value="${!path_name}"
@@ -130,6 +131,13 @@ case "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION" in
     legacy_unbound|full_logits_v1|selected_position_logits_v1) ;;
     *)
         echo "Unsupported EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION=${EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION}." >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_POST_SELECTION_STATE_STORAGE" in
+    legacy_unbound|dense_v1|compact_cpu_v1) ;;
+    *)
+        echo "Unsupported EXPECTED_POST_SELECTION_STATE_STORAGE=${EXPECTED_POST_SELECTION_STATE_STORAGE}." >&2
         exit 2
         ;;
 esac
@@ -279,8 +287,9 @@ expected_selected_attribution_chunk_size=(
 expected_selected_forward_execution=sys.argv[18]
 expected_selected_storage=sys.argv[19]
 expected_selected_target_logit_execution=sys.argv[20]
-expected_cuda_headroom_policy=sys.argv[21]
-expected_cuda_headroom_action=sys.argv[22]
+expected_post_selection_state_storage=sys.argv[21]
+expected_cuda_headroom_policy=sys.argv[22]
+expected_cuda_headroom_action=sys.argv[23]
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -346,6 +355,15 @@ if selected_target_logit_is_bound:
         raise SystemExit("run config selected target-logit execution disagrees with EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION")
 elif selected_target_logit_field in adag:
     raise SystemExit("legacy-unbound qualification config unexpectedly declares selected target-logit execution")
+post_selection_state_storage_field="post_selection_state_storage"
+post_selection_state_storage_is_bound=(
+    expected_post_selection_state_storage != "legacy_unbound"
+)
+if post_selection_state_storage_is_bound:
+    if post_selection_state_storage_field not in adag or adag[post_selection_state_storage_field] != expected_post_selection_state_storage:
+        raise SystemExit("run config post-selection state storage disagrees with EXPECTED_POST_SELECTION_STATE_STORAGE")
+elif post_selection_state_storage_field in adag:
+    raise SystemExit("legacy-unbound qualification config unexpectedly declares post-selection state storage")
 declared_embedding_edge_materialization=adag.get("embedding_edge_materialization")
 if declared_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in adag:
@@ -421,6 +439,7 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" \
         "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE" \
         "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION" \
+        "$EXPECTED_POST_SELECTION_STATE_STORAGE" \
         "$EXPECTED_CUDA_HEADROOM_POLICY" \
         "$EXPECTED_CUDA_HEADROOM_ACTION"
 )"
@@ -446,6 +465,7 @@ echo "selected_attribution_neuron_lane_chunk_size=${EXPECTED_SELECTED_ATTRIBUTIO
 echo "stop_gradient_selected_attribution_forward_execution=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION}"
 echo "stop_gradient_selected_attribution_storage=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE}"
 echo "selected_target_logit_execution=${EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION}"
+echo "post_selection_state_storage=${EXPECTED_POST_SELECTION_STATE_STORAGE}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
 echo "cuda_headroom_policy=${EXPECTED_CUDA_HEADROOM_POLICY}"
 echo "cuda_headroom_action=${EXPECTED_CUDA_HEADROOM_ACTION}"
@@ -500,6 +520,7 @@ fi
     'import json,pathlib,sys
 from scripts.bonafide.cuda_allocator_policy import ALLOCATOR_ENVIRONMENT_VARIABLE, pytorch_cuda_alloc_conf_for_policy
 from scripts.bonafide.cuda_headroom import assess_cuda_headroom, headroom_action_requires_stop, headroom_gate_passed
+from circuits.tracing.backend_qualification import post_selection_state_expected_values_identity, validate_post_selection_state_storage_runtime
 summary=pathlib.Path(sys.argv[1])
 expected_source=sys.argv[2]
 expected_output=str(pathlib.Path(sys.argv[3]))
@@ -538,8 +559,9 @@ expected_selected_attribution_chunk_size=(
 expected_selected_forward_execution=sys.argv[15]
 expected_selected_storage=sys.argv[16]
 expected_selected_target_logit_execution=sys.argv[17]
-expected_cuda_headroom_policy=sys.argv[18]
-expected_cuda_headroom_action=sys.argv[19]
+expected_post_selection_state_storage=sys.argv[18]
+expected_cuda_headroom_policy=sys.argv[19]
+expected_cuda_headroom_action=sys.argv[20]
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -811,6 +833,24 @@ if selected_target_logit_is_bound:
         or observed_lm_head_rows >= full_sequence_baseline_rows
     ):
         raise SystemExit("saved artifact selected target-logit execution did not reduce LM-head rows")
+post_selection_state_storage_field="post_selection_state_storage"
+post_selection_state_storage_is_bound=(
+    expected_post_selection_state_storage != "legacy_unbound"
+)
+observed_post_selection_state_storage=artifact_adag.get(post_selection_state_storage_field)
+if post_selection_state_storage_is_bound:
+    if post_selection_state_storage_field not in artifact_adag or observed_post_selection_state_storage != expected_post_selection_state_storage:
+        raise SystemExit("saved artifact post-selection state storage identity disagrees with requested strategy")
+elif post_selection_state_storage_field in artifact_adag:
+    raise SystemExit("legacy-unbound artifact unexpectedly declares post-selection state storage")
+if post_selection_state_storage_is_bound:
+    receipt_valid,_post_selection_runtime=validate_post_selection_state_storage_runtime(
+        row.get("instrumentation"),
+        expected_strategy=expected_post_selection_state_storage,
+        **post_selection_state_expected_values_identity(identity),
+    )
+    if not receipt_valid:
+        raise SystemExit("saved artifact post-selection state storage receipt disagrees with requested strategy")
 observed_embedding_edge_materialization=artifact_adag.get("embedding_edge_materialization")
 if observed_embedding_edge_materialization != expected_embedding_edge_materialization:
     if expected_embedding_edge_materialization is not None or "embedding_edge_materialization" in artifact_adag:
@@ -854,5 +894,6 @@ if expected_allocator_policy is not None:
     "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" \
     "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE" \
     "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION" \
+    "$EXPECTED_POST_SELECTION_STATE_STORAGE" \
     "$EXPECTED_CUDA_HEADROOM_POLICY" \
     "$EXPECTED_CUDA_HEADROOM_ACTION"

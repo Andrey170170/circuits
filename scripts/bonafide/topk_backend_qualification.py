@@ -14,6 +14,7 @@ from circuits.tracing.backend_qualification import (
     CROSS_LAYER_JACOBIAN_AB_IDENTITY_PATHS,
     CUDA_ALLOCATOR_AB_IDENTITY_PATHS,
     EMBEDDING_EDGE_AB_IDENTITY_PATHS,
+    POST_SELECTION_STATE_STORAGE_AB_IDENTITY_PATHS,
     SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_EMBED_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
     SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_AB_IDENTITY_PATHS,
@@ -152,6 +153,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--post-selection-state-storage-ab",
+        action="store_true",
+        help=(
+            "Use the fail-closed post-selection state storage A/B profile: "
+            "explicit dense reference and compact CPU candidate, same GPU "
+            "model, exact topology and selected-state receipts, zero numerical "
+            "tolerances, and only the exact storage strategy field may differ."
+        ),
+    )
+    parser.add_argument(
         "--selected-neuron-contribution-target-lane-chunk-ab",
         action="store_true",
         help=(
@@ -261,6 +272,10 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
                 "--selected-target-logit-execution-ab",
             ),
             (
+                args.post_selection_state_storage_ab,
+                "--post-selection-state-storage-ab",
+            ),
+            (
                 args.selected_neuron_contribution_target_lane_chunk_ab,
                 "--selected-neuron-contribution-target-lane-chunk-ab",
             ),
@@ -321,6 +336,8 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             )
         elif args.selected_target_logit_execution_ab:
             identity_paths = SELECTED_TARGET_LOGIT_EXECUTION_AB_IDENTITY_PATHS
+        elif args.post_selection_state_storage_ab:
+            identity_paths = POST_SELECTION_STATE_STORAGE_AB_IDENTITY_PATHS
         elif (
             args.selected_embed_contribution_target_lane_full_width_ab
             or args.selected_embed_contribution_target_lane_width_one_bf16_ab
@@ -373,6 +390,9 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
             "require_canonical_selected_target_logit_execution_ab": (
                 args.selected_target_logit_execution_ab
             ),
+            "require_canonical_post_selection_state_storage_ab": (
+                args.post_selection_state_storage_ab
+            ),
             "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": (
                 args.selected_neuron_contribution_target_lane_chunk_ab
             ),
@@ -402,6 +422,7 @@ def comparison_options(args: argparse.Namespace) -> dict[str, Any]:
         "require_canonical_stop_gradient_selected_attribution_forward_ab": False,
         "require_canonical_stop_gradient_selected_attribution_storage_ab": False,
         "require_canonical_selected_target_logit_execution_ab": False,
+        "require_canonical_post_selection_state_storage_ab": False,
         "require_canonical_selected_neuron_contribution_target_lane_chunk_ab": False,
         "selected_embed_contribution_target_lane_chunk_ab_profile": None,
         "stop_gradient_embed_contribution_target_lane_chunk_ab_profile": None,
