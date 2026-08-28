@@ -28,6 +28,11 @@ from scripts.bonafide.cuda_allocator_policy import (
     declared_cuda_allocator_policy,
     validate_cuda_allocator_environment,
 )
+from scripts.bonafide.cuda_headroom import (
+    assess_cuda_headroom,
+    cuda_headroom_identity_contract,
+    normalized_cuda_headroom_gate_contract,
+)
 from scripts.bonafide.execution_plan import sha256_file
 from scripts.bonafide.runner import (
     _append_jsonl,
@@ -94,6 +99,9 @@ def topk_runtime_artifact_identity(
         "code_revision": dict(code_revision),
         "runtime_environment": dict(runtime_environment),
     }
+    headroom_identity = cuda_headroom_identity_contract(config)
+    if headroom_identity is not None:
+        identity["cuda_headroom_gate"] = headroom_identity
     if "instrumentation" in config:
         identity["instrumentation"] = normalized_instrumentation(config)
     allocator_policy = declared_cuda_allocator_policy(config)
@@ -498,8 +506,11 @@ def run_topk_wave(
             torch.cuda.empty_cache()
 
     limits = config.get("wave_limits", {})
+    cuda_headroom_contract = normalized_cuda_headroom_gate_contract(config)
     max_trace_seconds = limits.get("max_trace_seconds")
-    min_cuda_headroom_bytes = int(limits.get("min_cuda_headroom_bytes", 0))
+    min_cuda_headroom_bytes = cuda_headroom_contract["min_cuda_headroom_bytes"]
+    cuda_headroom_policy = cuda_headroom_contract["policy"]
+    cuda_headroom_action = cuda_headroom_contract["action"]
     stop_on_oom = bool(limits.get("stop_on_oom", True))
     signal_state = {"requested": False}
     previous_handler = signal.getsignal(signal.SIGUSR1)
@@ -536,6 +547,9 @@ def run_topk_wave(
                 cuda_memory_telemetry=(instrumentation_policy["cuda_memory_telemetry"]),
                 cuda_allocator_snapshot_telemetry=(
                     instrumentation_policy["cuda_allocator_snapshot_telemetry"]
+                ),
+                cuda_dense_joint_pressure_telemetry=instrumentation_policy.get(
+                    "cuda_dense_joint_pressure_telemetry", False
                 ),
             )
             config_before = _model_config_sha256(model)
@@ -597,6 +611,18 @@ def run_topk_wave(
                     ),
                     uses_cuda=uses_cuda,
                 )
+                cuda_headroom_gate = (
+                    assess_cuda_headroom(
+                        policy=cuda_headroom_policy,
+                        threshold_bytes=min_cuda_headroom_bytes,
+                        action=cuda_headroom_action,
+                        device_total_bytes=gpu_info["total_memory_bytes"],
+                        peak_reserved_bytes=peak_reserved,
+                        instrumentation=snapshot,
+                    )
+                    if uses_cuda and gpu_info is not None
+                    else None
+                )
                 profile_diagnostics = _candidate_profile_diagnostics(
                     trace.circuit_data.df_node, trace.candidate_count
                 )
@@ -630,6 +656,17 @@ def run_topk_wave(
                         trace.candidate_selection.observed_token_rank
                     ),
                     "instrumentation": snapshot,
+                    **(
+                        {"cuda_headroom_gate": cuda_headroom_gate}
+                        if cuda_headroom_gate is not None
+                        else {}
+                    ),
+                    **(
+                        {"cuda_headroom_warning": cuda_headroom_gate["warning"]}
+                        if cuda_headroom_gate is not None
+                        and cuda_headroom_gate["warning"] is not None
+                        else {}
+                    ),
                     **profile_diagnostics,
                 }
                 serialization_started = time.perf_counter()
@@ -719,6 +756,8 @@ def run_topk_wave(
                 ),
                 min_cuda_headroom_bytes=min_cuda_headroom_bytes,
                 stop_on_oom=stop_on_oom,
+                cuda_headroom_policy=cuda_headroom_policy,
+                cuda_headroom_action=cuda_headroom_action,
             )
             if stop_reason is not None:
                 stop_record = {

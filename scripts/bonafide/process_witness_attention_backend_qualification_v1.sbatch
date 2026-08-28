@@ -41,6 +41,8 @@ cd "$REPO_ROOT"
 : "${ONLY_ARTIFACT_ID:?Set ONLY_ARTIFACT_ID to exactly one item in WAVE}"
 : "${UV_PROJECT_ENVIRONMENT:?Set a lane-specific absolute uv environment}"
 EXPECTED_CUDA_ALLOCATOR_POLICY="${EXPECTED_CUDA_ALLOCATOR_POLICY:-}"
+EXPECTED_CUDA_HEADROOM_POLICY="${EXPECTED_CUDA_HEADROOM_POLICY:-peak_reserved_v1}"
+EXPECTED_CUDA_HEADROOM_ACTION="${EXPECTED_CUDA_HEADROOM_ACTION:-stop}"
 EXPECTED_EMBEDDING_EDGE_MATERIALIZATION="${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-}"
 EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION="${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-}"
 EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE="${EXPECTED_SELECTED_NEURON_CONTRIBUTION_TARGET_LANE_CHUNK_SIZE:-legacy_unbound}"
@@ -142,6 +144,20 @@ case "$EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION" in
     ""|full_model_v1|cached_range_v1) ;;
     *)
         echo "Unsupported EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION}." >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_CUDA_HEADROOM_POLICY" in
+    peak_reserved_v1|allocator_dense_joint_v1) ;;
+    *)
+        echo "Unsupported EXPECTED_CUDA_HEADROOM_POLICY=${EXPECTED_CUDA_HEADROOM_POLICY}." >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_CUDA_HEADROOM_ACTION" in
+    warn|stop) ;;
+    *)
+        echo "Unsupported EXPECTED_CUDA_HEADROOM_ACTION=${EXPECTED_CUDA_HEADROOM_ACTION}." >&2
         exit 2
         ;;
 esac
@@ -263,6 +279,8 @@ expected_selected_attribution_chunk_size=(
 expected_selected_forward_execution=sys.argv[18]
 expected_selected_storage=sys.argv[19]
 expected_selected_target_logit_execution=sys.argv[20]
+expected_cuda_headroom_policy=sys.argv[21]
+expected_cuda_headroom_action=sys.argv[22]
 config=json.loads(config_path.read_text(encoding="utf-8"))
 manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
 adag=config.get("adag_config")
@@ -342,7 +360,24 @@ if declared_allocator_policy != expected_allocator_policy:
 if config.get("trace_warmup", {}).get("enabled") is not False:
     raise SystemExit("tracing qualification requires trace_warmup.enabled=false")
 limits=config.get("wave_limits")
-if limits != {"max_trace_seconds": 1800, "min_cuda_headroom_bytes": 8589934592, "stop_on_oom": True}:
+expected_limits={"max_trace_seconds": 1800, "min_cuda_headroom_bytes": 8589934592, "stop_on_oom": True}
+if isinstance(limits, dict) and "cuda_headroom_policy" in limits:
+    expected_limits["cuda_headroom_policy"]=expected_cuda_headroom_policy
+if isinstance(limits, dict) and "cuda_headroom_action" in limits:
+    expected_limits["cuda_headroom_action"]=expected_cuda_headroom_action
+declared_cuda_headroom_policy=(
+    limits.get("cuda_headroom_policy", "peak_reserved_v1")
+    if isinstance(limits, dict)
+    else None
+)
+if declared_cuda_headroom_policy != expected_cuda_headroom_policy:
+    raise SystemExit("run config CUDA headroom policy disagrees with EXPECTED_CUDA_HEADROOM_POLICY")
+declared_cuda_headroom_action=(
+    limits.get("cuda_headroom_action", "stop") if isinstance(limits, dict) else None
+)
+if declared_cuda_headroom_action != expected_cuda_headroom_action:
+    raise SystemExit("run config CUDA headroom action disagrees with EXPECTED_CUDA_HEADROOM_ACTION")
+if limits != expected_limits:
     raise SystemExit("tracing qualification resource gates drifted")
 if manifest.get("phase") != "process_witness_resource_calibration_v1":
     raise SystemExit("launcher only accepts the qualification-v4 resource-calibration phase")
@@ -385,7 +420,9 @@ print(artifact_root/manifest["trace_family"]["trace_family_id"]/wave_id/artifact
         "$EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE" \
         "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" \
         "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE" \
-        "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION"
+        "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION" \
+        "$EXPECTED_CUDA_HEADROOM_POLICY" \
+        "$EXPECTED_CUDA_HEADROOM_ACTION"
 )"
 
 for target in "$EXPECTED_OUTPUT_DIR" "$SUMMARY_JSONL"; do
@@ -410,6 +447,8 @@ echo "stop_gradient_selected_attribution_forward_execution=${EXPECTED_STOP_GRADI
 echo "stop_gradient_selected_attribution_storage=${EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE}"
 echo "selected_target_logit_execution=${EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION}"
 echo "cuda_allocator_policy=${EXPECTED_CUDA_ALLOCATOR_POLICY:-legacy_unbound} pytorch_cuda_alloc_conf=${PYTORCH_CUDA_ALLOC_CONF-unset}"
+echo "cuda_headroom_policy=${EXPECTED_CUDA_HEADROOM_POLICY}"
+echo "cuda_headroom_action=${EXPECTED_CUDA_HEADROOM_ACTION}"
 echo "embedding_edge_materialization=${EXPECTED_EMBEDDING_EDGE_MATERIALIZATION:-legacy_unbound}"
 echo "cross_layer_jacobian_execution=${EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION:-legacy_unbound}"
 echo "artifact_root=${ARTIFACT_ROOT} expected_output=${EXPECTED_OUTPUT_DIR}"
@@ -460,6 +499,7 @@ fi
 "$PYTHON_BIN" -c \
     'import json,pathlib,sys
 from scripts.bonafide.cuda_allocator_policy import ALLOCATOR_ENVIRONMENT_VARIABLE, pytorch_cuda_alloc_conf_for_policy
+from scripts.bonafide.cuda_headroom import assess_cuda_headroom, headroom_action_requires_stop, headroom_gate_passed
 summary=pathlib.Path(sys.argv[1])
 expected_source=sys.argv[2]
 expected_output=str(pathlib.Path(sys.argv[3]))
@@ -498,6 +538,8 @@ expected_selected_attribution_chunk_size=(
 expected_selected_forward_execution=sys.argv[15]
 expected_selected_storage=sys.argv[16]
 expected_selected_target_logit_execution=sys.argv[17]
+expected_cuda_headroom_policy=sys.argv[18]
+expected_cuda_headroom_action=sys.argv[19]
 rows=[json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
 if len(rows) != 1:
     raise SystemExit("qualification summary must contain exactly one record")
@@ -510,11 +552,72 @@ runtime=row.get("runtime_environment", {}).get("gpu_runtime", {})
 devices=runtime.get("devices", [])
 if len(devices) != 1 or devices[0].get("name") != expected_gpu or not runtime.get("driver_versions"):
     raise SystemExit("qualification summary lacks the exact GPU/driver runtime receipt")
+device_total_bytes=devices[0].get("total_memory_bytes")
+if type(device_total_bytes) is not int or device_total_bytes <= 0:
+    raise SystemExit("qualification summary lacks a valid GPU total-memory receipt")
 artifact_manifest=json.loads((pathlib.Path(expected_output)/"manifest.json").read_text(encoding="utf-8"))
 backend=artifact_manifest.get("artifact_identity", {}).get("adag_config", {}).get("stop_gradient_attention_backend")
 if backend != expected_backend:
     raise SystemExit("saved artifact backend identity disagrees with requested backend")
 identity=artifact_manifest.get("artifact_identity", {})
+expected_cuda_headroom_contract={
+    "policy": expected_cuda_headroom_policy,
+    "min_cuda_headroom_bytes": 8589934592,
+    "action": expected_cuda_headroom_action,
+    "sampling_version": "boundary_cuda_metrics_v1",
+}
+if expected_cuda_headroom_policy == "allocator_dense_joint_v1":
+    if identity.get("cuda_headroom_gate") != expected_cuda_headroom_contract:
+        raise SystemExit("saved artifact CUDA headroom gate identity disagrees with requested contract")
+elif "cuda_headroom_gate" in identity:
+    raise SystemExit("legacy artifact unexpectedly binds a CUDA headroom identity field")
+headroom_receipt=row.get("cuda_headroom_gate")
+row_instrumentation=row.get("instrumentation")
+if not isinstance(row_instrumentation, dict):
+    raise SystemExit("qualification summary lacks instrumentation for CUDA headroom recomputation")
+try:
+    expected_headroom_receipt=assess_cuda_headroom(
+        policy=expected_cuda_headroom_policy,
+        threshold_bytes=8589934592,
+        action=expected_cuda_headroom_action,
+        device_total_bytes=device_total_bytes,
+        peak_reserved_bytes=row.get("cuda_peak_reserved_bytes"),
+        instrumentation=row_instrumentation,
+    )
+except (TypeError, ValueError) as error:
+    raise SystemExit(f"CUDA headroom gate recomputation failed: {error}") from error
+if headroom_receipt != expected_headroom_receipt:
+    raise SystemExit("saved CUDA headroom gate receipt disagrees with exact recomputation")
+try:
+    headroom_passed=headroom_gate_passed(
+        headroom_receipt,
+        expected_policy=expected_cuda_headroom_policy,
+        expected_threshold_bytes=8589934592,
+        expected_action=expected_cuda_headroom_action,
+    )
+except (TypeError, ValueError) as error:
+    raise SystemExit(f"saved CUDA headroom gate receipt is invalid: {error}") from error
+try:
+    headroom_should_stop=headroom_action_requires_stop(
+        headroom_receipt,
+        expected_policy=expected_cuda_headroom_policy,
+        expected_threshold_bytes=8589934592,
+        expected_action=expected_cuda_headroom_action,
+    )
+except (TypeError, ValueError) as error:
+    raise SystemExit(f"saved CUDA headroom action decision is invalid: {error}") from error
+if headroom_should_stop:
+    raise SystemExit("saved CUDA headroom gate receipt did not pass the qualification threshold")
+classification=headroom_receipt.get("classification")
+warning=row.get("cuda_headroom_warning")
+if classification == "comfortable":
+    if warning is not None:
+        raise SystemExit("comfortable CUDA headroom receipt unexpectedly emitted a warning")
+elif expected_cuda_headroom_action == "warn":
+    if warning != headroom_receipt.get("warning") or not isinstance(warning, dict):
+        raise SystemExit("advisory CUDA headroom receipt lacks its durable warning")
+elif not headroom_passed:
+    raise SystemExit("stopping CUDA headroom receipt did not pass the threshold")
 artifact_adag=identity.get("adag_config", {})
 observed_contribution_execution=artifact_adag.get("stop_gradient_contribution_execution")
 if observed_contribution_execution != expected_contribution_execution:
@@ -750,4 +853,6 @@ if expected_allocator_policy is not None:
     "$EXPECTED_SELECTED_ATTRIBUTION_NEURON_LANE_CHUNK_SIZE" \
     "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_FORWARD_EXECUTION" \
     "$EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE" \
-    "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION"
+    "$EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION" \
+    "$EXPECTED_CUDA_HEADROOM_POLICY" \
+    "$EXPECTED_CUDA_HEADROOM_ACTION"

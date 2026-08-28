@@ -20,6 +20,12 @@ import torch
 SCHEMA_VERSION = "adag.trace-instrumentation.v1"
 CUDA_MEMORY_SCHEMA_VERSION = "adag.cuda-memory-telemetry.v1"
 CUDA_ALLOCATOR_SNAPSHOT_SCHEMA_VERSION = "adag.cuda-allocator-fragmentation-snapshot.v1"
+CUDA_DENSE_JOINT_PRESSURE_SCHEMA_VERSION = "adag.cuda-dense-joint-pressure.v1"
+CUDA_DENSE_JOINT_SAMPLING_VERSION = "boundary_cuda_metrics_v1"
+CUDA_DENSE_JOINT_SAMPLING_SEMANTICS = (
+    "boundary_sampled_not_continuous_no_failure_prediction_v1"
+)
+CUDA_DENSE_JOINT_TOP_SAMPLE_LIMIT = 16
 
 _INACTIVE_BLOCK_SIZE_BUCKETS = (
     (1 << 20, "le_1_mib"),
@@ -211,14 +217,22 @@ class TraceInstrumentation:
         synchronize_cuda: bool = False,
         cuda_memory_telemetry: bool = False,
         cuda_allocator_snapshot_telemetry: bool = False,
+        cuda_dense_joint_pressure_telemetry: bool = False,
     ) -> None:
         self.device = str(device) if device is not None else None
         self.synchronize_cuda = bool(synchronize_cuda)
         self.cuda_memory_telemetry = bool(cuda_memory_telemetry)
         self.cuda_allocator_snapshot_telemetry = bool(cuda_allocator_snapshot_telemetry)
+        self.cuda_dense_joint_pressure_telemetry = bool(
+            cuda_dense_joint_pressure_telemetry
+        )
         if self.cuda_allocator_snapshot_telemetry and not self.cuda_memory_telemetry:
             raise ValueError(
                 "CUDA allocator snapshot telemetry requires CUDA memory telemetry"
+            )
+        if self.cuda_dense_joint_pressure_telemetry and not self.cuda_memory_telemetry:
+            raise ValueError(
+                "CUDA dense joint pressure telemetry requires CUDA memory telemetry"
             )
         self._started = time.perf_counter()
         self._stages: dict[str, dict[str, Any]] = {}
@@ -231,6 +245,11 @@ class TraceInstrumentation:
         self._cuda_device: torch.device | None = None
         self._cuda_overall_start: dict[str, int | float] | None = None
         self._cuda_overall_peak: dict[str, int] = {}
+        self._cuda_joint_pressure_sample_count = 0
+        self._cuda_joint_pressure_sampling_wall_seconds = 0.0
+        self._cuda_joint_pressure_limiting_sample: dict[str, Any] | None = None
+        self._cuda_joint_pressure_max_external_bytes = 0
+        self._cuda_joint_pressure_top_samples: list[dict[str, Any]] = []
         self._cuda_allocator_snapshots: list[dict[str, Any]] = []
         self._cuda_allocator_snapshot_once_keys: set[str] = set()
         if self.cuda_memory_telemetry:
@@ -245,7 +264,7 @@ class TraceInstrumentation:
                 raise RuntimeError("CUDA memory telemetry requested without CUDA")
             self._cuda_device = device_value
             torch.cuda.reset_peak_memory_stats(self._cuda_device)
-            self._cuda_overall_start = self._cuda_metrics()
+            self._cuda_overall_start = self._cuda_metrics(point="trace_start")
             self._update_overall_peak(self._cuda_overall_start)
 
     def record_cuda_allocator_snapshot(
@@ -289,7 +308,9 @@ class TraceInstrumentation:
         device_free_bytes, device_total_bytes = torch.cuda.mem_get_info(
             self._cuda_device
         )
-        current_allocator_stats = self._cuda_metrics()
+        current_allocator_stats = self._cuda_metrics(
+            point=f"allocator_snapshot:{point}"
+        )
         capture_wall_seconds = time.perf_counter() - started
         safe_metadata = _json_safe(dict(metadata or {}))
         if not isinstance(safe_metadata, dict):
@@ -329,15 +350,25 @@ class TraceInstrumentation:
         self._synchronize()
         return time.perf_counter() - started
 
-    def _cuda_metrics(self) -> dict[str, int | float]:
+    def _cuda_metrics(
+        self,
+        *,
+        point: str,
+        measurement_stack: list[str] | None = None,
+    ) -> dict[str, int | float]:
         if self._cuda_device is None:
             raise RuntimeError("CUDA metrics requested when telemetry is disabled")
+        if not isinstance(point, str) or not point:
+            raise ValueError("CUDA metrics point must be a non-empty string")
+        started = (
+            time.perf_counter() if self.cuda_dense_joint_pressure_telemetry else 0.0
+        )
         stats = torch.cuda.memory_stats(self._cuda_device)
         allocated = int(torch.cuda.memory_allocated(self._cuda_device))
         reserved = int(torch.cuda.memory_reserved(self._cuda_device))
         active = int(stats.get("active_bytes.all.current", allocated))
         inactive_split = int(stats.get("inactive_split_bytes.all.current", 0))
-        return {
+        metrics: dict[str, int | float] = {
             "allocated_bytes": allocated,
             "reserved_bytes": reserved,
             "active_bytes": active,
@@ -359,6 +390,61 @@ class TraceInstrumentation:
                 stats.get("inactive_split_bytes.all.peak", inactive_split)
             ),
         }
+        if not self.cuda_dense_joint_pressure_telemetry:
+            return metrics
+        if active < 0 or inactive_split < 0 or reserved < 0:
+            raise ValueError("CUDA allocator metrics contain negative byte counts")
+        if active + inactive_split > reserved:
+            raise ValueError(
+                "CUDA active plus inactive-split bytes exceed reserved bytes"
+            )
+        device_free, device_total = torch.cuda.mem_get_info(self._cuda_device)
+        device_free = int(device_free)
+        device_total = int(device_total)
+        if device_total <= 0 or not 0 <= device_free <= device_total:
+            raise ValueError("CUDA mem_get_info returned invalid device bytes")
+        physical_used = device_total - device_free
+        external = max(0, physical_used - reserved)
+        joint_pressure = active + inactive_split + external
+        joint_headroom = max(0, device_total - joint_pressure)
+        sampling_wall_seconds = time.perf_counter() - started
+        stack = (
+            list(measurement_stack)
+            if measurement_stack is not None
+            else [measurement.name for measurement in self._measurement_stack]
+        )
+        sample = {
+            "sample_index": self._cuda_joint_pressure_sample_count,
+            "point": point,
+            "measurement_stack": stack,
+            "elapsed_since_trace_start_seconds": started - self._started,
+            "sampling_wall_seconds": sampling_wall_seconds,
+            "active_bytes": active,
+            "inactive_split_bytes": inactive_split,
+            "external_device_bytes": external,
+            "reserved_bytes": reserved,
+            "device_free_bytes": device_free,
+            "device_total_bytes": device_total,
+            "joint_pressure_bytes": joint_pressure,
+            "joint_headroom_bytes": joint_headroom,
+        }
+        self._cuda_joint_pressure_sample_count += 1
+        self._cuda_joint_pressure_sampling_wall_seconds += sampling_wall_seconds
+        self._cuda_joint_pressure_max_external_bytes = max(
+            self._cuda_joint_pressure_max_external_bytes, external
+        )
+        limiting = self._cuda_joint_pressure_limiting_sample
+        if limiting is None or joint_pressure > int(limiting["joint_pressure_bytes"]):
+            self._cuda_joint_pressure_limiting_sample = sample
+        self._cuda_joint_pressure_top_samples.append(sample)
+        self._cuda_joint_pressure_top_samples.sort(
+            key=lambda item: (
+                -int(item["joint_pressure_bytes"]),
+                int(item["sample_index"]),
+            )
+        )
+        del self._cuda_joint_pressure_top_samples[CUDA_DENSE_JOINT_TOP_SAMPLE_LIMIT:]
+        return metrics
 
     @staticmethod
     def _peak_values(metrics: Mapping[str, int | float]) -> dict[str, int]:
@@ -380,10 +466,10 @@ class TraceInstrumentation:
     def _update_overall_peak(self, metrics: Mapping[str, int | float]) -> None:
         self._merge_peak(self._cuda_overall_peak, self._peak_values(metrics))
 
-    def _checkpoint_cuda(self) -> dict[str, int | float]:
+    def _checkpoint_cuda(self, *, point: str) -> dict[str, int | float]:
         """Capture peaks before a reset, including them in all nested calls."""
 
-        metrics = self._cuda_metrics()
+        metrics = self._cuda_metrics(point=point)
         peaks = self._peak_values(metrics)
         self._update_overall_peak(metrics)
         for measurement in self._measurement_stack:
@@ -412,7 +498,7 @@ class TraceInstrumentation:
         if self._cuda_device is None or measurement._cuda_start is None:
             return
         try:
-            end = self._checkpoint_cuda()
+            end = self._checkpoint_cuda(point=f"measurement_finish:{measurement.name}")
             measurement.cuda_memory = {
                 "schema_version": CUDA_MEMORY_SCHEMA_VERSION,
                 "start": measurement._cuda_start,
@@ -444,7 +530,7 @@ class TraceInstrumentation:
         if synchronize:
             self._synchronize()
         if self.cuda_memory_telemetry:
-            self._checkpoint_cuda()
+            self._checkpoint_cuda(point=f"before_measurement_start:{name}")
             self._reset_cuda_peaks()
         measurement = StageMeasurement(
             name=name,
@@ -452,7 +538,13 @@ class TraceInstrumentation:
             _started=time.perf_counter(),
         )
         if self.cuda_memory_telemetry:
-            measurement._cuda_start = self._cuda_metrics()
+            measurement._cuda_start = self._cuda_metrics(
+                point=f"measurement_start:{name}",
+                measurement_stack=[
+                    *(item.name for item in self._measurement_stack),
+                    name,
+                ],
+            )
             measurement._cuda_peak = self._peak_values(measurement._cuda_start)
         self._measurement_stack.append(measurement)
         return measurement
@@ -620,7 +712,7 @@ class TraceInstrumentation:
     def snapshot(self) -> dict[str, Any]:
         cuda_memory = None
         if self.cuda_memory_telemetry:
-            current = self._checkpoint_cuda()
+            current = self._checkpoint_cuda(point="instrumentation_snapshot")
             if self._cuda_overall_start is None:
                 raise RuntimeError("CUDA telemetry lacks its initial measurement")
             cuda_memory = {
@@ -634,6 +726,32 @@ class TraceInstrumentation:
                         self._cuda_overall_start, current
                     ),
                 },
+                **(
+                    {
+                        "dense_joint_pressure": {
+                            "schema_version": (
+                                CUDA_DENSE_JOINT_PRESSURE_SCHEMA_VERSION
+                            ),
+                            "sampling_version": CUDA_DENSE_JOINT_SAMPLING_VERSION,
+                            "sampling_semantics": (CUDA_DENSE_JOINT_SAMPLING_SEMANTICS),
+                            "sample_count": self._cuda_joint_pressure_sample_count,
+                            "cumulative_sampling_wall_seconds": (
+                                self._cuda_joint_pressure_sampling_wall_seconds
+                            ),
+                            "max_sampled_external_device_bytes": (
+                                self._cuda_joint_pressure_max_external_bytes
+                            ),
+                            "limiting_sample": (
+                                self._cuda_joint_pressure_limiting_sample
+                            ),
+                            "top_pressure_samples": (
+                                self._cuda_joint_pressure_top_samples
+                            ),
+                        }
+                    }
+                    if self.cuda_dense_joint_pressure_telemetry
+                    else {}
+                ),
             }
         snapshot = _json_safe(
             {

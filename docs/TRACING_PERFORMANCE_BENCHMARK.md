@@ -137,6 +137,53 @@ evidence against treating the large reserved value alone as an OOM or fragmentat
 request-size-aware failure analysis must use the block layout and allocator retry/OOM counters as
 well.
 
+### Dense allocator-aware CUDA headroom diagnostic (staged, not yet live-qualified)
+
+The opt-in `allocator_dense_joint_v1` policy requires
+`instrumentation.cuda_dense_joint_pressure_telemetry=true` in addition to CUDA-memory and
+allocator-snapshot telemetry. The separate flag keeps existing CUDA-memory artifacts and runtime
+overhead stable. When enabled, it samples the following quantities together at every existing
+CUDA-memory measurement boundary; it still takes full allocator snapshots only at the four
+structural hot spots above:
+
+```text
+external[s] = max(0, device_total - device_free[s] - reserved[s])
+joint_pressure[s] = active[s] + inactive_split[s] + external[s]
+observed_joint_headroom = device_total - max(joint_pressure[s])
+```
+
+The receipt keeps the limiting sample, the 16 highest-pressure samples, the maximum sampled
+external use, sample count, and cumulative sampling overhead. Samples include their trace point,
+active measurement stack, elapsed time, and pressure components. They are boundary samples, not
+continuous monitoring, and the result describes a completed work unit rather than predicting that
+the next unit will or will not OOM. The receipt also retains the more pessimistic independent-max
+composite, legacy peak-reserved estimate, allocator retry/OOM deltas, and structural-snapshot
+validation. Active plus inactive-split bytes exceeding reserved bytes is rejected as malformed
+telemetry.
+
+The classification is `comfortable` when both the dense observed-joint and independent-max
+headroom estimates meet the configured threshold and no allocator retry/OOM occurred, `watch`
+when either estimate crosses below the boundary without allocator trouble, and `critical` when
+allocator retries or OOM counters increase. `cuda_headroom_action: warn` records and preserves a
+warning while continuing; `stop` retains the frozen hard-stop behavior. Missing or malformed
+requested evidence fails closed regardless of action. A trace that actually raises OOM remains
+governed separately by `stop_on_oom`.
+
+The 8-GiB number is a convention, not an empirically calibrated failure threshold. The July
+benchmark introduced a 4-GiB floor in commit `2f86c5f`. Commit `39b4a21` (2026-08-20, “Add strict
+T5 resource calibration ladder”) first raised it to exactly 8 GiB, and the August 21 Qwen Thinking
+A100 qualification configs copied it without documenting a rationale. On the A100 receipt's
+reported 79.25-GiB device total, 8 GiB is about 10.1%. It should therefore be read as a diagnostic
+“watch this run” margin unless a frozen config explicitly chooses the stopping action.
+
+Retrospectively, the four sparse structural checkpoints for the 8,266-token trace observed about
+12.78 GiB minimum joint headroom, while the independent-max composite reported about 6.78 GiB;
+the legacy peak-reserved estimate was only about 3.07 GiB. Under the staged advisory contract this
+is `watch` and continue, not evidence that the trace was destined to fail. The exact denser joint
+value remains unknown until a fresh strict qualification run records the new boundary samples.
+Legacy configs that omit the policy and action remain `peak_reserved_v1` plus `stop`, and retain
+their old artifact identity.
+
 ## Required trace semantics
 
 For a frozen response with tokens `y[0], ..., y[n-1]`, target response position `i` means:

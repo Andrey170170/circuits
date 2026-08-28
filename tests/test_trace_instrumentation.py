@@ -7,6 +7,8 @@ import json
 import pytest
 from circuits.tracing.instrumentation import (
     CUDA_ALLOCATOR_SNAPSHOT_SCHEMA_VERSION,
+    CUDA_DENSE_JOINT_PRESSURE_SCHEMA_VERSION,
+    CUDA_DENSE_JOINT_SAMPLING_VERSION,
     CUDA_MEMORY_SCHEMA_VERSION,
     SCHEMA_VERSION,
     TraceInstrumentation,
@@ -30,6 +32,8 @@ class _FakeCudaAllocator:
         self.peak_inactive_split = self.inactive_split
         self.retries = 0
         self.ooms = 0
+        self.device_total = 1_000
+        self.external = 25
 
     def reset(self, _device=None) -> None:
         self.peak_allocated = self.allocated
@@ -77,6 +81,13 @@ def _install_fake_cuda(monkeypatch) -> _FakeCudaAllocator:
         "torch.cuda.max_memory_reserved",
         lambda _device=None: allocator.peak_reserved,
     )
+    monkeypatch.setattr(
+        "torch.cuda.mem_get_info",
+        lambda _device=None: (
+            allocator.device_total - allocator.reserved - allocator.external,
+            allocator.device_total,
+        ),
+    )
     return allocator
 
 
@@ -120,6 +131,18 @@ def test_cuda_telemetry_is_opt_in(monkeypatch) -> None:
     snapshot = recorder.snapshot()
     assert "cuda_memory" not in snapshot
     assert "call_measurements" not in snapshot["stages"]["work"]
+
+
+def test_dense_joint_pressure_is_separately_opt_in(monkeypatch) -> None:
+    _install_fake_cuda(monkeypatch)
+    recorder = TraceInstrumentation(device="cuda:0", cuda_memory_telemetry=True)
+
+    assert "dense_joint_pressure" not in recorder.snapshot()["cuda_memory"]
+
+
+def test_dense_joint_pressure_requires_cuda_memory_telemetry() -> None:
+    with pytest.raises(ValueError, match="requires CUDA memory telemetry"):
+        TraceInstrumentation(device="cuda:0", cuda_dense_joint_pressure_telemetry=True)
 
 
 def test_allocator_snapshot_summary_math_and_device_filtering() -> None:
@@ -346,7 +369,11 @@ def test_allocator_snapshot_malformed_input_fails_closed(monkeypatch) -> None:
 
 def test_cuda_telemetry_preserves_nested_and_repeated_stage_peaks(monkeypatch) -> None:
     allocator = _install_fake_cuda(monkeypatch)
-    recorder = TraceInstrumentation(device="cuda:0", cuda_memory_telemetry=True)
+    recorder = TraceInstrumentation(
+        device="cuda:0",
+        cuda_memory_telemetry=True,
+        cuda_dense_joint_pressure_telemetry=True,
+    )
 
     with recorder.measure_stage("outer") as outer:
         allocator.set(allocated=300, reserved=500, inactive_split=80)
@@ -371,7 +398,42 @@ def test_cuda_telemetry_preserves_nested_and_repeated_stage_peaks(monkeypatch) -
     assert repeated["calls"] == 2
     assert [call["call_index"] for call in repeated["call_measurements"]] == [0, 1]
     assert repeated["cuda_memory_peak"]["peak_reserved_bytes"] == 800
+    dense = snapshot["cuda_memory"]["dense_joint_pressure"]
+    assert dense["schema_version"] == CUDA_DENSE_JOINT_PRESSURE_SCHEMA_VERSION
+    assert dense["sampling_version"] == CUDA_DENSE_JOINT_SAMPLING_VERSION
+    assert dense["sampling_semantics"] == (
+        "boundary_sampled_not_continuous_no_failure_prediction_v1"
+    )
+    assert dense["sample_count"] > 4
+    assert dense["cumulative_sampling_wall_seconds"] >= 0
+    assert dense["max_sampled_external_device_bytes"] == 25
+    assert len(dense["top_pressure_samples"]) <= 16
+    limiting = dense["limiting_sample"]
+    assert limiting == dense["top_pressure_samples"][0]
+    assert limiting["joint_pressure_bytes"] == (
+        limiting["active_bytes"]
+        + limiting["inactive_split_bytes"]
+        + limiting["external_device_bytes"]
+    )
+    assert isinstance(limiting["point"], str)
+    assert isinstance(limiting["measurement_stack"], list)
     json.dumps(snapshot, allow_nan=False)
+
+
+def test_dense_joint_pressure_fails_closed_on_incoherent_allocator_stats(
+    monkeypatch,
+) -> None:
+    allocator = _install_fake_cuda(monkeypatch)
+    recorder = TraceInstrumentation(
+        device="cuda:0",
+        cuda_memory_telemetry=True,
+        cuda_dense_joint_pressure_telemetry=True,
+    )
+    allocator.active = 190
+    allocator.inactive_split = 20
+
+    with pytest.raises(ValueError, match="active plus inactive-split"):
+        recorder.snapshot()
 
 
 def test_nested_manual_stage_failure_unwinds_without_masking_original(

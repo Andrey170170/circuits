@@ -56,6 +56,7 @@ def _run_launcher_postflight(
     record: dict,
     *,
     lm_head_position_rows: int | None = None,
+    tamper_headroom_evidence: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     launcher = LAUNCHER.read_text(encoding="utf-8")
     start_marker = "    'import json,pathlib,sys\n"
@@ -65,13 +66,23 @@ def _run_launcher_postflight(
 
     artifact_root = tmp_path / "artifact"
     artifact_root.mkdir()
+    device_total_bytes = 85899345920
+    peak_reserved_bytes = 76235669504
     runtime_environment = {
         "gpu_runtime": {
-            "devices": [{"name": "NVIDIA A100 80GB PCIe"}],
+            "devices": [
+                {
+                    "name": "NVIDIA A100 80GB PCIe",
+                    "total_memory_bytes": device_total_bytes,
+                }
+            ],
             "driver_versions": {"cuda_driver": "qualification-test"},
         }
     }
     strategy = "selected_position_logits_v1"
+    cuda_headroom_policy = "peak_reserved_v1"
+    cuda_headroom_action = "stop"
+    cuda_headroom_threshold = 8589934592
     adag_config = {
         "stop_gradient_attention_backend": "flash_sdpa_causal_v1",
         "stop_gradient_contribution_execution": "source_leaf_v1",
@@ -103,6 +114,31 @@ def _run_launcher_postflight(
             "selected_target_logit_lm_head_position_rows": observed_rows,
         },
     }
+    cuda_headroom_receipt = {
+        "schema_version": "bonafide.cuda-headroom-gate.v1",
+        "policy": cuda_headroom_policy,
+        "action": cuda_headroom_action,
+        "threshold_bytes": cuda_headroom_threshold,
+        "classification": "comfortable",
+        "passed": True,
+        "should_stop": False,
+        "warning": None,
+        "headroom_bytes": device_total_bytes - peak_reserved_bytes,
+        "effective_pressure_bytes": peak_reserved_bytes,
+        "device_total_bytes": device_total_bytes,
+        "estimates": {
+            "legacy_peak_reserved": {
+                "pressure_bytes": peak_reserved_bytes,
+                "headroom_bytes": device_total_bytes - peak_reserved_bytes,
+            },
+            "dense_observed_joint": None,
+            "conservative_independent_max": None,
+        },
+        "allocator_activity_delta": None,
+        "evidence": {"peak_reserved_bytes": peak_reserved_bytes},
+    }
+    if tamper_headroom_evidence:
+        cuda_headroom_receipt["evidence"]["peak_reserved_bytes"] += 1
     summary_path = tmp_path / "summary.jsonl"
     summary_path.write_text(
         json.dumps(
@@ -110,6 +146,8 @@ def _run_launcher_postflight(
                 "status": "complete",
                 "source_width1_artifact_id": "source-artifact",
                 "artifact_path": str(artifact_root),
+                "cuda_peak_reserved_bytes": peak_reserved_bytes,
+                "cuda_headroom_gate": cuda_headroom_receipt,
                 "runtime_environment": runtime_environment,
                 "instrumentation": instrumentation,
             }
@@ -139,6 +177,8 @@ def _run_launcher_postflight(
             "legacy_unbound",
             "legacy_unbound",
             strategy,
+            cuda_headroom_policy,
+            cuda_headroom_action,
         ],
         cwd=ROOT,
         text=True,
@@ -193,6 +233,8 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "EXPECTED_STOP_GRADIENT_SELECTED_ATTRIBUTION_STORAGE",
         "EXPECTED_SELECTED_TARGET_LOGIT_EXECUTION",
         "EXPECTED_CUDA_ALLOCATOR_POLICY",
+        "EXPECTED_CUDA_HEADROOM_POLICY",
+        "EXPECTED_CUDA_HEADROOM_ACTION",
         "EXPECTED_EMBEDDING_EDGE_MATERIALIZATION",
         "EXPECTED_CROSS_LAYER_JACOBIAN_EXECUTION",
         "unset PYTORCH_CUDA_ALLOC_CONF",
@@ -212,6 +254,11 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         "run config selected target-logit execution disagrees",
         "legacy-unbound qualification config unexpectedly declares selected target-logit execution",
         "saved artifact allocator identity disagrees",
+        "saved artifact CUDA headroom gate identity disagrees",
+        "saved CUDA headroom gate receipt is invalid",
+        "saved CUDA headroom gate receipt did not pass",
+        "saved CUDA headroom gate receipt disagrees with exact recomputation",
+        "assess_cuda_headroom",
         "saved artifact contribution execution identity disagrees",
         "saved artifact target-lane chunk size identity disagrees",
         "saved artifact selected-neuron target-lane chunk size identity disagrees",
@@ -252,6 +299,7 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         'row.get("status") != "complete"',
         "Forwarding Slurm USR1 warning",
         "min_cuda_headroom_bytes",
+        "allocator_dense_joint_v1",
         "max_trace_seconds",
     ):
         assert required in launcher
@@ -260,6 +308,28 @@ def test_launcher_is_single_item_fail_closed_and_provenance_bound() -> None:
         assert execution in launcher
     assert '!= "none"' in launcher
     assert "^[1-9][0-9]*$" in launcher
+
+
+def test_launcher_postflight_accepts_bound_headroom_gate(tmp_path: Path) -> None:
+    completed = _run_launcher_postflight(tmp_path, _selected_target_logit_record())
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_launcher_postflight_rejects_tampered_headroom_evidence(
+    tmp_path: Path,
+) -> None:
+    completed = _run_launcher_postflight(
+        tmp_path,
+        _selected_target_logit_record(),
+        tamper_headroom_evidence=True,
+    )
+
+    assert completed.returncode != 0
+    assert (
+        "saved CUDA headroom gate receipt disagrees with exact recomputation"
+        in completed.stderr
+    )
 
 
 def test_launcher_postflight_rejects_malformed_target_logit_shape(
@@ -305,6 +375,33 @@ def test_launcher_postflight_cross_checks_target_logit_row_counter(
         "saved artifact selected target-logit LM-head row counter disagrees with records"
         in completed.stderr
     )
+
+
+def test_smart_headroom_config_is_an_exact_opt_in_clone() -> None:
+    source = json.loads(
+        (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_allocator_snapshot_telemetry_qualification_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    candidate = json.loads(
+        (
+            CONFIG_ROOT
+            / "qwen3_4b_thinking_allocator_snapshot_telemetry_smart_headroom_qualification_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert candidate["wave_limits"]["cuda_headroom_policy"] == (
+        "allocator_dense_joint_v1"
+    )
+    assert candidate["wave_limits"]["cuda_headroom_action"] == "warn"
+    assert candidate["wave_limits"]["min_cuda_headroom_bytes"] == 8589934592
+    normalized = json.loads(json.dumps(candidate))
+    del normalized["wave_limits"]["cuda_headroom_policy"]
+    del normalized["wave_limits"]["cuda_headroom_action"]
+    del normalized["instrumentation"]["cuda_dense_joint_pressure_telemetry"]
+    normalized["artifact_root"] = source["artifact_root"]
+    assert normalized == source
 
 
 def test_embedding_edge_materialization_configs_clone_allocator_default() -> None:

@@ -17,6 +17,7 @@ from circuits.tracing.artifact import (
 )
 from circuits.tracing.clja import ADAGConfig
 from circuits.tracing.trace import CircuitData
+from scripts.bonafide.cuda_headroom import assess_cuda_headroom
 from scripts.bonafide.manifest import (
     SCHEMA_VERSION,
     build_manifest,
@@ -493,6 +494,33 @@ def test_run_config_validates_cuda_memory_instrumentation_policy() -> None:
 
     config["instrumentation"] = {"cuda_memory_telemetry": True, "typo": False}
     with pytest.raises(ValueError, match="unsupported fields: typo"):
+        validate_run_config(config, allow_instrumentation=True)
+
+
+def test_run_config_requires_allocator_telemetry_for_allocator_headroom() -> None:
+    config = _config()
+    config["wave_limits"] = {"cuda_headroom_policy": "allocator_dense_joint_v1"}
+    with pytest.raises(ValueError, match="requires explicit"):
+        validate_run_config(config, allow_instrumentation=True)
+
+    config["wave_limits"]["cuda_headroom_action"] = "warn"
+    with pytest.raises(ValueError, match="requires an instrumentation object"):
+        validate_run_config(config, allow_instrumentation=True)
+
+    config["instrumentation"] = {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": True,
+    }
+    with pytest.raises(ValueError, match="cuda_dense_joint_pressure_telemetry=true"):
+        validate_run_config(config, allow_instrumentation=True)
+
+    config["instrumentation"]["cuda_dense_joint_pressure_telemetry"] = True
+    validate_run_config(config, allow_instrumentation=True)
+
+    config["instrumentation"]["cuda_dense_joint_pressure_telemetry"] = "yes"
+    with pytest.raises(
+        ValueError, match="cuda_dense_joint_pressure_telemetry must be boolean"
+    ):
         validate_run_config(config, allow_instrumentation=True)
 
 
@@ -1057,3 +1085,50 @@ def test_wave_stop_gates(record: dict, expected: str) -> None:
         )
         == expected
     )
+
+
+def test_wave_stop_gate_prefers_validated_headroom_receipt() -> None:
+    receipt = assess_cuda_headroom(
+        policy="peak_reserved_v1",
+        threshold_bytes=4,
+        action="warn",
+        device_total_bytes=100,
+        peak_reserved_bytes=97,
+        instrumentation={},
+    )
+    record = {
+        "status": "complete",
+        "trace_wall_seconds": 1.0,
+        "cuda_headroom_after_peak_bytes": 3,
+        "cuda_headroom_gate": receipt,
+    }
+
+    assert (
+        wave_stop_reason(
+            record,
+            uses_cuda=True,
+            max_trace_seconds=10.0,
+            min_cuda_headroom_bytes=4,
+            stop_on_oom=True,
+            cuda_headroom_policy="peak_reserved_v1",
+            cuda_headroom_action="warn",
+        )
+        is None
+    )
+
+
+def test_wave_stop_allocator_policy_requires_receipt() -> None:
+    with pytest.raises(ValueError, match="requires a gate receipt"):
+        wave_stop_reason(
+            {
+                "status": "complete",
+                "trace_wall_seconds": 1.0,
+                "cuda_headroom_after_peak_bytes": 100,
+            },
+            uses_cuda=True,
+            max_trace_seconds=10.0,
+            min_cuda_headroom_bytes=4,
+            stop_on_oom=True,
+            cuda_headroom_policy="allocator_dense_joint_v1",
+            cuda_headroom_action="warn",
+        )

@@ -39,6 +39,11 @@ from circuits.tracing.trace import (
 )
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from scripts.bonafide.cuda_headroom import (
+    PEAK_RESERVED_POLICY,
+    headroom_action_requires_stop,
+    normalized_cuda_headroom_gate_contract,
+)
 from scripts.bonafide.execution_plan import (
     sha256_file,
     validate_execution_plan,
@@ -111,6 +116,7 @@ def normalized_instrumentation(config: Mapping[str, Any]) -> dict[str, bool]:
     allowed = {
         "cuda_memory_telemetry",
         "cuda_allocator_snapshot_telemetry",
+        "cuda_dense_joint_pressure_telemetry",
     }
     unknown = set(raw) - allowed
     if unknown:
@@ -136,10 +142,28 @@ def normalized_instrumentation(config: Mapping[str, Any]) -> dict[str, bool]:
             "run config instrumentation.cuda_allocator_snapshot_telemetry "
             "requires cuda_memory_telemetry=true"
         )
-    return {
+    cuda_dense_joint_pressure_telemetry = raw.get(
+        "cuda_dense_joint_pressure_telemetry", False
+    )
+    if not isinstance(cuda_dense_joint_pressure_telemetry, bool):
+        raise ValueError(
+            "run config instrumentation.cuda_dense_joint_pressure_telemetry "
+            "must be boolean"
+        )
+    if cuda_dense_joint_pressure_telemetry and not cuda_memory_telemetry:
+        raise ValueError(
+            "run config instrumentation.cuda_dense_joint_pressure_telemetry "
+            "requires cuda_memory_telemetry=true"
+        )
+    normalized = {
         "cuda_memory_telemetry": cuda_memory_telemetry,
         "cuda_allocator_snapshot_telemetry": (cuda_allocator_snapshot_telemetry),
     }
+    if "cuda_dense_joint_pressure_telemetry" in raw:
+        normalized["cuda_dense_joint_pressure_telemetry"] = (
+            cuda_dense_joint_pressure_telemetry
+        )
+    return normalized
 
 
 def validate_run_config(
@@ -166,6 +190,7 @@ def validate_run_config(
         )
     if allow_instrumentation:
         normalized_instrumentation(config)
+    normalized_cuda_headroom_gate_contract(config)
 
 
 def _require_manifest_int(value: Any, field: str) -> int:
@@ -654,6 +679,8 @@ def wave_stop_reason(
     max_trace_seconds: float | None,
     min_cuda_headroom_bytes: int,
     stop_on_oom: bool,
+    cuda_headroom_policy: str = PEAK_RESERVED_POLICY,
+    cuda_headroom_action: str = "stop",
 ) -> str | None:
     """Apply monotonic Wave 2 safety gates after each completed work unit."""
 
@@ -665,12 +692,24 @@ def wave_stop_reason(
         and record["trace_wall_seconds"] > max_trace_seconds
     ):
         return "max_trace_seconds_exceeded"
-    if (
-        record["status"] == "complete"
-        and uses_cuda
-        and record["cuda_headroom_after_peak_bytes"] < min_cuda_headroom_bytes
-    ):
-        return "min_cuda_headroom_not_met"
+    if record["status"] == "complete" and uses_cuda:
+        receipt = record.get("cuda_headroom_gate")
+        if receipt is not None:
+            if not isinstance(receipt, Mapping):
+                raise ValueError("CUDA headroom gate receipt must be an object")
+            if headroom_action_requires_stop(
+                receipt,
+                expected_threshold_bytes=min_cuda_headroom_bytes,
+                expected_policy=cuda_headroom_policy,
+                expected_action=cuda_headroom_action,
+            ):
+                return "min_cuda_headroom_not_met"
+        elif cuda_headroom_policy != PEAK_RESERVED_POLICY:
+            raise ValueError(
+                "allocator-aware CUDA headroom policy requires a gate receipt"
+            )
+        elif record["cuda_headroom_after_peak_bytes"] < min_cuda_headroom_bytes:
+            return "min_cuda_headroom_not_met"
     return None
 
 
@@ -1007,8 +1046,9 @@ def run_wave(
             raise warmup_failure
 
     limits = config.get("wave_limits", {})
+    cuda_headroom_contract = normalized_cuda_headroom_gate_contract(config)
     max_trace_seconds = limits.get("max_trace_seconds")
-    min_cuda_headroom_bytes = int(limits.get("min_cuda_headroom_bytes", 0))
+    min_cuda_headroom_bytes = cuda_headroom_contract["min_cuda_headroom_bytes"]
     stop_on_oom = bool(limits.get("stop_on_oom", True))
     for planned_index, (item, artifact_id, identity, artifact_path) in enumerate(
         planned
@@ -1184,6 +1224,8 @@ def run_wave(
             ),
             min_cuda_headroom_bytes=min_cuda_headroom_bytes,
             stop_on_oom=stop_on_oom,
+            cuda_headroom_policy=cuda_headroom_contract["policy"],
+            cuda_headroom_action=cuda_headroom_contract["action"],
         )
         if stop_reason is not None:
             stop_record = {

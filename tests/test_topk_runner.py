@@ -119,6 +119,52 @@ def test_topk_runtime_identity_binds_explicit_instrumentation_policy() -> None:
     }
 
 
+def test_topk_runtime_identity_binds_cuda_headroom_policy_and_threshold() -> None:
+    manifest = _runner_manifest()
+    item = manifest["waves"][0]["items"][0]
+    common = {
+        "item": item,
+        "trace_family": manifest["trace_family"],
+        "code_revision": _code_revision(),
+        "runtime_environment": _runtime_environment(),
+        "source_manifest_sha256": "d" * 64,
+        "topk_manifest_sha256": "e" * 64,
+        "wave_id": "parity-01",
+    }
+    legacy_config = _cpu_config()
+    threshold_config = deepcopy(legacy_config)
+    threshold_config["wave_limits"] = {"min_cuda_headroom_bytes": 8}
+    allocator_config = deepcopy(threshold_config)
+    allocator_config["instrumentation"] = {
+        "cuda_memory_telemetry": True,
+        "cuda_allocator_snapshot_telemetry": True,
+        "cuda_dense_joint_pressure_telemetry": True,
+    }
+    allocator_config["wave_limits"]["cuda_headroom_policy"] = "allocator_dense_joint_v1"
+    allocator_config["wave_limits"]["cuda_headroom_action"] = "warn"
+
+    legacy_id, legacy_identity = topk_runtime_artifact_identity(
+        config=legacy_config, **common
+    )
+    threshold_id, threshold_identity = topk_runtime_artifact_identity(
+        config=threshold_config, **common
+    )
+    allocator_id, allocator_identity = topk_runtime_artifact_identity(
+        config=allocator_config, **common
+    )
+
+    assert legacy_id == threshold_id
+    assert allocator_id != legacy_id
+    assert "cuda_headroom_gate" not in legacy_identity
+    assert "cuda_headroom_gate" not in threshold_identity
+    assert allocator_identity["cuda_headroom_gate"] == {
+        "policy": "allocator_dense_joint_v1",
+        "min_cuda_headroom_bytes": 8,
+        "action": "warn",
+        "sampling_version": "boundary_cuda_metrics_v1",
+    }
+
+
 def test_topk_runtime_identity_binds_explicit_cuda_allocator_policy() -> None:
     manifest = _runner_manifest()
     item = manifest["waves"][0]["items"][0]
