@@ -14,9 +14,10 @@ Level 1m projects only the selected LM-head positions and is exact-qualified. Al
 telemetry then showed that the 8,266-token run completed without retries or OOMs and was near the
 capacity boundary rather than certain to fail. Level 1n, post-selection discovery-state
 compaction, is exact-qualified on the 2,951-token A100 reference and comfortable at 8,266 tokens.
-The frozen 9,397-token endpoint completes, but one allocator retry and less than 8 GiB of physical
-headroom make it near-capacity evidence rather than a capacity-qualified result. None authorizes
-broader tracing runs by itself.
+The frozen 9,397-token endpoint is now capacity-qualified with the optional
+`expandable_segments_v1` allocator policy: it removes the default allocator's retry, retains exact
+saved-artifact equality, and restores more than 10 percent physical CUDA headroom. This remains a
+9,397-token result, not an exact-10k claim, and does not authorize broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -848,11 +849,23 @@ edges) and is not evidence that longer traces are faster. Initial attribution is
 57.80-GB global owner; selected attribution/contribution peaks at 50.02 GB and stop-gradient work
 at 47.74 GB.
 
-The next narrow gate is therefore a same-commit 9,397-token `default_v1` versus
-`expandable_segments_v1` allocator A/B while retaining `compact_cpu_v1`. It must eliminate the
-retry and pass the strict allocator comparator before 9,397 is called capacity-qualified. The
-immutable qualification-v4 manifest contains no actual 10,000-token item; an exact 10k proof
-would require a new versioned manifest rather than editing the frozen one.
+Commit `658e6a8` froze the same-commit 9,397-token `default_v1` versus
+`expandable_segments_v1` allocator A/B while retaining `compact_cpu_v1`. Default job `15356157`
+reproduced one retry and the `critical` receipt. Expandable job `15356591` completed with zero
+retries/OOMs and a `comfortable` receipt. It reduced peak reservation from 78,741,766,144 to
+65,905,098,752 bytes while leaving peak allocation nearly unchanged (57,800,285,696 versus
+57,737,490,944 bytes). Conservative allocator-aware headroom rose from 9,053,827,584 to
+26,803,817,984 bytes, and legacy physical headroom rose from 6,352,011,264 to 19,188,678,656
+bytes. Trace time changed from 292.596 to 296.771 seconds (+1.4%).
+
+The strict allocator report passes exact 9,471-node/597-edge topology and every target, node,
+edge, source-profile, and candidate-profile value at zero tolerance. Its SHA-256 is
+`8b871948873a3aa72351518cb527ffb6e357de26a23fd480eb0a1a8d0dab5487`. The optional expandable
+policy is therefore capacity-qualified for this frozen 9,397-token workload. The comparator
+establishes exact saved-artifact equivalence under its explicit contract; it does not by itself
+make a broader scientific-parity claim. The immutable qualification-v4 manifest contains no
+actual 10,000-token item, so an exact-10k proof requires a new versioned manifest rather than an
+edit to the frozen one.
 
 ## Level 2: host-backed boundary streaming and source-group reuse
 
@@ -987,12 +1000,12 @@ is useful scaling evidence but does not authorize a full tracing campaign.
 
 ## Implementation order
 
-1. Run the same-commit compact 9,397-token default-versus-expandable allocator A/B and require
-   strict scientific equality plus zero retries/OOMs.
-2. If expandable segments qualifies, freeze it as an optional near-capacity policy and create a
-   new immutable actual-10k target before making a 10k claim.
-3. If the allocator A/B remains critical, target the newly measured initial-attribution owner or
-   add the synchronous host boundary store and source-group scheduler.
+1. Completed: the same-commit compact 9,397-token default-versus-expandable allocator A/B passed
+   strict saved-artifact equality; expandable segments recorded zero retries/OOMs.
+2. Freeze expandable segments as the optional near-capacity policy and create a new immutable
+   actual-10k target before making a 10k claim.
+3. If the actual-10k run is not capacity-feasible, target the measured initial-attribution owner
+   or add the synchronous host boundary store and source-group scheduler.
 4. Qualify synchronous Level 2, then add double-buffered prefetch and qualify it independently.
 5. Run the A100 ladder until a new measured owner or failure appears.
 6. Add Level 3 checkpoint/window profiles only where Level 2 telemetry shows retained state or host

@@ -1,6 +1,7 @@
 # Target-aware tracing performance benchmark
 
-Status: active benchmark and qualification record through the 9,397-token Level 1n A100 endpoint.
+Status: active benchmark and qualification record through the allocator-qualified 9,397-token
+Level 1n A100 endpoint.
 
 ## Purpose
 
@@ -244,10 +245,30 @@ Compaction changes the measured owner. At 9,397 tokens, `initial_attribution` ow
 global active peak; selected attribution/contribution peaks at 50.02 GB, stop-gradient
 attribution/contribution at 47.74 GB, and cross-layer expansion at 35.17 GB. The retry is first
 visible in important-mask selection, where inactive-split pressure peaks near 9.96 GB; the
-run-wide inactive-split maximum is 17.69 GB. The next controlled gate is a same-commit compact
-`default_v1` versus `expandable_segments_v1` allocator A/B on the same 9,397-token item. No exact
-10,000-token item exists in qualification-v4, so these results do not establish an exact-10k
-claim.
+run-wide inactive-split maximum is 17.69 GB.
+
+Commit `658e6a8` then froze a same-commit compact `default_v1` versus
+`expandable_segments_v1` allocator A/B on that same 9,397-token item. Default job `15356157`
+reproduced one allocator retry and the `critical` receipt. Expandable job `15356591` completed
+with zero retries/OOMs and a `comfortable` receipt. Its intended policy and observed
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` environment are bound into both the artifact
+identity and runtime receipt.
+
+The strict report
+`.../qualification-reports/context-gt-8000-default-vs-expandable-segments-exact-v1.json` passes
+every identity, hardware, topology, and zero-tolerance numerical gate. Both artifacts contain
+exactly 9,471 nodes and 597 edges; target, node, edge, all 88,989,516 source-profile values, and
+all 47,355 candidate-profile values are identical. The report SHA-256 is
+`8b871948873a3aa72351518cb527ffb6e357de26a23fd480eb0a1a8d0dab5487`.
+
+Expandable segments left peak allocation essentially unchanged (57,800,285,696 to
+57,737,490,944 bytes) but reduced peak reservation from 78,741,766,144 to 65,905,098,752 bytes,
+a 12,836,667,392-byte or 16.3% reduction. Conservative allocator-aware headroom increased from
+9,053,827,584 to 26,803,817,984 bytes, while legacy physical headroom increased from
+6,352,011,264 to 19,188,678,656 bytes. Trace time was 292.596 versus 296.771 seconds (+1.4%),
+which is not a material regression in this single pair. This qualifies expandable segments as an
+optional near-capacity A100 policy for this exact workload. No exact 10,000-token item exists in
+qualification-v4, so the evidence remains a 9,397-token result rather than an exact-10k claim.
 
 ## Required trace semantics
 
