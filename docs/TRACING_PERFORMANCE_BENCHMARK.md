@@ -1,6 +1,6 @@
 # Target-aware tracing performance benchmark
 
-Status: active benchmark and qualification record through the allocator-qualified 9,397-token
+Status: active benchmark and qualification record through the allocator-qualified 10,006-token
 Level 1n A100 endpoint.
 
 ## Purpose
@@ -269,6 +269,46 @@ a 12,836,667,392-byte or 16.3% reduction. Conservative allocator-aware headroom 
 which is not a material regression in this single pair. This qualifies expandable segments as an
 optional near-capacity A100 policy for this exact workload. No exact 10,000-token item exists in
 qualification-v4, so the evidence remains a 9,397-token result rather than an exact-10k claim.
+
+### Nearest-above-10k A100 qualification (live-qualified 2026-08-30)
+
+Commits `07fd617` and `5c8de36` add an immutable one-target bundle that recomputes exact runtime
+token counts from the frozen post-campaign sampling-v2 source, restricts candidates to the
+balanced 40k policy, and chooses the smallest context strictly above 10,000 tokens with target ID
+as the deterministic tie-break. The selected target is
+`pwcoarsetargetv2-c3452565e87058f965f63871e4157bc7` at 10,006 rendered context tokens: 2,186
+prompt/prefix tokens plus response position 7,819 plus the selected target token. A 10,001-token
+candidate exists outside this contract but belongs only to the uncertainty-weighted policy; the
+10,006-token item preserves the balanced 30k/35k/40k ladder lineage used for capacity selection.
+
+The published bundle is rooted at
+`/scratch/general/vast/u1653998/circuits/results/process_witness/resource-calibration-v1/qualification-10k-v1`.
+Its strict loader independently reconstructed the source selection and accepted the read-only
+bundle. The frozen trace-manifest, width-one-source-manifest, run-config, and selection file
+SHA-256 values are respectively `bd9c7c1154ce1be8c44f72ace678d2e4d6986083d901efac44963ee519b25902`,
+`3eaf091a2e6fe717e82e9e7ea668149ee8b032a58948787a8b02978dab2a3c0d`,
+`33db0f48f74995cb0545db725bd987008f847154c94d283f3c3384a11e4e8b27`, and
+`996f933c1d56df8d17d509c547cdcf4c42b65b91b8b9e5fb042159aad33674c6`.
+
+After `sbatch --test-only` admission, A100 job `15369505` completed with exit `0:0` in 8m59s.
+The trace itself took 452.881 seconds and serialization took 6.650 seconds. It selected 91 neuron
+occurrences across 20 active layers and 190 active layer pairs, and saved 10,100 nodes and 891
+edges. Peak allocated and reserved CUDA memory were 60,957,301,248 and 69,640,126,464 bytes.
+There were zero allocator retries and zero OOMs. The allocator-aware receipt is `comfortable`:
+the conservative independent-max estimate retained 23,584,007,680 bytes of headroom, the worst
+jointly observed live point retained 32,643,491,840 bytes, and the legacy peak-reserved estimate
+retained 15,453,650,944 bytes. Slurm recorded 13,974,872 KiB peak host RSS against the requested
+64 GiB.
+
+The saved 10.68-MB artifact is rooted at
+`/scratch/general/vast/u1653998/circuits/results/bonafide/process-witness-near-10k-qualification-v1-5c8de36`.
+Its execution-summary SHA-256 is
+`a5d1d2da1557d61e98164f3ecc56e4bbce659016232bcaea29b61f2fd50141a2`; a full checksum-aware
+unpickle and structural validation accepted all five candidate lanes, 10,100 node rows, and 891
+edge rows. This establishes capacity feasibility with more than the plan's 10-percent physical
+CUDA and 20-percent host-allocation margins for this exact 10,006-token A100 workload. It does not
+prove token count alone determines capacity, authorize the full corpus, or replace the planned
+Level 2/Level 3 work needed for substantially longer contexts.
 
 ## Required trace semantics
 

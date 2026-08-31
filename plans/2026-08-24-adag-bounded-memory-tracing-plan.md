@@ -14,10 +14,13 @@ Level 1m projects only the selected LM-head positions and is exact-qualified. Al
 telemetry then showed that the 8,266-token run completed without retries or OOMs and was near the
 capacity boundary rather than certain to fail. Level 1n, post-selection discovery-state
 compaction, is exact-qualified on the 2,951-token A100 reference and comfortable at 8,266 tokens.
-The frozen 9,397-token endpoint is now capacity-qualified with the optional
+The frozen 9,397-token endpoint is capacity-qualified with the optional
 `expandable_segments_v1` allocator policy: it removes the default allocator's retry, retains exact
-saved-artifact equality, and restores more than 10 percent physical CUDA headroom. This remains a
-9,397-token result, not an exact-10k claim, and does not authorize broader tracing runs by itself.
+saved-artifact equality, and restores more than 10 percent physical CUDA headroom. A new immutable
+balanced/40k bundle then selected the nearest qualifying item above 10k at 10,006 tokens. Job
+`15369505` completed that item on A100 with zero retries/OOMs and comfortable allocator-aware
+headroom. This is an exact-workload capacity result, not permission to infer capacity from token
+count alone or to authorize broader tracing runs by itself.
 
 This plan follows the completed exact-trace optimization checkpoints recorded in
 `plans/2026-08-23-adag-tracing-optimization-plan.md`. Those checkpoints reduced the 2,951-token
@@ -95,6 +98,15 @@ estimate left 6.78 GiB. There were no allocator retries or OOMs. Its classificat
 with a warning action: useful diagnostic evidence, not a prediction that the next allocation must
 fail. Continue Level 1 only against measured live owners; move genuinely reusable sequence state
 to host RAM under Level 2 when local lifetime reductions no longer provide enough capacity.
+
+The 10,006-token balanced/40k target selected 91 neurons across 20 active layers and 190 active
+layer pairs. Under `expandable_segments_v1`, job `15369505` peaked at 60,957,301,248 allocated and
+69,640,126,464 reserved CUDA bytes, recorded zero retries/OOMs, and retained 23,584,007,680 bytes
+under the conservative allocator-aware estimate. The trace took 452.881 seconds; Slurm peak host
+RSS was 13,974,872 KiB against 64 GiB requested. This point meets the plan's exact-workload device,
+host, and walltime margins and moves the measured A100 Level 1 bracket beyond 10k. It does not
+change the need for Levels 2 and 3 if the intended H200 ladder extends materially beyond this
+workload.
 
 ## Intended memory model
 
@@ -1002,11 +1014,12 @@ is useful scaling evidence but does not authorize a full tracing campaign.
 
 1. Completed: the same-commit compact 9,397-token default-versus-expandable allocator A/B passed
    strict saved-artifact equality; expandable segments recorded zero retries/OOMs.
-2. Freeze expandable segments as the optional near-capacity policy and create a new immutable
-   actual-10k target before making a 10k claim.
-3. If the actual-10k run is not capacity-feasible, target the measured initial-attribution owner
-   or add the synchronous host boundary store and source-group scheduler.
-4. Qualify synchronous Level 2, then add double-buffered prefetch and qualify it independently.
+2. Completed: the immutable balanced/40k nearest-above-10k bundle selected 10,006 tokens, and A100
+   job `15369505` completed with zero retries/OOMs and comfortable device and host margins.
+3. Record initial attribution as the current 10k global allocation owner; continue Level 1 only if
+   another local lifetime reduction has a clear payoff.
+4. Implement and qualify the synchronous Level 2 host boundary store and source-group scheduler,
+   then add double-buffered prefetch and qualify it independently.
 5. Run the A100 ladder until a new measured owner or failure appears.
 6. Add Level 3 checkpoint/window profiles only where Level 2 telemetry shows retained state or host
    traffic requires the trade.
