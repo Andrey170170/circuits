@@ -63,6 +63,47 @@ The ordered tuple of independent prompt cells, responses per prompt, and target 
 response or event; profiles with the same total graph count are not scientifically interchangeable.
 _Avoid_: Sample size, compute budget
 
+**Adequacy cell**:
+One declared semantic composition, evidence-support profile, algorithm condition, and replicate or
+resample for which an atlas and its cell-local measurements are produced.
+_Avoid_: Dataset, independent experiment
+
+**Admission profile**:
+A stage-positioned, cell-level or split-level account of whether enough relevant evidence exists to
+attempt and interpret the next analysis. It does not measure pipeline quality, semantic richness,
+or whether the resulting atlas has an appropriate resolution.
+_Avoid_: Atlas-quality score, dataset-quality score, global pass
+
+**Formation admission**:
+The part of an admission profile concerning whether an adequacy cell contains enough independent
+breadth, recurrence, and relational support to constrain atlas formation.
+_Avoid_: Cluster-quality score, minimum cluster count
+
+**Projection admission**:
+The part of an admission profile concerning whether an atlas-fit split provides enough coverage to
+make projection onto an independent evaluation split informative rather than predominantly unknown.
+_Avoid_: Projection accuracy, held-out cluster quality
+
+**Description admission**:
+The post-clustering part of an admission profile concerning whether the frozen clusters collectively
+provide enough independent and diverse evidence to attempt meaningful descriptions.
+_Avoid_: Description-fidelity quality, label confidence
+
+**Cell-local measurement**:
+An admission, failure-incidence, cluster-quality, or description-fidelity measurement defined
+within one adequacy cell before comparison with another cell.
+_Avoid_: Stair effect, final score
+
+**Adequacy contrast**:
+A declared comparison between adequacy cells, interpreted relative to the appropriate
+same-composition perturbation or other frozen reference.
+_Avoid_: Raw score, independent replication
+
+**Stair-dynamics summary**:
+An optional higher-level description of how cell-local measurements or adequacy contrasts change
+across semantic composition or evidence support; it is not a separate quality class.
+_Avoid_: Overall adequacy score, fifth metric class
+
 **Coarse sampling tag**:
 One mutually exclusive, graph-blind region category used only to enrich the first tracing-wave
 sample. The allowed tags are active task work, evaluation or revision, intermediate commitment,

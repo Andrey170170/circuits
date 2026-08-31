@@ -706,6 +706,31 @@ cells, or new data that were not used to invent or calibrate that rule. If no su
 evidence remains, the study may report a detailed exploratory quality surface but not a validated
 adequacy verdict.
 
+Organize the measurement registry into four classes rather than one flat list or overall score:
+
+1. **admission and support:** whether enough relevant evidence exists to attempt and interpret the
+   next analysis, without judging pipeline quality, semantic richness, or the appropriateness of
+   the resulting resolution. Treat this as a stage-positioned cell- or split-level admission
+   profile derived from prompt-, basis-, pair-, and cluster-level diagnostics: formation admission
+   precedes clustering, projection admission brackets atlas-fit to held-out projection, and
+   description admission is computed from frozen clusters before labeling;
+2. **failure-mechanism incidence:** cell-local measurements of whether and how strongly a declared
+   aggregation, co-occurrence, bridge, assignment, or projection failure occurs;
+3. **cluster outcome quality:** cell-local properties of the produced partition and projected
+   graphs, plus declared cross-cell contrasts measuring uplift or degradation across semantic
+   composition or evidence support relative to the same-composition perturbation floor; and
+4. **description fidelity:** whether the labeler faithfully, specifically, stably, and with
+   calibrated abstention describes the evidence available for the frozen clusters in that cell.
+
+The semantic-composition and evidence-support matrix is the analysis surface on which these four
+classes are evaluated, not a fifth quality class. Optional slopes, change points, or other
+stair-dynamics summaries are meta-analyses over cell-local measurements and cross-cell contrasts.
+Preserve the lowest scientifically meaningful score distributions and provenance in the first
+report. Use weighted aggregates only where their estimand and prompt/response/event hierarchy are
+explicit, retain their components, and do not collapse the registry into one atlas-quality scalar.
+Some measurements are inherently cross-cell, such as aligned split/merge behavior; for others,
+compute the cell-local quantity first and define its contrast separately.
+
 #### Adequacy design discussion checklist
 
 - [x] **Two-stair architecture and terminology:** separate the semantic-composition stair from the
