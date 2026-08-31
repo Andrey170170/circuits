@@ -227,6 +227,34 @@ def test_loader_rejects_rehashed_extra_manifest_field(
         )
 
 
+def test_loader_rejects_nested_reserved_name_outside_inventory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _patch_synthetic_source(monkeypatch, tmp_path)
+    destination = tmp_path / "near-10k-v1"
+    near10k.build_near_10k_qualification_v1(
+        sampling_v2_root=tmp_path / "sampling-v2",
+        destination=destination,
+        tokenizer=FakeThinkingTokenizer(),
+        system_prompt="system",
+    )
+    destination.chmod(0o755)
+    nested = destination / "extra"
+    nested.mkdir()
+    nested_manifest = nested / "manifest.json"
+    nested_manifest.write_text("{}\n", encoding="utf-8")
+    nested_manifest.chmod(0o444)
+    nested.chmod(0o555)
+    destination.chmod(0o555)
+
+    with pytest.raises(ValueError, match="canonical inventory drift"):
+        near10k.load_frozen_near_10k_qualification_v1(
+            destination,
+            tokenizer=FakeThinkingTokenizer(),
+            system_prompt="system",
+        )
+
+
 def test_historical_calibration_execution_source_scope_is_unchanged() -> None:
     assert (
         "circuits/analysis/bonafide/process_witness_near_10k_qualification_v1.py"

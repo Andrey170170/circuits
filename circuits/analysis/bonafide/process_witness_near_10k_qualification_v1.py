@@ -31,7 +31,6 @@ from circuits.analysis.bonafide.process_witness_resource_calibration_v1 import (
     _candidate_union,
     _exact_runtime_tokenization,
     _hash_text,
-    _inventory,
     _iter_gzip_jsonl,
     _load_default_tokenizer,
     _load_object,
@@ -84,6 +83,28 @@ EXECUTION_SOURCE_PATHS = (
     "pyproject.toml",
     "uv.lock",
 )
+
+
+def _bundle_inventory(root: Path) -> dict[str, Any]:
+    """Hash every payload file except the two root inventory control files."""
+
+    excluded = {"manifest.json", "inventory.json"}
+    files = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative in excluded:
+            continue
+        files.append(
+            {
+                "path": relative,
+                "bytes": path.stat().st_size,
+                "sha256": file_sha256(path),
+            }
+        )
+    core = {"schema_version": INVENTORY_SCHEMA_VERSION, "files": files}
+    return {**core, "inventory_sha256": canonical_sha256(core)}
 
 
 def select_nearest_strictly_above(
@@ -594,7 +615,7 @@ def build_near_10k_qualification_v1(
         _write_json(temporary / "trace-manifest.json", trace)
         _write_json(temporary / "run-config.json", _run_config())
         _write_jsonl(temporary / "selection.jsonl", [payloads["selection"]])
-        inventory = _inventory(temporary)
+        inventory = _bundle_inventory(temporary)
         _write_json(temporary / "inventory.json", inventory)
         core = _manifest_core(
             root=temporary,
@@ -670,7 +691,7 @@ def load_frozen_near_10k_qualification_v1(
         "inventory_sha256"
     ) != manifest.get("inventory_sha256"):
         raise ValueError("near-10k inventory binding drift")
-    if inventory != _inventory(root):
+    if inventory != _bundle_inventory(root):
         raise ValueError("near-10k canonical inventory drift")
     if root.stat().st_mode & 0o777 != 0o555:
         raise ValueError("near-10k root mode drift")
